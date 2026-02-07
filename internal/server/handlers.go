@@ -1,6 +1,7 @@
 package server
 
 import (
+	_ "embed"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -13,6 +14,9 @@ import (
 	"github.com/inertz/pve-appstore/internal/engine"
 	"github.com/inertz/pve-appstore/internal/version"
 )
+
+//go:embed assets/default-icon.png
+var defaultIconPNG []byte
 
 func writeJSON(w http.ResponseWriter, status int, v interface{}) {
 	w.Header().Set("Content-Type", "application/json")
@@ -129,12 +133,15 @@ func (s *Server) handleGetAppIcon(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if app.IconPath == "" {
-		writeError(w, http.StatusNotFound, "no icon available")
+	if app.IconPath != "" {
+		http.ServeFile(w, r, app.IconPath)
 		return
 	}
 
-	http.ServeFile(w, r, app.IconPath)
+	// Serve embedded default icon
+	w.Header().Set("Content-Type", "image/png")
+	w.Header().Set("Cache-Control", "public, max-age=86400")
+	w.Write(defaultIconPNG)
 }
 
 func (s *Server) handleCategories(w http.ResponseWriter, r *http.Request) {
@@ -176,7 +183,7 @@ func toAppResponse(app *catalog.AppManifest) *appResponse {
 		Version:     app.Version,
 		Categories:  app.Categories,
 		Tags:        app.Tags,
-		HasIcon:     app.IconPath != "",
+		HasIcon:     true, // default icon served when app has none
 		GPURequired: app.GPU.Required,
 		GPUSupport:  app.GPU.Supported,
 	}
