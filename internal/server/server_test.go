@@ -10,10 +10,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/inertz/pve-appstore/internal/catalog"
-	"github.com/inertz/pve-appstore/internal/config"
-	"github.com/inertz/pve-appstore/internal/engine"
-	"github.com/inertz/pve-appstore/internal/pct"
+	"github.com/battlewithbytes/pve-appstore/internal/catalog"
+	"github.com/battlewithbytes/pve-appstore/internal/config"
+	"github.com/battlewithbytes/pve-appstore/internal/engine"
+	"github.com/battlewithbytes/pve-appstore/internal/pct"
 )
 
 // mockCM is a no-op ContainerManager for server tests.

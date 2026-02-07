@@ -10,9 +10,9 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/inertz/pve-appstore/internal/catalog"
-	"github.com/inertz/pve-appstore/internal/engine"
-	"github.com/inertz/pve-appstore/internal/version"
+	"github.com/battlewithbytes/pve-appstore/internal/catalog"
+	"github.com/battlewithbytes/pve-appstore/internal/engine"
+	"github.com/battlewithbytes/pve-appstore/internal/version"
 )
 
 //go:embed assets/default-icon.png

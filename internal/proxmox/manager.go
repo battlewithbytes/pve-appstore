@@ -3,8 +3,8 @@ package proxmox
 import (
 	"context"
 
-	"github.com/inertz/pve-appstore/internal/engine"
-	"github.com/inertz/pve-appstore/internal/pct"
+	"github.com/battlewithbytes/pve-appstore/internal/engine"
+	"github.com/battlewithbytes/pve-appstore/internal/pct"
 )
 
 // Manager adapts the Proxmox API Client to the engine.ContainerManager interface.

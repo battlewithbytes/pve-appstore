@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"net"
 
-	"github.com/inertz/pve-appstore/internal/config"
+	"github.com/battlewithbytes/pve-appstore/internal/config"
 )
 
 // Run is the main entrypoint for the TUI installer.

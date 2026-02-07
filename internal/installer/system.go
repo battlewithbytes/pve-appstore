@@ -4,12 +4,11 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 
 	"golang.org/x/crypto/bcrypt"
 
-	"github.com/inertz/pve-appstore/internal/config"
+	"github.com/battlewithbytes/pve-appstore/internal/config"
 )
 
 const sudoersContent = `# PVE App Store — managed sudoers file
@@ -25,7 +24,7 @@ appstore ALL=(root) NOPASSWD: /usr/bin/nsenter --mount=/proc/1/ns/mnt -- /usr/sb
 
 const systemdUnit = `[Unit]
 Description=PVE App Store
-Documentation=https://github.com/inertz/pve-appstore
+Documentation=https://github.com/battlewithbytes/pve-appstore
 After=network-online.target pve-cluster.service pvedaemon.service
 Wants=network-online.target
 Requires=pve-cluster.service
@@ -343,9 +342,6 @@ func startService() error {
 		exec.Command("chmod", "0755", config.DefaultInstallDir+"/pve-appstore").Run()
 	}
 
-	// Copy SPA assets if they exist near the running binary
-	copySPAAssets(exe)
-
 	if out, err := exec.Command("systemctl", "start", "pve-appstore.service").CombinedOutput(); err != nil {
 		return fmt.Errorf("start service: %s: %w", string(out), err)
 	}
@@ -353,26 +349,3 @@ func startService() error {
 	return nil
 }
 
-// copySPAAssets copies web/frontend/dist to the install directory.
-func copySPAAssets(exePath string) {
-	// Look for SPA dist relative to the binary or CWD
-	candidates := []string{
-		"web/frontend/dist",
-	}
-
-	// Also try relative to where the binary lives
-	if exePath != "" {
-		dir := filepath.Dir(exePath)
-		candidates = append(candidates, filepath.Join(dir, "web/frontend/dist"))
-	}
-
-	for _, src := range candidates {
-		if info, err := os.Stat(src); err == nil && info.IsDir() {
-			dst := config.DefaultInstallDir + "/web/frontend/dist"
-			os.MkdirAll(filepath.Dir(dst), 0755)
-			exec.Command("cp", "-r", src, dst).Run()
-			exec.Command("chown", "-R", "root:"+config.ServiceGroup, config.DefaultInstallDir+"/web").Run()
-			return
-		}
-	}
-}

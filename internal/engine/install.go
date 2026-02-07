@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/inertz/pve-appstore/internal/catalog"
+	"github.com/battlewithbytes/pve-appstore/internal/catalog"
 )
 
 // installSteps defines the ordered state machine for an install job.

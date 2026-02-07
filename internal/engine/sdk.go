@@ -8,8 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/inertz/pve-appstore/internal/catalog"
-	appstoresdk "github.com/inertz/pve-appstore/sdk"
+	"github.com/battlewithbytes/pve-appstore/internal/catalog"
+	appstoresdk "github.com/battlewithbytes/pve-appstore/sdk"
 )
 
 const (

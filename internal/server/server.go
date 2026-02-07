@@ -8,9 +8,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/inertz/pve-appstore/internal/catalog"
-	"github.com/inertz/pve-appstore/internal/config"
-	"github.com/inertz/pve-appstore/internal/engine"
+	"github.com/battlewithbytes/pve-appstore/internal/catalog"
+	"github.com/battlewithbytes/pve-appstore/internal/config"
+	"github.com/battlewithbytes/pve-appstore/internal/engine"
 )
 
 // Server is the main HTTP server for the PVE App Store.

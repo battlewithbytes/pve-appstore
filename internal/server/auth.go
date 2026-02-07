@@ -10,7 +10,7 @@ import (
 
 	"golang.org/x/crypto/bcrypt"
 
-	"github.com/inertz/pve-appstore/internal/config"
+	"github.com/battlewithbytes/pve-appstore/internal/config"
 )
 
 const (

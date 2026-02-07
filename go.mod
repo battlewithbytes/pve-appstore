@@ -1,4 +1,4 @@
-module github.com/inertz/pve-appstore
+module github.com/battlewithbytes/pve-appstore
 
 go 1.24.4
 

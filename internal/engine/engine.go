@@ -9,9 +9,9 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/inertz/pve-appstore/internal/catalog"
-	"github.com/inertz/pve-appstore/internal/config"
-	"github.com/inertz/pve-appstore/internal/pct"
+	"github.com/battlewithbytes/pve-appstore/internal/catalog"
+	"github.com/battlewithbytes/pve-appstore/internal/config"
+	"github.com/battlewithbytes/pve-appstore/internal/pct"
 )
 
 // ContainerManager abstracts container lifecycle operations.

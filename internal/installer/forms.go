@@ -6,7 +6,7 @@ import (
 
 	"github.com/charmbracelet/huh"
 
-	"github.com/inertz/pve-appstore/internal/config"
+	"github.com/battlewithbytes/pve-appstore/internal/config"
 )
 
 // BuildForm constructs the full TUI form from discovered resources.

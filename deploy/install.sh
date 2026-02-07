@@ -4,7 +4,7 @@ set -euo pipefail
 # PVE App Store — one-liner installer
 # Usage: curl -fsSL <url>/install.sh | bash
 
-REPO="inertz/pve-appstore"
+REPO="battlewithbytes/pve-appstore"
 INSTALL_DIR="/opt/pve-appstore"
 BINARY="pve-appstore"
 

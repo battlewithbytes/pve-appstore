@@ -17,7 +17,7 @@ One-click LXC container apps for Proxmox VE. An "Unraid Apps"-style application 
 
 ```bash
 # Download and run the interactive installer
-curl -fsSL https://raw.githubusercontent.com/inertz/pve-appstore/main/deploy/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/battlewithbytes/pve-appstore/main/deploy/install.sh | bash
 ```
 
 The installer will:
