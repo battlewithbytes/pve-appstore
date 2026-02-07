@@ -66,8 +66,8 @@ export interface AppInput {
 }
 
 export interface ConfigDefaultsResponse {
-  storage: string;
-  bridge: string;
+  storages: string[];
+  bridges: string[];
   defaults: {
     cores: number;
     memory_mb: number;

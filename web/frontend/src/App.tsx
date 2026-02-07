@@ -307,8 +307,8 @@ function InstallWizard({ app, onClose }: { app: AppDetail; onClose: () => void }
   useEffect(() => {
     api.configDefaults().then(d => {
       setDefaults(d)
-      setStorage(d.storage)
-      setBridge(d.bridge)
+      setStorage(d.storages[0] || '')
+      setBridge(d.bridges[0] || '')
     }).catch(() => {})
   }, [])
 
@@ -343,11 +343,23 @@ function InstallWizard({ app, onClose }: { app: AppDetail; onClose: () => void }
         <FormRow label="Disk (GB)"><FormInput value={disk} onChange={setDisk} type="number" /></FormRow>
 
         <h4 style={sectionTitle}>Networking & Storage</h4>
-        <FormRow label="Storage Pool" help={defaults ? `Configured default: ${defaults.storage}` : undefined}>
-          <FormInput value={storage} onChange={setStorage} />
+        <FormRow label="Storage Pool">
+          {defaults && defaults.storages.length > 1 ? (
+            <select value={storage} onChange={e => setStorage(e.target.value)} style={inputStyle}>
+              {defaults.storages.map(s => <option key={s} value={s}>{s}</option>)}
+            </select>
+          ) : (
+            <FormInput value={storage} onChange={setStorage} />
+          )}
         </FormRow>
-        <FormRow label="Network Bridge" help={defaults ? `Configured default: ${defaults.bridge}` : undefined}>
-          <FormInput value={bridge} onChange={setBridge} />
+        <FormRow label="Network Bridge">
+          {defaults && defaults.bridges.length > 1 ? (
+            <select value={bridge} onChange={e => setBridge(e.target.value)} style={inputStyle}>
+              {defaults.bridges.map(b => <option key={b} value={b}>{b}</option>)}
+            </select>
+          ) : (
+            <FormInput value={bridge} onChange={setBridge} />
+          )}
         </FormRow>
 
         {inputGroups && Object.entries(inputGroups).map(([group, groupInps]) => (

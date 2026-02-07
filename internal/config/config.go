@@ -12,8 +12,8 @@ import (
 type Config struct {
 	NodeName string          `yaml:"node_name"`
 	Pool     string          `yaml:"pool"`
-	Storage  string          `yaml:"storage"`
-	Bridge   string          `yaml:"bridge"`
+	Storages []string        `yaml:"storages"`
+	Bridges  []string        `yaml:"bridges"`
 	Defaults ResourceConfig  `yaml:"defaults"`
 	Security SecurityConfig  `yaml:"security"`
 	Service  ServiceConfig   `yaml:"service"`
@@ -66,6 +66,8 @@ type GPUConfig struct {
 }
 
 // Load reads and parses a config file from the given path.
+// It supports backward compatibility with the old single-value "storage"/"bridge" keys,
+// promoting them to the new "storages"/"bridges" list format.
 func Load(path string) (*Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -75,6 +77,21 @@ func Load(path string) (*Config, error) {
 	var cfg Config
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
 		return nil, fmt.Errorf("parsing config: %w", err)
+	}
+
+	// Backward compat: migrate old single-value storage/bridge to lists
+	var raw map[string]interface{}
+	if err := yaml.Unmarshal(data, &raw); err == nil {
+		if len(cfg.Storages) == 0 {
+			if v, ok := raw["storage"].(string); ok && v != "" {
+				cfg.Storages = []string{v}
+			}
+		}
+		if len(cfg.Bridges) == 0 {
+			if v, ok := raw["bridge"].(string); ok && v != "" {
+				cfg.Bridges = []string{v}
+			}
+		}
 	}
 
 	if err := cfg.Validate(); err != nil {
@@ -92,11 +109,11 @@ func (c *Config) Validate() error {
 	if c.Pool == "" {
 		return fmt.Errorf("pool is required")
 	}
-	if c.Storage == "" {
-		return fmt.Errorf("storage is required")
+	if len(c.Storages) == 0 {
+		return fmt.Errorf("at least one storage is required")
 	}
-	if c.Bridge == "" {
-		return fmt.Errorf("bridge is required")
+	if len(c.Bridges) == 0 {
+		return fmt.Errorf("at least one bridge is required")
 	}
 
 	// Resource defaults

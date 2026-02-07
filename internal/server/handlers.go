@@ -191,8 +191,8 @@ func toAppResponse(app *catalog.AppManifest) *appResponse {
 
 func (s *Server) handleConfigDefaults(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"storage": s.cfg.Storage,
-		"bridge":  s.cfg.Bridge,
+		"storages": s.cfg.Storages,
+		"bridges":  s.cfg.Bridges,
 		"defaults": map[string]interface{}{
 			"cores":     s.cfg.Defaults.Cores,
 			"memory_mb": s.cfg.Defaults.MemoryMB,

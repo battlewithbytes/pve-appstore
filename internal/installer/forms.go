@@ -125,15 +125,16 @@ func placementGroup(res *DiscoveredResources, answers *InstallerAnswers) *huh.Gr
 	}
 
 	return huh.NewGroup(
-		huh.NewSelect[string]().
-			Title("Default Storage").
-			Description("Storage for container root filesystems.").
+		huh.NewMultiSelect[string]().
+			Title("Allowed Storages").
+			Description("Select one or more storages for container root filesystems.").
 			Options(storageOpts...).
-			Value(&answers.Storage),
-		huh.NewSelect[string]().
-			Title("Default Network Bridge").
+			Value(&answers.Storages),
+		huh.NewMultiSelect[string]().
+			Title("Allowed Network Bridges").
+			Description("Select one or more network bridges for containers.").
 			Options(bridgeOpts...).
-			Value(&answers.Bridge),
+			Value(&answers.Bridges),
 	)
 }
 

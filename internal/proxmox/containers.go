@@ -114,6 +114,24 @@ func (c *Client) Destroy(ctx context.Context, ctid int) error {
 	return c.WaitForTask(ctx, upid, defaultTaskTimeout)
 }
 
+// ContainerInfo holds summary information about an LXC container from the list endpoint.
+type ContainerInfo struct {
+	VMID   int    `json:"vmid"`
+	Name   string `json:"name"`
+	Status string `json:"status"`
+	Tags   string `json:"tags"`
+}
+
+// ListContainers returns all LXC containers on the configured node.
+func (c *Client) ListContainers(ctx context.Context) ([]ContainerInfo, error) {
+	path := fmt.Sprintf("/nodes/%s/lxc", c.node)
+	var containers []ContainerInfo
+	if err := c.doRequest(ctx, "GET", path, nil, &containers); err != nil {
+		return nil, fmt.Errorf("listing containers: %w", err)
+	}
+	return containers, nil
+}
+
 // containerStatus holds the current status of a container.
 type containerStatus struct {
 	Status string `json:"status"`

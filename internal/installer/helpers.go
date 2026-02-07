@@ -14,8 +14,8 @@ type InstallerAnswers struct {
 	NewPool    string
 
 	// Placement
-	Storage string
-	Bridge  string
+	Storages []string
+	Bridges  []string
 
 	// Resources (string from input, parsed later)
 	CoresStr    string

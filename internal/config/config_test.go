@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -10,8 +11,8 @@ func validConfig() *Config {
 	return &Config{
 		NodeName: "zeus",
 		Pool:     "appstore",
-		Storage:  "local-lvm",
-		Bridge:   "vmbr0",
+		Storages: []string{"local-lvm"},
+		Bridges:  []string{"vmbr0"},
 		Defaults: ResourceConfig{
 			Cores:    DefaultCores,
 			MemoryMB: DefaultMemoryMB,
@@ -69,19 +70,19 @@ func TestValidateMissingPool(t *testing.T) {
 	}
 }
 
-func TestValidateMissingStorage(t *testing.T) {
+func TestValidateEmptyStorages(t *testing.T) {
 	cfg := validConfig()
-	cfg.Storage = ""
+	cfg.Storages = nil
 	if err := cfg.Validate(); err == nil {
-		t.Fatal("expected error for missing storage")
+		t.Fatal("expected error for empty storages")
 	}
 }
 
-func TestValidateMissingBridge(t *testing.T) {
+func TestValidateEmptyBridges(t *testing.T) {
 	cfg := validConfig()
-	cfg.Bridge = ""
+	cfg.Bridges = nil
 	if err := cfg.Validate(); err == nil {
-		t.Fatal("expected error for missing bridge")
+		t.Fatal("expected error for empty bridges")
 	}
 }
 
@@ -207,5 +208,64 @@ func TestLoadInvalidYAML(t *testing.T) {
 	_, err := Load(path)
 	if err == nil {
 		t.Fatal("expected error for invalid YAML")
+	}
+}
+
+func TestLoadBackwardCompatSingleStorageBridge(t *testing.T) {
+	// Old config format with single storage/bridge strings
+	cfg := validConfig()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yml")
+
+	// Save with new format first to get a valid YAML, then overwrite with old format
+	if err := cfg.Save(path); err != nil {
+		t.Fatalf("save failed: %v", err)
+	}
+
+	// Read the file and replace storages/bridges with old single-value keys
+	data, _ := os.ReadFile(path)
+	content := string(data)
+	content = strings.Replace(content, "storages:\n    - local-lvm", "storage: local-lvm", 1)
+	content = strings.Replace(content, "bridges:\n    - vmbr0", "bridge: vmbr0", 1)
+	os.WriteFile(path, []byte(content), 0644)
+
+	loaded, err := Load(path)
+	if err != nil {
+		t.Fatalf("load failed: %v", err)
+	}
+
+	if len(loaded.Storages) != 1 || loaded.Storages[0] != "local-lvm" {
+		t.Errorf("Storages = %v, want [local-lvm]", loaded.Storages)
+	}
+	if len(loaded.Bridges) != 1 || loaded.Bridges[0] != "vmbr0" {
+		t.Errorf("Bridges = %v, want [vmbr0]", loaded.Bridges)
+	}
+}
+
+func TestMultipleStoragesAndBridges(t *testing.T) {
+	cfg := validConfig()
+	cfg.Storages = []string{"local-lvm", "ceph-pool", "nfs-data"}
+	cfg.Bridges = []string{"vmbr0", "vmbr1"}
+
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yml")
+	if err := cfg.Save(path); err != nil {
+		t.Fatalf("save failed: %v", err)
+	}
+
+	loaded, err := Load(path)
+	if err != nil {
+		t.Fatalf("load failed: %v", err)
+	}
+
+	if len(loaded.Storages) != 3 {
+		t.Errorf("Storages count = %d, want 3", len(loaded.Storages))
+	}
+	if len(loaded.Bridges) != 2 {
+		t.Errorf("Bridges count = %d, want 2", len(loaded.Bridges))
 	}
 }

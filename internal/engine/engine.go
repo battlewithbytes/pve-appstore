@@ -86,11 +86,11 @@ func (e *Engine) StartInstall(req InstallRequest) (*Job, error) {
 	}
 
 	// Apply defaults from config, then from manifest, then from request
-	storage := e.cfg.Storage
+	storage := e.cfg.Storages[0]
 	if req.Storage != "" {
 		storage = req.Storage
 	}
-	bridge := e.cfg.Bridge
+	bridge := e.cfg.Bridges[0]
 	if req.Bridge != "" {
 		bridge = req.Bridge
 	}

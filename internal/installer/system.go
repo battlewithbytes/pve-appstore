@@ -1,6 +1,7 @@
 package installer
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -120,7 +121,6 @@ func createAPIToken(answers *InstallerAnswers, res *DiscoveredResources) error {
 		"VM.Config.Options",
 		"VM.PowerMgmt",
 		"VM.Console",
-		"VM.Monitor",
 		"Datastore.AllocateSpace",
 		"Datastore.Audit",
 		"Pool.Audit",
@@ -129,6 +129,8 @@ func createAPIToken(answers *InstallerAnswers, res *DiscoveredResources) error {
 		"Sys.Modify",
 	}, ",")
 	exec.Command("pveum", "role", "add", "AppStoreRole", "--privs", perms).CombinedOutput()
+	// Update privs in case role already existed with different permissions
+	exec.Command("pveum", "role", "modify", "AppStoreRole", "--privs", perms).CombinedOutput()
 
 	// 3. Assign role on pool path
 	exec.Command("pveum", "acl", "modify", "/pool/"+pool, "--roles", "AppStoreRole", "--users", "appstore@pve").CombinedOutput()
@@ -136,8 +138,10 @@ func createAPIToken(answers *InstallerAnswers, res *DiscoveredResources) error {
 	// 4. Assign read on local node
 	exec.Command("pveum", "acl", "modify", "/nodes/"+node, "--roles", "PVEAuditor", "--users", "appstore@pve").CombinedOutput()
 
-	// 5. Assign storage access
-	exec.Command("pveum", "acl", "modify", "/storage/"+answers.Storage, "--roles", "AppStoreRole", "--users", "appstore@pve").CombinedOutput()
+	// 5. Assign storage access on all selected storages
+	for _, st := range answers.Storages {
+		exec.Command("pveum", "acl", "modify", "/storage/"+st, "--roles", "AppStoreRole", "--users", "appstore@pve").CombinedOutput()
+	}
 
 	// 6. Create API token (privsep=0 so token inherits user's permissions)
 	out, err := exec.Command("pveum", "user", "token", "add", "appstore@pve", "appstore", "--privsep", "0", "--output-format", "json").CombinedOutput()
@@ -159,31 +163,20 @@ func createAPIToken(answers *InstallerAnswers, res *DiscoveredResources) error {
 	return nil
 }
 
-// extractTokenValue parses the token secret from pveum output.
+// extractTokenValue parses the token secret from pveum JSON output.
+// Expected format: {"full-tokenid":"appstore@pve!appstore","info":{"privsep":"0"},"value":"<uuid>"}
 func extractTokenValue(output string) string {
-	// pveum outputs JSON with "value" field or plain text with the token
-	// Try to find the UUID-like token value
+	var parsed struct {
+		Value string `json:"value"`
+	}
+	if err := json.Unmarshal([]byte(strings.TrimSpace(output)), &parsed); err == nil && parsed.Value != "" {
+		return parsed.Value
+	}
+	// Fallback: scan for UUID-like token on its own line
 	for _, line := range strings.Split(output, "\n") {
 		line = strings.TrimSpace(line)
-		// Look for UUID pattern in the output
 		if len(line) == 36 && strings.Count(line, "-") == 4 {
 			return line
-		}
-		// JSON format: look for "value" field
-		if strings.Contains(line, "value") {
-			parts := strings.SplitN(line, ":", 2)
-			if len(parts) == 2 {
-				val := strings.TrimSpace(parts[1])
-				val = strings.Trim(val, `",' `)
-				if val != "" {
-					return val
-				}
-			}
-		}
-		// Full token format from JSON: strip quotes/commas
-		cleaned := strings.Trim(line, `"}, `)
-		if len(cleaned) == 36 && strings.Count(cleaned, "-") == 4 {
-			return cleaned
 		}
 	}
 	return strings.TrimSpace(output)
@@ -235,8 +228,8 @@ func writeConfig(answers *InstallerAnswers, nums *ParsedNumerics, res *Discovere
 	cfg := &config.Config{
 		NodeName: res.NodeName,
 		Pool:     answers.EffectivePool(),
-		Storage:  answers.Storage,
-		Bridge:   answers.Bridge,
+		Storages: answers.Storages,
+		Bridges:  answers.Bridges,
 		Defaults: config.ResourceConfig{
 			Cores:    nums.Cores,
 			MemoryMB: nums.MemoryMB,

@@ -40,8 +40,8 @@ func testConfig() *config.Config {
 	return &config.Config{
 		NodeName: "testnode",
 		Pool:     "testpool",
-		Storage:  "local-lvm",
-		Bridge:   "vmbr0",
+		Storages: []string{"local-lvm"},
+		Bridges:  []string{"vmbr0"},
 		Defaults: config.ResourceConfig{
 			Cores:    2,
 			MemoryMB: 2048,
