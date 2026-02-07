@@ -25,6 +25,11 @@ jobs:
         with:
           python-version: "3.x"
 
+      - name: Build frontend
+        run: |
+          npm ci --prefix web/frontend
+          npm run build --prefix web/frontend
+
       - name: Go lint
         run: go vet ./...
 
@@ -35,11 +40,6 @@ jobs:
         run: |
           pip install pytest
           python3 -m pytest sdk/python/tests/
-
-      - name: Build frontend
-        run: |
-          npm ci --prefix web/frontend
-          npm run build --prefix web/frontend
 
       - name: Build binary
         run: go build -ldflags "-s -w" -o pve-appstore ./cmd/pve-appstore/
