@@ -1,31 +1,41 @@
-# Building an App for PVE App Store
+# Building an App for [PVE App Store](https://github.com/battlewithbytes/pve-appstore)
 
-This tutorial walks you through creating a container app from scratch. By the end you'll have a working app manifest and install script ready to submit to the catalog.
+This tutorial walks you through creating a container app from scratch. By the end you'll have a working app manifest and install script ready to submit to the [catalog](https://github.com/battlewithbytes/pve-appstore-catalog).
 
 We'll build a simple static site app called **"My Page"** — it installs Nginx, writes a custom HTML page, and exposes it on a configurable port.
 
 ## Prerequisites
 
-- A Proxmox VE host with PVE App Store installed
+- A Proxmox VE host with [PVE App Store](https://github.com/battlewithbytes/pve-appstore) installed
 - Familiarity with Debian/Linux basics (apt, systemd)
 - Basic Python knowledge
 
 ## Step 1: Create the App Directory
 
-Every app lives in its own directory under `apps/` in the catalog repo:
+Every app lives in its own directory under `apps/` in the [catalog repo](https://github.com/battlewithbytes/pve-appstore-catalog):
 
 ```
 apps/my-page/
   app.yml               # App manifest (required)
   provision/
     install.py          # Install script (required)
-  icon.png              # App icon (optional)
+  icon.png              # App icon (optional, displayed in the web UI)
   README.md             # Detailed docs (optional)
 ```
 
 ```bash
 mkdir -p apps/my-page/provision
 ```
+
+### App Icon
+
+Include an `icon.png` in your app directory to give it a logo in the [PVE App Store](https://github.com/battlewithbytes/pve-appstore) web UI. Without one, the UI shows the first letter of the app name as a placeholder.
+
+**Icon guidelines:**
+- **Format:** PNG (`icon.png` — exact filename required)
+- **Size:** 128x128 pixels recommended (displayed at 40x40 in the app list and 56x56 in the detail view)
+- **Style:** Square with rounded corners looks best; transparent backgrounds work well
+- **File size:** Keep it under 50KB — icons are served directly by the API
 
 ## Step 2: Write the Manifest (app.yml)
 
@@ -238,7 +248,7 @@ run(MyPageApp)
 2. **Subclass `BaseApp`** — Implement the `install()` method
 3. **Call `run(YourApp)`** — Registers your class with the SDK runner
 
-The SDK handles loading inputs, permissions, and calling your `install()` method. You never parse command-line arguments or read config files directly.
+The [SDK](https://github.com/battlewithbytes/pve-appstore/tree/main/sdk/python/appstore) handles loading inputs, permissions, and calling your `install()` method. You never parse command-line arguments or read config files directly.
 
 ### Key Concepts
 
@@ -387,7 +397,7 @@ Before submitting, test your manifest parses correctly:
 ## Step 7: Submit to the Catalog
 
 1. Fork the [pve-appstore-catalog](https://github.com/battlewithbytes/pve-appstore-catalog) repo
-2. Add your `apps/my-page/` directory
+2. Add your `apps/my-page/` directory (with `app.yml`, `provision/install.py`, and optionally `icon.png`)
 3. Open a pull request
 
 Your app will be reviewed for:
@@ -395,6 +405,7 @@ Your app will be reviewed for:
 - Install script uses SDK helpers (no raw `subprocess` calls bypassing permissions)
 - Reasonable container defaults (don't request 32GB RAM for a static site)
 - Permissions are minimal — only declare what you actually need
+- Icon included (recommended but not required)
 
 ## Real-World Examples
 
