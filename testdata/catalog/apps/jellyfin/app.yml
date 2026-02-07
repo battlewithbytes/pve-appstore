@@ -1,0 +1,111 @@
+id: jellyfin
+name: Jellyfin
+description: Free media server. Stream movies, TV shows, music, and photos to any device with hardware-accelerated transcoding.
+overview: |
+  Jellyfin is the free software media system that puts you in control of managing and streaming your digital media. It is a fully open-source alternative to proprietary media servers like Plex and Emby, with no premium tiers or tracking.
+
+  It automatically organizes your movies, TV shows, music, and photos with rich metadata from online databases. Clients are available for virtually every platform including web browsers, Android, iOS, Roku, Fire TV, and Kodi.
+
+  Hardware-accelerated transcoding via Intel QSV or NVIDIA NVENC lets Jellyfin transcode media on-the-fly for devices that can't play the original format, without taxing the CPU. After installation, complete the setup wizard at the web UI to add your media libraries.
+version: 10.10.0
+categories:
+  - media
+  - entertainment
+tags:
+  - media-server
+  - streaming
+  - transcoding
+  - gpu
+homepage: https://jellyfin.org
+license: GPL-2.0
+maintainers:
+  - PVE App Store
+
+lxc:
+  ostemplate: debian-12
+  defaults:
+    unprivileged: true
+    cores: 2
+    memory_mb: 4096
+    disk_gb: 20
+    features:
+      - nesting
+    onboot: true
+
+inputs:
+  - key: media_path
+    label: Media Storage Path
+    type: string
+    default: /mnt/media
+    required: false
+    group: Storage
+    description: Root directory for your media library. You can add multiple libraries in Jellyfin's UI later, but this is the primary mount point. Use a bind mount from your host or NAS for best results.
+    help: "Example: /mnt/media or /mnt/nfs/movies"
+  - key: transcode_threads
+    label: Transcode Threads
+    type: number
+    default: 0
+    required: false
+    group: Transcoding
+    description: Number of CPU threads dedicated to software transcoding. Set to 0 for automatic detection. Only relevant when hardware transcoding is not available.
+    help: "0 = auto-detect based on available cores"
+  - key: http_port
+    label: HTTP Port
+    type: number
+    default: 8096
+    required: false
+    group: Network
+    description: The port Jellyfin's web interface and API listen on. Default is 8096.
+    help: Must be between 1024-65535
+    validation:
+      min: 1024
+      max: 65535
+  - key: cache_path
+    label: Cache Directory
+    type: string
+    default: /var/cache/jellyfin
+    required: false
+    group: Storage
+    description: Directory for transcoding cache and temporary files. Use fast storage (SSD) for better transcoding performance. Can grow large with active transcoding.
+    help: Should be on fast storage; can be cleaned periodically
+  - key: hw_accel
+    label: Hardware Acceleration
+    type: select
+    default: none
+    required: false
+    group: Transcoding
+    description: Enable hardware-accelerated transcoding. Requires GPU passthrough to be configured on this container. Intel QSV works with most Intel iGPUs; NVENC requires an NVIDIA GPU with driver support.
+    help: Requires matching GPU profile to be attached
+    validation:
+      enum:
+        - none
+        - qsv
+        - nvenc
+
+permissions:
+  packages: [curl, gnupg]
+  installer_scripts: ["https://repo.jellyfin.org/install-debuntu.sh"]
+  paths: ["/mnt/media", "/var/cache/jellyfin", "/etc/jellyfin/"]
+  services: [jellyfin]
+
+provisioning:
+  script: provision/install.py
+  timeout_sec: 600
+
+outputs:
+  - key: url
+    label: Web UI
+    value: "http://{{ip}}:{{http_port}}"
+  - key: setup
+    label: Setup
+    value: Complete initial setup at the Web UI
+
+gpu:
+  supported:
+    - intel
+    - nvidia
+  required: false
+  profiles:
+    - dri-render
+    - nvidia-basic
+  notes: Intel QSV or NVIDIA NVENC enables hardware-accelerated transcoding.

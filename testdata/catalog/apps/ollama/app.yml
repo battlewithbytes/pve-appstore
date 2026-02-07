@@ -1,0 +1,116 @@
+id: ollama
+name: Ollama
+description: Run large language models locally. Supports Llama, Mistral, Gemma, and many more models with optional GPU acceleration.
+overview: |
+  Ollama makes it easy to run large language models locally with a simple command-line interface and REST API. It supports dozens of open-source models including Llama 3, Mistral, Gemma, Phi, and Qwen, with automatic model management and optimization.
+
+  Running LLMs locally on Proxmox gives you complete privacy, no API costs, and the ability to fine-tune models for your specific use case. With GPU passthrough enabled, Ollama can leverage your NVIDIA or Intel GPU for dramatically faster inference speeds.
+
+  The API is compatible with the OpenAI chat format, making it a drop-in replacement for many AI-powered applications. After installation, use the CLI to pull models and start chatting, or point your favorite AI tools at the API endpoint.
+version: 0.5.0
+categories:
+  - ai
+  - tools
+tags:
+  - llm
+  - ai
+  - gpu
+  - machine-learning
+homepage: https://ollama.ai
+license: MIT
+maintainers:
+  - PVE App Store
+
+lxc:
+  ostemplate: debian-12
+  defaults:
+    unprivileged: true
+    cores: 4
+    memory_mb: 8192
+    disk_gb: 50
+    features:
+      - nesting
+    onboot: true
+
+inputs:
+  - key: model
+    label: Default Model
+    type: select
+    default: llama3.2
+    required: false
+    group: General
+    description: The model to download and prepare on first start. Larger models need more RAM and disk space. Llama 3.2 is a good general-purpose starting point.
+    help: Model will be pulled during installation (may take several minutes)
+    validation:
+      enum:
+        - llama3.2
+        - mistral
+        - gemma2
+        - phi3
+        - qwen2.5
+  - key: api_port
+    label: API Port
+    type: number
+    default: 11434
+    required: false
+    group: Network
+    description: Port for the Ollama REST API. Other applications connect to this port to use the LLM.
+    help: Default 11434, must be between 1024-65535
+    validation:
+      min: 1024
+      max: 65535
+  - key: bind_address
+    label: Bind Address
+    type: string
+    default: 0.0.0.0
+    required: false
+    group: Network
+    description: Network address Ollama binds to. Use 0.0.0.0 to accept connections from any host, or 127.0.0.1 to restrict to local access only.
+    help: "0.0.0.0 = all interfaces, 127.0.0.1 = localhost only"
+  - key: models_path
+    label: Models Directory
+    type: string
+    default: /usr/share/ollama/.ollama/models
+    required: false
+    group: Storage
+    description: Directory where downloaded models are stored. Models can be very large (4-70GB each), so ensure this path has sufficient disk space.
+    help: Must be an absolute path with enough free space for your models
+  - key: num_ctx
+    label: Context Window Size
+    type: number
+    default: 2048
+    required: false
+    group: Performance
+    description: Default context window size in tokens. Larger values allow longer conversations but use more memory. Most models support up to 8192.
+    help: "2048 is default; increase for longer conversations at the cost of more RAM"
+    validation:
+      min: 512
+      max: 131072
+
+permissions:
+  installer_scripts: ["https://ollama.ai/install.sh"]
+  paths: ["/etc/systemd/", "/usr/share/ollama/"]
+  services: [ollama]
+  commands: [ollama]
+
+provisioning:
+  script: provision/install.py
+  timeout_sec: 1800
+
+outputs:
+  - key: api_url
+    label: API URL
+    value: "http://{{ip}}:{{api_port}}"
+  - key: usage
+    label: Usage
+    value: "ollama run {{model}}"
+
+gpu:
+  supported:
+    - intel
+    - nvidia
+  required: false
+  profiles:
+    - dri-render
+    - nvidia-basic
+  notes: GPU acceleration significantly improves inference speed. NVIDIA GPUs require host drivers.

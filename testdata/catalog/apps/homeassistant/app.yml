@@ -1,0 +1,89 @@
+id: homeassistant
+name: Home Assistant
+description: Open source home automation platform. Control all your devices from a single, mobile-friendly interface.
+overview: |
+  Home Assistant is a powerful open-source home automation platform that puts local control and privacy first. It integrates with over 2,000 different devices and services, allowing you to create complex automations and monitor your entire smart home from a single dashboard.
+
+  The platform runs entirely on your local network, meaning your data stays private and your automations work even when the internet is down. With a vibrant community and regular monthly releases, Home Assistant is the most popular self-hosted home automation solution available.
+
+  This container deploys Home Assistant Core in a Python virtual environment. After installation, complete the onboarding wizard at the web UI to create your admin account and begin adding integrations.
+version: 2025.1.0
+categories:
+  - automation
+  - smart-home
+tags:
+  - home-automation
+  - iot
+  - smart-home
+  - dashboard
+homepage: https://www.home-assistant.io
+license: Apache-2.0
+maintainers:
+  - PVE App Store
+
+lxc:
+  ostemplate: debian-12
+  defaults:
+    unprivileged: true
+    cores: 2
+    memory_mb: 2048
+    disk_gb: 16
+    features:
+      - nesting
+    onboot: true
+
+inputs:
+  - key: timezone
+    label: Timezone
+    type: string
+    default: America/New_York
+    required: true
+    group: General
+    description: The timezone used for automations, sunrise/sunset calculations, and the UI clock display.
+    help: "IANA format: America/New_York, Europe/London, Asia/Tokyo"
+  - key: http_port
+    label: HTTP Port
+    type: number
+    default: 8123
+    required: false
+    group: Network
+    description: The port Home Assistant's web interface listens on. Change this if port 8123 conflicts with another service.
+    help: Must be between 1024-65535
+    validation:
+      min: 1024
+      max: 65535
+  - key: config_path
+    label: Config Directory
+    type: string
+    default: /opt/homeassistant/config
+    required: false
+    group: Storage
+    description: Directory where Home Assistant stores configuration files, database, and backups. Use a bind-mounted path for persistent storage across container rebuilds.
+    help: Must be an absolute path
+  - key: enable_mqtt
+    label: Enable MQTT Broker
+    type: boolean
+    default: false
+    required: false
+    group: Integrations
+    description: Install and configure Mosquitto MQTT broker alongside Home Assistant. Many IoT devices (Zigbee2MQTT, Tasmota, ESPHome) communicate via MQTT.
+    help: Installs mosquitto and configures HA to use it automatically
+
+permissions:
+  packages: [python3, python3-venv, python3-pip, mosquitto, mosquitto-clients]
+  pip: [homeassistant]
+  paths: ["/opt/homeassistant/"]
+  services: [mosquitto]
+
+provisioning:
+  script: provision/install.py
+  timeout_sec: 900
+
+outputs:
+  - key: url
+    label: Web UI
+    value: "http://{{ip}}:{{http_port}}"
+
+gpu:
+  supported: []
+  required: false

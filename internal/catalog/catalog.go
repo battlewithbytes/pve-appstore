@@ -1,0 +1,246 @@
+package catalog
+
+import (
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"sync"
+)
+
+// Catalog manages the local cache of the app catalog.
+type Catalog struct {
+	mu       sync.RWMutex
+	repoURL  string
+	branch   string
+	localDir string
+	apps     map[string]*AppManifest
+}
+
+// New creates a new Catalog instance.
+func New(repoURL, branch, dataDir string) *Catalog {
+	return &Catalog{
+		repoURL:  repoURL,
+		branch:   branch,
+		localDir: filepath.Join(dataDir, "catalog"),
+		apps:     make(map[string]*AppManifest),
+	}
+}
+
+// Refresh clones or pulls the catalog repo and re-indexes all apps.
+func (c *Catalog) Refresh() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if err := c.fetchRepo(); err != nil {
+		return fmt.Errorf("fetching catalog: %w", err)
+	}
+
+	if err := c.indexApps(); err != nil {
+		return fmt.Errorf("indexing catalog: %w", err)
+	}
+
+	return nil
+}
+
+// LoadLocal loads apps from a local directory (no git). Useful for testing
+// or when the catalog is already on disk.
+func (c *Catalog) LoadLocal(dir string) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.localDir = dir
+	return c.indexApps()
+}
+
+// List returns all validated apps.
+func (c *Catalog) List() []*AppManifest {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	apps := make([]*AppManifest, 0, len(c.apps))
+	for _, app := range c.apps {
+		apps = append(apps, app)
+	}
+	return apps
+}
+
+// Get returns a single app by ID.
+func (c *Catalog) Get(id string) (*AppManifest, bool) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	app, ok := c.apps[id]
+	return app, ok
+}
+
+// Search returns apps matching the query string against name, description, tags, and categories.
+func (c *Catalog) Search(query string) []*AppManifest {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	if query == "" {
+		return c.List()
+	}
+
+	q := strings.ToLower(query)
+	var results []*AppManifest
+
+	for _, app := range c.apps {
+		if matches(app, q) {
+			results = append(results, app)
+		}
+	}
+	return results
+}
+
+// Filter returns apps matching the given category.
+func (c *Catalog) Filter(category string) []*AppManifest {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	if category == "" {
+		return c.List()
+	}
+
+	cat := strings.ToLower(category)
+	var results []*AppManifest
+
+	for _, app := range c.apps {
+		for _, c := range app.Categories {
+			if strings.ToLower(c) == cat {
+				results = append(results, app)
+				break
+			}
+		}
+	}
+	return results
+}
+
+// Categories returns a deduplicated list of all categories across apps.
+func (c *Catalog) Categories() []string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	seen := make(map[string]bool)
+	var cats []string
+	for _, app := range c.apps {
+		for _, cat := range app.Categories {
+			lower := strings.ToLower(cat)
+			if !seen[lower] {
+				seen[lower] = true
+				cats = append(cats, cat)
+			}
+		}
+	}
+	return cats
+}
+
+// AppCount returns the number of loaded apps.
+func (c *Catalog) AppCount() int {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return len(c.apps)
+}
+
+func (c *Catalog) fetchRepo() error {
+	if _, err := os.Stat(filepath.Join(c.localDir, ".git")); err == nil {
+		// Repo exists — pull
+		cmd := exec.Command("git", "-C", c.localDir, "pull", "--ff-only", "origin", c.branch)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			return fmt.Errorf("git pull: %s: %w", string(out), err)
+		}
+		return nil
+	}
+
+	// Clone fresh
+	if err := os.MkdirAll(filepath.Dir(c.localDir), 0755); err != nil {
+		return err
+	}
+
+	cmd := exec.Command("git", "clone", "--branch", c.branch, "--depth", "1", c.repoURL, c.localDir)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("git clone: %s: %w", string(out), err)
+	}
+	return nil
+}
+
+func (c *Catalog) indexApps() error {
+	appsDir := filepath.Join(c.localDir, "apps")
+
+	// Also check catalog/apps/ layout
+	if _, err := os.Stat(appsDir); os.IsNotExist(err) {
+		alt := filepath.Join(c.localDir, "catalog", "apps")
+		if _, err := os.Stat(alt); err == nil {
+			appsDir = alt
+		}
+	}
+
+	entries, err := os.ReadDir(appsDir)
+	if err != nil {
+		return fmt.Errorf("reading apps directory %s: %w", appsDir, err)
+	}
+
+	newApps := make(map[string]*AppManifest)
+
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+
+		appDir := filepath.Join(appsDir, entry.Name())
+		manifestPath := filepath.Join(appDir, "app.yml")
+
+		if _, err := os.Stat(manifestPath); os.IsNotExist(err) {
+			continue // skip directories without app.yml
+		}
+
+		manifest, err := ParseManifest(manifestPath)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "warning: skipping %s: %v\n", entry.Name(), err)
+			continue
+		}
+
+		if err := manifest.Validate(); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: skipping %s: %v\n", entry.Name(), err)
+			continue
+		}
+
+		// Set computed paths
+		manifest.DirPath = appDir
+		if _, err := os.Stat(filepath.Join(appDir, "icon.png")); err == nil {
+			manifest.IconPath = filepath.Join(appDir, "icon.png")
+		}
+		if _, err := os.Stat(filepath.Join(appDir, "README.md")); err == nil {
+			manifest.ReadmePath = filepath.Join(appDir, "README.md")
+		}
+
+		newApps[manifest.ID] = manifest
+	}
+
+	c.apps = newApps
+	return nil
+}
+
+func matches(app *AppManifest, query string) bool {
+	if strings.Contains(strings.ToLower(app.Name), query) {
+		return true
+	}
+	if strings.Contains(strings.ToLower(app.Description), query) {
+		return true
+	}
+	if strings.Contains(strings.ToLower(app.ID), query) {
+		return true
+	}
+	for _, tag := range app.Tags {
+		if strings.Contains(strings.ToLower(tag), query) {
+			return true
+		}
+	}
+	for _, cat := range app.Categories {
+		if strings.Contains(strings.ToLower(cat), query) {
+			return true
+		}
+	}
+	return false
+}

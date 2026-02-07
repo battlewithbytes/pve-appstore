@@ -1,0 +1,132 @@
+id: crawl4ai
+name: Crawl4AI
+description: Open-source AI-powered web crawler that converts websites into LLM-ready markdown. REST API with browser pool, caching, and extraction strategies.
+overview: |
+  Crawl4AI is an open-source web crawling and scraping framework purpose-built for large language models, AI agents, and data pipelines. It converts messy web pages into clean, structured markdown that's ready for RAG ingestion, fine-tuning datasets, or real-time AI agent browsing.
+
+  The platform includes a full REST API with browser pool management, intelligent caching, proxy support, and multiple extraction strategies including CSS selectors, LLM-based extraction, and cosine similarity clustering. JavaScript execution hooks allow crawling of dynamic single-page applications.
+
+  This container runs the Crawl4AI server with a built-in monitoring dashboard and interactive playground at port 11235. Point your AI applications at the /crawl endpoint to start extracting structured data from any website.
+version: 0.4.0
+categories:
+  - ai
+  - tools
+tags:
+  - crawler
+  - scraper
+  - ai
+  - rag
+  - llm
+  - web-scraping
+homepage: https://github.com/unclecode/crawl4ai
+license: Apache-2.0
+maintainers:
+  - PVE App Store
+
+lxc:
+  ostemplate: debian-12
+  defaults:
+    unprivileged: true
+    cores: 2
+    memory_mb: 2048
+    disk_gb: 10
+    features:
+      - nesting
+    onboot: true
+
+inputs:
+  - key: api_port
+    label: API Port
+    type: number
+    default: 11235
+    required: false
+    group: Network
+    description: Port for the Crawl4AI REST API, monitoring dashboard, and interactive playground.
+    help: Default 11235; must be between 1024-65535
+    validation:
+      min: 1024
+      max: 65535
+  - key: bind_address
+    label: Bind Address
+    type: string
+    default: 0.0.0.0
+    required: false
+    group: Network
+    description: Network address the API server binds to. Use 0.0.0.0 to accept connections from any host, or 127.0.0.1 for local-only access.
+    help: "0.0.0.0 = all interfaces, 127.0.0.1 = localhost only"
+  - key: max_concurrent
+    label: Max Concurrent Crawls
+    type: number
+    default: 5
+    required: false
+    group: Performance
+    description: Maximum number of browser instances in the pool. Each concurrent crawl uses one browser. Higher values use more memory.
+    help: Each browser uses ~100-200MB RAM
+    validation:
+      min: 1
+      max: 20
+  - key: cache_dir
+    label: Cache Directory
+    type: string
+    default: /var/lib/crawl4ai/cache
+    required: false
+    group: Storage
+    description: Directory for storing cached crawl results. Caching avoids re-crawling identical pages and speeds up repeated requests.
+    help: Must be an absolute path
+  - key: headless
+    label: Headless Mode
+    type: boolean
+    default: true
+    required: false
+    group: General
+    description: Run Chromium in headless mode (no visible browser window). Disable for debugging crawl issues.
+    help: Should almost always be enabled in production
+
+permissions:
+  packages:
+    - python3
+    - python3-venv
+    - python3-pip
+    - curl
+    - wget
+    - gnupg
+    - libnss3
+    - libnspr4
+    - libatk1.0-0
+    - libatk-bridge2.0-0
+    - libcups2
+    - libdrm2
+    - libxkbcommon0
+    - libxcomposite1
+    - libxdamage1
+    - libxfixes3
+    - libxrandr2
+    - libgbm1
+    - libpango-1.0-0
+    - libcairo2
+    - libasound2
+    - libatspi2.0-0
+  pip: [crawl4ai]
+  paths: ["/opt/crawl4ai/", "/var/lib/crawl4ai/", "/etc/systemd/"]
+  services: [crawl4ai]
+  users: [crawl4ai]
+  commands: ["/opt/crawl4ai/venv/bin/crawl4ai-setup"]
+
+provisioning:
+  script: provision/install.py
+  timeout_sec: 900
+
+outputs:
+  - key: api_url
+    label: API URL
+    value: "http://{{ip}}:{{api_port}}"
+  - key: playground
+    label: Playground
+    value: "http://{{ip}}:{{api_port}}/playground"
+  - key: docs
+    label: API Docs
+    value: "http://{{ip}}:{{api_port}}/docs"
+
+gpu:
+  supported: []
+  required: false

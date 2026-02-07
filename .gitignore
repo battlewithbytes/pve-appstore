@@ -1,0 +1,29 @@
+# Binary
+pve-appstore
+/pve-appstore
+
+# Test/coverage
+*.out
+coverage.html
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Dev config
+dev-config.yml
+
+# Frontend build artifacts
+web/frontend/dist/
+web/frontend/node_modules/
+
+# Python
+__pycache__/
+*.pyc
+
+# OS
+.DS_Store
+Thumbs.db

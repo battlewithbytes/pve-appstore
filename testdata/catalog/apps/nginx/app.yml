@@ -1,0 +1,102 @@
+id: nginx
+name: Nginx
+description: High-performance HTTP server and reverse proxy. Perfect as a front-end proxy for your homelab services.
+overview: |
+  Nginx is the world's most popular high-performance HTTP server and reverse proxy, serving over 30% of all websites globally. It excels at serving static content, load balancing, and acting as a reverse proxy for your homelab services.
+
+  In a Proxmox homelab, Nginx is commonly used as a central reverse proxy that routes traffic to different LXC containers based on domain name or path. Combined with Let's Encrypt certificates, it provides secure HTTPS access to all your services through a single entry point.
+
+  This container installs Nginx from the official Debian repository. After installation, configure your server blocks in /etc/nginx/sites-available/ and enable them with symlinks to sites-enabled/.
+version: 1.27.0
+categories:
+  - networking
+  - web
+tags:
+  - proxy
+  - webserver
+  - reverse-proxy
+homepage: https://nginx.org
+license: BSD-2-Clause
+maintainers:
+  - PVE App Store
+
+lxc:
+  ostemplate: debian-12
+  defaults:
+    unprivileged: true
+    cores: 1
+    memory_mb: 256
+    disk_gb: 2
+    features:
+      - nesting
+    onboot: true
+
+inputs:
+  - key: domain
+    label: Domain Name
+    type: string
+    default: ""
+    required: false
+    group: General
+    description: Primary domain name for the default server block. Leave empty to serve on the container IP address directly.
+    help: "Example: proxy.home.lan or mydomain.com"
+  - key: enable_ssl
+    label: Enable SSL
+    type: boolean
+    default: false
+    required: false
+    group: General
+    description: Generate a self-signed SSL certificate and configure HTTPS on port 443. For production use, replace with a Let's Encrypt certificate.
+    help: Creates a self-signed cert valid for 365 days
+  - key: http_port
+    label: HTTP Port
+    type: number
+    default: 80
+    required: false
+    group: Network
+    description: The port Nginx listens on for HTTP traffic. Standard is port 80.
+    help: Must be between 1-65535
+    validation:
+      min: 1
+      max: 65535
+  - key: https_port
+    label: HTTPS Port
+    type: number
+    default: 443
+    required: false
+    group: Network
+    description: The port Nginx listens on for HTTPS traffic. Only used when SSL is enabled.
+    help: Must be between 1-65535
+    validation:
+      min: 1
+      max: 65535
+  - key: worker_processes
+    label: Worker Processes
+    type: number
+    default: 0
+    required: false
+    group: Performance
+    description: Number of Nginx worker processes. Set to 0 for auto-detection based on available CPU cores. Increase for high-traffic scenarios.
+    help: "0 = auto (recommended for most setups)"
+
+permissions:
+  packages: [nginx]
+  paths: ["/var/www/", "/etc/nginx/"]
+  services: [nginx]
+  commands: [openssl, sed]
+
+provisioning:
+  script: provision/install.py
+  timeout_sec: 300
+
+outputs:
+  - key: url
+    label: Web URL
+    value: "http://{{ip}}:{{http_port}}"
+  - key: config
+    label: Config Path
+    value: /etc/nginx/nginx.conf
+
+gpu:
+  supported: []
+  required: false

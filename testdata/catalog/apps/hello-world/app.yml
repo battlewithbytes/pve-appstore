@@ -1,0 +1,95 @@
+id: hello-world
+name: Hello World (Nginx)
+description: A minimal Nginx container serving a static Hello World page. Perfect for testing your PVE App Store setup.
+overview: |
+  This is a simple "Hello World" application that deploys Nginx with a custom static landing page. It's designed as a quick smoke test to verify that your PVE App Store can successfully provision LXC containers, run install scripts, and serve a working web application.
+
+  The container is intentionally lightweight — just Nginx serving a single HTML page with a customizable greeting message and color theme. Use it to validate your storage, networking, and container configuration before deploying more complex applications.
+
+  After installation, visit the web URL in the outputs to confirm everything is working. You can then safely remove this container or keep it as a simple status page.
+version: 1.0.0
+categories:
+  - web
+  - tools
+tags:
+  - hello-world
+  - test
+  - nginx
+  - demo
+homepage: https://nginx.org
+license: BSD-2-Clause
+maintainers:
+  - PVE App Store
+
+lxc:
+  ostemplate: debian-12
+  defaults:
+    unprivileged: true
+    cores: 1
+    memory_mb: 128
+    disk_gb: 1
+    features:
+      - nesting
+    onboot: false
+
+inputs:
+  - key: greeting
+    label: Greeting Message
+    type: string
+    default: Hello from Proxmox!
+    required: false
+    group: General
+    description: The main heading displayed on the page. Customize it to identify this container or just have fun.
+    help: Any text you like
+  - key: subtitle
+    label: Subtitle
+    type: string
+    default: Your PVE App Store is working correctly.
+    required: false
+    group: General
+    description: A smaller message displayed below the greeting.
+    help: Leave empty to hide
+  - key: http_port
+    label: HTTP Port
+    type: number
+    default: 80
+    required: false
+    group: Network
+    description: The port Nginx listens on for HTTP traffic.
+    help: Must be between 1-65535
+    validation:
+      min: 1
+      max: 65535
+  - key: bg_color
+    label: Background Color
+    type: select
+    default: "#1a1a2e"
+    required: false
+    group: General
+    description: Background color for the landing page. Pick a theme that makes you happy.
+    help: Dark themes are easier on the eyes
+    validation:
+      enum:
+        - "#1a1a2e"
+        - "#0d1117"
+        - "#1e3a5f"
+        - "#2d1b3d"
+        - "#1b2e1b"
+
+permissions:
+  packages: [nginx]
+  paths: ["/var/www/", "/etc/nginx/"]
+  services: [nginx]
+
+provisioning:
+  script: provision/install.py
+  timeout_sec: 120
+
+outputs:
+  - key: url
+    label: Web Page
+    value: "http://{{ip}}:{{http_port}}"
+
+gpu:
+  supported: []
+  required: false

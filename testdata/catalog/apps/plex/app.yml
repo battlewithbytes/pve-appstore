@@ -1,0 +1,103 @@
+id: plex
+name: Plex Media Server
+description: Organize and stream your personal media collection. Supports movies, TV, music, photos, and live TV with DVR.
+overview: |
+  Plex Media Server is the backbone of the Plex ecosystem, organizing your personal media collection and streaming it to any device. It automatically fetches metadata, artwork, and subtitles, creating a beautiful Netflix-like experience for your own content.
+
+  Plex supports movies, TV shows, music, photos, podcasts, and even live TV with DVR when paired with a tuner. The server transcodes media on-the-fly for devices that can't play the original format, and with Plex Pass, you can enable hardware-accelerated transcoding using Intel QSV or NVIDIA NVENC.
+
+  After installation, access the web UI to sign in with your Plex account and add your media libraries. If you have a claim token, the server will automatically link to your account during setup.
+version: 1.41.0
+categories:
+  - media
+  - entertainment
+tags:
+  - media-server
+  - streaming
+  - plex
+  - transcoding
+homepage: https://www.plex.tv
+license: Proprietary
+maintainers:
+  - PVE App Store
+
+lxc:
+  ostemplate: debian-12
+  defaults:
+    unprivileged: true
+    cores: 2
+    memory_mb: 4096
+    disk_gb: 20
+    features:
+      - nesting
+    onboot: true
+
+inputs:
+  - key: claim_token
+    label: Plex Claim Token
+    type: secret
+    required: false
+    group: General
+    description: Links this server to your Plex account during installation. The token is valid for 4 minutes after generation. You can skip this and claim the server manually through the web UI later.
+    help: "Get your token at https://plex.tv/claim"
+  - key: friendly_name
+    label: Server Name
+    type: string
+    default: Proxmox Plex
+    required: false
+    group: General
+    description: A friendly name for this Plex server that appears in your Plex apps and account settings.
+    help: Can be changed later in Plex settings
+  - key: media_path
+    label: Media Directory
+    type: string
+    default: /mnt/media
+    required: false
+    group: Storage
+    description: Root directory where your media files are stored. Use a bind mount from your Proxmox host or NFS share. You can add additional library paths in Plex's UI after setup.
+    help: "Example: /mnt/media or /mnt/nfs/shared"
+  - key: transcode_path
+    label: Transcode Directory
+    type: string
+    default: /tmp/plex-transcode
+    required: false
+    group: Storage
+    description: Temporary directory used for transcoding cache. Place this on fast storage (SSD) for best performance. Contents are temporary and can be safely deleted.
+    help: Use SSD-backed storage for best transcoding performance
+  - key: http_port
+    label: HTTP Port
+    type: number
+    default: 32400
+    required: false
+    group: Network
+    description: The port Plex Media Server listens on. The standard Plex port is 32400. Change only if you have a conflict.
+    help: Default 32400; must be between 1024-65535
+    validation:
+      min: 1024
+      max: 65535
+
+permissions:
+  packages: [curl, plexmediaserver]
+  urls: ["https://downloads.plex.tv/*"]
+  paths: ["/mnt/media", "/tmp/plex-transcode", "/var/lib/plexmediaserver/", "/usr/share/keyrings/", "/etc/apt/sources.list.d/"]
+  services: [plexmediaserver]
+  apt_repos: ["deb [signed-by=/usr/share/keyrings/plex-archive-keyring.gpg] https://downloads.plex.tv/repo/deb public main"]
+
+provisioning:
+  script: provision/install.py
+  timeout_sec: 600
+
+outputs:
+  - key: url
+    label: Web UI
+    value: "http://{{ip}}:{{http_port}}/web"
+
+gpu:
+  supported:
+    - intel
+    - nvidia
+  required: false
+  profiles:
+    - dri-render
+    - nvidia-basic
+  notes: Hardware transcoding requires Plex Pass and a supported GPU.
