@@ -90,7 +90,7 @@ Apps live in a separate Git repository ([pve-appstore-catalog](https://github.co
 
 Use the web UI to browse and search the catalog — filter by name, category, or tags.
 
-For details on writing apps, see the [catalog README](https://github.com/battlewithbytes/pve-appstore-catalog).
+For details on writing apps, see the [App Development Tutorial](tutorial.md) or the [catalog README](https://github.com/battlewithbytes/pve-appstore-catalog).
 
 ## Security
 
