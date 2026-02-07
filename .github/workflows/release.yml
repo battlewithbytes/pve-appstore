@@ -1,0 +1,73 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/frontend/package-lock.json
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Go tests
+        run: go test ./...
+
+      - name: Python SDK tests
+        run: |
+          pip install pytest
+          python3 -m pytest sdk/python/tests/
+
+      - name: Build frontend
+        run: |
+          npm ci --prefix web/frontend
+          npm run build --prefix web/frontend
+
+      - name: Set version from tag
+        id: version
+        run: |
+          VERSION=${GITHUB_REF_NAME}
+          COMMIT=$(git rev-parse --short HEAD)
+          DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          echo "ldflags=-X github.com/battlewithbytes/pve-appstore/internal/version.Version=${VERSION} -X github.com/battlewithbytes/pve-appstore/internal/version.Commit=${COMMIT} -X github.com/battlewithbytes/pve-appstore/internal/version.Date=${DATE} -s -w" >> "$GITHUB_OUTPUT"
+
+      - name: Build linux/amd64
+        env:
+          GOOS: linux
+          GOARCH: amd64
+        run: go build -ldflags "${{ steps.version.outputs.ldflags }}" -o pve-appstore-linux-amd64 ./cmd/pve-appstore/
+
+      - name: Build linux/arm64
+        env:
+          GOOS: linux
+          GOARCH: arm64
+        run: go build -ldflags "${{ steps.version.outputs.ldflags }}" -o pve-appstore-linux-arm64 ./cmd/pve-appstore/
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            pve-appstore-linux-amd64
+            pve-appstore-linux-arm64
+            deploy/install.sh
