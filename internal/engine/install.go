@@ -165,6 +165,7 @@ func stepCreateContainer(ctx *installContext) error {
 	template := ctx.manifest.LXC.OSTemplate
 	if !strings.Contains(template, ":") {
 		// Shorthand like "debian-12" — resolve to a full template path
+		ctx.info("Resolving template %q (will download if needed)...", template)
 		template = ctx.engine.cm.ResolveTemplate(context.Background(), template, ctx.job.Storage)
 	}
 
@@ -304,13 +305,13 @@ func stepProvision(ctx *installContext) error {
 	ctx.info("Running provisioning: python3 -m appstore.runner ... install %s",
 		filepath.Base(ctx.manifest.Provisioning.Script))
 
-	result, err := ctx.engine.cm.Exec(ctx.job.CTID, cmd)
+	// Stream output line-by-line for real-time log feedback
+	result, err := ctx.engine.cm.ExecStream(ctx.job.CTID, cmd, func(line string) {
+		parseProvisionLine(ctx, line)
+	})
 	if err != nil {
 		return fmt.Errorf("executing provision script: %w", err)
 	}
-
-	// Parse output — look for @@APPLOG@@ structured lines
-	parseProvisionOutput(ctx, result.Output)
 
 	if result.ExitCode != 0 {
 		if result.ExitCode == 2 {
@@ -323,36 +324,38 @@ func stepProvision(ctx *installContext) error {
 	return nil
 }
 
+// parseProvisionLine handles a single line of provisioning output in real-time.
+func parseProvisionLine(ctx *installContext, line string) {
+	line = strings.TrimSpace(line)
+	if line == "" {
+		return
+	}
+	if strings.HasPrefix(line, "@@APPLOG@@") {
+		jsonStr := strings.TrimPrefix(line, "@@APPLOG@@")
+		level := extractJSONField(jsonStr, "level")
+		msg := extractJSONField(jsonStr, "msg")
+		if level == "output" {
+			key := extractJSONField(jsonStr, "key")
+			value := extractJSONField(jsonStr, "value")
+			if key != "" {
+				if ctx.job.Outputs == nil {
+					ctx.job.Outputs = make(map[string]string)
+				}
+				ctx.job.Outputs[key] = value
+			}
+		} else if msg != "" {
+			ctx.log(level, "[provision] %s", msg)
+		}
+	} else {
+		ctx.info("[provision] %s", line)
+	}
+}
+
 // parseProvisionOutput extracts structured @@APPLOG@@ lines from script output
 // and logs them. Non-structured lines are logged as plain info.
 func parseProvisionOutput(ctx *installContext, output string) {
 	for _, line := range strings.Split(output, "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-		if strings.HasPrefix(line, "@@APPLOG@@") {
-			jsonStr := strings.TrimPrefix(line, "@@APPLOG@@")
-			// Try to extract level and message
-			// Simple parsing — look for "level" and "msg" fields
-			level := extractJSONField(jsonStr, "level")
-			msg := extractJSONField(jsonStr, "msg")
-			if level == "output" {
-				// Output key-value pair — store as job output
-				key := extractJSONField(jsonStr, "key")
-				value := extractJSONField(jsonStr, "value")
-				if key != "" {
-					if ctx.job.Outputs == nil {
-						ctx.job.Outputs = make(map[string]string)
-					}
-					ctx.job.Outputs[key] = value
-				}
-			} else if msg != "" {
-				ctx.log(level, "[provision] %s", msg)
-			}
-		} else {
-			ctx.info("[provision] %s", line)
-		}
+		parseProvisionLine(ctx, line)
 	}
 }
 

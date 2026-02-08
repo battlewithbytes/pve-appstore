@@ -26,6 +26,7 @@ type ContainerManager interface {
 	Status(ctx context.Context, ctid int) (string, error)
 	ResolveTemplate(ctx context.Context, name, storage string) string
 	Exec(ctid int, command []string) (*pct.ExecResult, error)
+	ExecStream(ctid int, command []string, onLine func(line string)) (*pct.ExecResult, error)
 	ExecScript(ctid int, scriptPath string, env map[string]string) (*pct.ExecResult, error)
 	Push(ctid int, src, dst, perms string) error
 	GetIP(ctid int) (string, error)

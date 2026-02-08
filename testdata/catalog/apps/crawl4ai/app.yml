@@ -106,11 +106,11 @@ permissions:
     - libcairo2
     - libasound2
     - libatspi2.0-0
-  pip: [crawl4ai]
+  pip: [crawl4ai, fastapi, uvicorn]
   paths: ["/opt/crawl4ai/", "/var/lib/crawl4ai/", "/etc/systemd/"]
   services: [crawl4ai]
   users: [crawl4ai]
-  commands: ["/opt/crawl4ai/venv/bin/crawl4ai-setup"]
+  commands: ["su", "/opt/crawl4ai/venv/bin/playwright"]
 
 provisioning:
   script: provision/install.py

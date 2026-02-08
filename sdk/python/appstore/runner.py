@@ -66,7 +66,17 @@ def main():
         log.error(f"Failed to load app module {app_module_path}: {e}")
         sys.exit(1)
 
-    if _app_class is None:
+    # When run as `python3 -m appstore.runner`, the module may exist twice
+    # in sys.modules (as 'appstore.runner' and '__main__'). The app's
+    # `from appstore import run` calls run() on the 'appstore.runner' copy,
+    # so check there if our local _app_class is still None.
+    app_class = _app_class
+    if app_class is None:
+        runner_mod = sys.modules.get("appstore.runner")
+        if runner_mod is not None:
+            app_class = getattr(runner_mod, "_app_class", None)
+
+    if app_class is None:
         log.error(
             f"App module {app_module_path} did not call appstore.run(AppClass)"
         )
@@ -74,7 +84,7 @@ def main():
 
     # Instantiate and run
     try:
-        app = _app_class(inputs, permissions)
+        app = app_class(inputs, permissions)
         method = getattr(app, action, None)
         if method is None:
             log.error(f"App class does not implement '{action}' method")

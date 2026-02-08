@@ -30,6 +30,9 @@ func (m *mockCM) ResolveTemplate(ctx context.Context, name, storage string) stri
 func (m *mockCM) Exec(ctid int, command []string) (*pct.ExecResult, error) {
 	return &pct.ExecResult{Output: "", ExitCode: 0}, nil
 }
+func (m *mockCM) ExecStream(ctid int, command []string, onLine func(line string)) (*pct.ExecResult, error) {
+	return &pct.ExecResult{Output: "", ExitCode: 0}, nil
+}
 func (m *mockCM) ExecScript(ctid int, scriptPath string, env map[string]string) (*pct.ExecResult, error) {
 	return &pct.ExecResult{Output: "", ExitCode: 0}, nil
 }

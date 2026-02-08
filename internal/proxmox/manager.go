@@ -74,6 +74,10 @@ func (m *Manager) Exec(ctid int, command []string) (*pct.ExecResult, error) {
 	return pct.Exec(ctid, command)
 }
 
+func (m *Manager) ExecStream(ctid int, command []string, onLine func(line string)) (*pct.ExecResult, error) {
+	return pct.ExecStream(ctid, command, onLine)
+}
+
 func (m *Manager) ExecScript(ctid int, scriptPath string, env map[string]string) (*pct.ExecResult, error) {
 	return pct.ExecScript(ctid, scriptPath, env)
 }

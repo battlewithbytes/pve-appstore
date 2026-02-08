@@ -5,6 +5,7 @@ import (
 	"net"
 
 	"github.com/battlewithbytes/pve-appstore/internal/config"
+	"github.com/battlewithbytes/pve-appstore/internal/ui"
 )
 
 // Run is the main entrypoint for the TUI installer.
@@ -54,13 +55,13 @@ func Run() error {
 	}
 
 	fmt.Println()
-	fmt.Println("Installation complete!")
+	fmt.Println(ui.Green.Render("Installation complete!"))
 	fmt.Println()
-	fmt.Printf("  Web UI:    http://%s:%d\n", displayAddr, nums.Port)
-	fmt.Printf("  Health:    http://%s:%d/api/health\n", displayAddr, nums.Port)
-	fmt.Printf("  Config:    %s\n", config.DefaultConfigPath)
-	fmt.Printf("  Logs:      %s/\n", config.DefaultLogDir)
-	fmt.Printf("  Service:   systemctl status pve-appstore\n")
+	fmt.Printf("  %s %s\n", ui.Dim.Render("Web UI: "), ui.Cyan.Render(fmt.Sprintf("http://%s:%d", displayAddr, nums.Port)))
+	fmt.Printf("  %s %s\n", ui.Dim.Render("Health: "), ui.Cyan.Render(fmt.Sprintf("http://%s:%d/api/health", displayAddr, nums.Port)))
+	fmt.Printf("  %s %s\n", ui.Dim.Render("Config: "), ui.Cyan.Render(config.DefaultConfigPath))
+	fmt.Printf("  %s %s\n", ui.Dim.Render("Logs:   "), ui.Cyan.Render(config.DefaultLogDir+"/"))
+	fmt.Printf("  %s %s\n", ui.Dim.Render("Service:"), ui.Cyan.Render("systemctl status pve-appstore"))
 	fmt.Println()
 
 	return nil

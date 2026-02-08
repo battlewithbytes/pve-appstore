@@ -349,7 +349,7 @@ function InstallWizard({ app, onClose }: { app: AppDetail; onClose: () => void }
               {defaults.storages.map(s => <option key={s} value={s}>{s}</option>)}
             </select>
           ) : (
-            <FormInput value={storage} onChange={setStorage} />
+            <span style={readonlyStyle}>{storage}</span>
           )}
         </FormRow>
         <FormRow label="Network Bridge">
@@ -358,7 +358,7 @@ function InstallWizard({ app, onClose }: { app: AppDetail; onClose: () => void }
               {defaults.bridges.map(b => <option key={b} value={b}>{b}</option>)}
             </select>
           ) : (
-            <FormInput value={bridge} onChange={setBridge} />
+            <span style={readonlyStyle}>{bridge}</span>
           )}
         </FormRow>
 
@@ -609,11 +609,21 @@ function InfoCard({ title, children }: { title: string; children: React.ReactNod
   )
 }
 
+function Linkify({ text }: { text: string }) {
+  const urlRegex = /(https?:\/\/[^\s<>"']+)/g
+  const parts = text.split(urlRegex)
+  if (parts.length === 1) return <>{text}</>
+  return <>{parts.map((part, i) => urlRegex.test(part)
+    ? <a key={i} href={part} target="_blank" rel="noreferrer" style={{ color: '#7ec8e3', textDecoration: 'underline' }}>{part}</a>
+    : part
+  )}</>
+}
+
 function InfoRow({ label, value }: { label: string; value: string }) {
   return (
     <div style={{ display: 'flex', justifyContent: 'space-between', padding: '4px 0', fontSize: 13 }}>
       <span style={{ color: '#888' }}>{label}</span>
-      <span style={{ color: '#ddd', textAlign: 'right', wordBreak: 'break-all' }}>{value}</span>
+      <span style={{ color: '#ddd', textAlign: 'right', wordBreak: 'break-all' }}><Linkify text={value} /></span>
     </div>
   )
 }
@@ -634,6 +644,7 @@ function FormInput({ value, onChange, type = 'text' }: { value: string; onChange
 }
 
 const inputStyle: React.CSSProperties = { width: '100%', padding: '8px 12px', background: '#0f3460', border: '1px solid #2a2a4a', borderRadius: 6, color: '#fff', fontSize: 14, outline: 'none' }
+const readonlyStyle: React.CSSProperties = { display: 'block', padding: '8px 12px', background: '#0a2240', border: '1px solid #2a2a4a', borderRadius: 6, color: '#aaa', fontSize: 14 }
 const btnStyle: React.CSSProperties = { padding: '10px 24px', fontSize: 14, fontWeight: 600, border: 'none', borderRadius: 8, cursor: 'pointer', color: '#ddd' }
 const sectionTitle: React.CSSProperties = { fontSize: 13, color: '#7ec8e3', textTransform: 'uppercase', marginTop: 20, marginBottom: 8, letterSpacing: '0.5px' }
 

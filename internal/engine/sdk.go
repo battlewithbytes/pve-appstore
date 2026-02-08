@@ -21,6 +21,11 @@ const (
 	inputsPath = "/opt/appstore/inputs.json"
 	// permissionsPath is where the JSON permissions file is written inside containers.
 	permissionsPath = "/opt/appstore/permissions.json"
+	// hostTmpDir is where temp files are written on the host before pushing
+	// into containers. We use /var/lib/pve-appstore instead of /tmp because
+	// the service runs with PrivateTmp=yes — nsenter escapes the mount
+	// namespace so pct push sees the real filesystem, not the private /tmp.
+	hostTmpDir = "/var/lib/pve-appstore/tmp"
 )
 
 // ensurePython verifies python3 is available in the container.
@@ -51,6 +56,9 @@ func pushSDK(ctid int, cm ContainerManager) error {
 	// Create the SDK target directory
 	cm.Exec(ctid, []string{"mkdir", "-p", sdkTargetDir + "/appstore"})
 
+	// Ensure host tmp dir exists (visible to nsenter/pct push)
+	os.MkdirAll(hostTmpDir, 0750)
+
 	return fs.WalkDir(appstoresdk.PythonFS, ".", func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -70,7 +78,7 @@ func pushSDK(ctid int, cm ContainerManager) error {
 		dst := sdkTargetDir + "/" + rel
 
 		// Write to temp file on host, then push into container
-		tmpFile, err := os.CreateTemp("", "sdk-*")
+		tmpFile, err := os.CreateTemp(hostTmpDir, "sdk-*")
 		if err != nil {
 			return fmt.Errorf("creating temp file: %w", err)
 		}
@@ -93,12 +101,13 @@ func pushSDK(ctid int, cm ContainerManager) error {
 
 // pushInputsJSON writes app inputs as a JSON file inside the container.
 func pushInputsJSON(ctid int, cm ContainerManager, inputs map[string]string) error {
+	os.MkdirAll(hostTmpDir, 0750)
 	data, err := json.Marshal(inputs)
 	if err != nil {
 		return fmt.Errorf("marshaling inputs: %w", err)
 	}
 
-	tmpFile, err := os.CreateTemp("", "inputs-*.json")
+	tmpFile, err := os.CreateTemp(hostTmpDir, "inputs-*.json")
 	if err != nil {
 		return err
 	}
@@ -116,6 +125,7 @@ func pushInputsJSON(ctid int, cm ContainerManager, inputs map[string]string) err
 
 // pushPermissionsJSON writes the app's permission allowlist as a JSON file inside the container.
 func pushPermissionsJSON(ctid int, cm ContainerManager, perms catalog.PermissionsSpec) error {
+	os.MkdirAll(hostTmpDir, 0750)
 	// Convert to the JSON structure the Python SDK expects
 	permData := map[string][]string{
 		"packages":          perms.Packages,
@@ -140,7 +150,7 @@ func pushPermissionsJSON(ctid int, cm ContainerManager, perms catalog.Permission
 		return fmt.Errorf("marshaling permissions: %w", err)
 	}
 
-	tmpFile, err := os.CreateTemp("", "perms-*.json")
+	tmpFile, err := os.CreateTemp(hostTmpDir, "perms-*.json")
 	if err != nil {
 		return err
 	}

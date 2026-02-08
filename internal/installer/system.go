@@ -10,6 +10,7 @@ import (
 	"golang.org/x/crypto/bcrypt"
 
 	"github.com/battlewithbytes/pve-appstore/internal/config"
+	"github.com/battlewithbytes/pve-appstore/internal/ui"
 )
 
 const sudoersContent = `# PVE App Store — managed sudoers file
@@ -74,10 +75,12 @@ func ApplySystem(answers *InstallerAnswers, res *DiscoveredResources) error {
 	}
 
 	for _, step := range steps {
-		fmt.Printf("  → %s...\n", step.name)
+		fmt.Printf("  %s %s...", ui.Cyan.Render("→"), step.name)
 		if err := step.fn(); err != nil {
+			fmt.Printf("\r  %s %s   \n", ui.Red.Render("✗"), step.name)
 			return fmt.Errorf("%s: %w", step.name, err)
 		}
+		fmt.Printf("\r  %s %s   \n", ui.Green.Render("✓"), step.name)
 	}
 
 	return nil
@@ -125,6 +128,7 @@ func createAPIToken(answers *InstallerAnswers, res *DiscoveredResources) error {
 		"Datastore.Audit",
 		"Pool.Audit",
 		"Pool.Allocate",
+		"SDN.Use",
 		"Sys.Audit",
 		"Sys.Modify",
 	}, ",")
@@ -135,15 +139,27 @@ func createAPIToken(answers *InstallerAnswers, res *DiscoveredResources) error {
 	// 3. Assign role on pool path
 	exec.Command("pveum", "acl", "modify", "/pool/"+pool, "--roles", "AppStoreRole", "--users", "appstore@pve").CombinedOutput()
 
-	// 4. Assign read on local node
+	// 4. Assign role on /vms path — Proxmox checks VM.Config.* on /vms/{vmid}
+	// during container creation (before the VM is added to the pool)
+	exec.Command("pveum", "acl", "modify", "/vms", "--roles", "AppStoreRole", "--users", "appstore@pve").CombinedOutput()
+
+	// 5. Assign read on local node
 	exec.Command("pveum", "acl", "modify", "/nodes/"+node, "--roles", "PVEAuditor", "--users", "appstore@pve").CombinedOutput()
 
-	// 5. Assign storage access on all selected storages
+	// 6. Assign SDN access for network bridges
+	exec.Command("pveum", "acl", "modify", "/sdn/zones", "--roles", "AppStoreRole", "--users", "appstore@pve").CombinedOutput()
+
+	// 7. Assign storage access on all selected storages + local (for OS templates)
+	storageSet := make(map[string]bool)
+	storageSet["local"] = true // OS templates typically live on local storage
 	for _, st := range answers.Storages {
+		storageSet[st] = true
+	}
+	for st := range storageSet {
 		exec.Command("pveum", "acl", "modify", "/storage/"+st, "--roles", "AppStoreRole", "--users", "appstore@pve").CombinedOutput()
 	}
 
-	// 6. Create API token (privsep=0 so token inherits user's permissions)
+	// 8. Create API token (privsep=0 so token inherits user's permissions)
 	out, err := exec.Command("pveum", "user", "token", "add", "appstore@pve", "appstore", "--privsep", "0", "--output-format", "json").CombinedOutput()
 	if err != nil {
 		// Token might already exist; try to remove and recreate

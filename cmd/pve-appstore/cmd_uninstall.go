@@ -14,6 +14,7 @@ import (
 
 	"github.com/battlewithbytes/pve-appstore/internal/config"
 	"github.com/battlewithbytes/pve-appstore/internal/proxmox"
+	"github.com/battlewithbytes/pve-appstore/internal/ui"
 	"github.com/spf13/cobra"
 )
 
@@ -59,8 +60,9 @@ var uninstallCmd = &cobra.Command{
 
 		// Step 1: Always remove service infrastructure
 		run := func(name string, fn func()) {
-			fmt.Printf("  → %s...\n", name)
+			fmt.Printf("  %s %s...", ui.Cyan.Render("→"), name)
 			fn()
+			fmt.Printf("\r  %s %s   \n", ui.Green.Render("✓"), name)
 		}
 
 		run("Stopping service", func() {
@@ -137,7 +139,7 @@ var uninstallCmd = &cobra.Command{
 		}
 
 		fmt.Println()
-		fmt.Println("PVE App Store service has been removed.")
+		fmt.Println(ui.Green.Render("PVE App Store service has been removed."))
 
 		if !containersRemoved {
 			fmt.Println()

@@ -4,6 +4,7 @@
 package pct
 
 import (
+	"bufio"
 	"fmt"
 	"os/exec"
 	"strconv"
@@ -78,6 +79,53 @@ func Exec(ctid int, command []string) (*ExecResult, error) {
 		return nil, fmt.Errorf("empty command")
 	}
 	return pctExecInCT(ctid, command)
+}
+
+// ExecStream runs a command inside a container and calls onLine for each
+// line of output as it arrives, enabling real-time log streaming.
+func ExecStream(ctid int, command []string, onLine func(line string)) (*ExecResult, error) {
+	if len(command) == 0 {
+		return nil, fmt.Errorf("empty command")
+	}
+
+	args := append([]string{"exec", strconv.Itoa(ctid), "--"}, command...)
+	cmd := SudoNsenterCmd(pctBin, args...)
+
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return nil, fmt.Errorf("pct exec stream %d: stdout pipe: %w", ctid, err)
+	}
+	cmd.Stderr = cmd.Stdout // merge stderr into stdout
+
+	if err := cmd.Start(); err != nil {
+		return nil, fmt.Errorf("pct exec stream %d: start: %w", ctid, err)
+	}
+
+	scanner := bufio.NewScanner(stdout)
+	var output strings.Builder
+	for scanner.Scan() {
+		line := scanner.Text()
+		output.WriteString(line)
+		output.WriteByte('\n')
+		if onLine != nil {
+			onLine(line)
+		}
+	}
+
+	result := &ExecResult{
+		Output:   output.String(),
+		ExitCode: 0,
+	}
+
+	if err := cmd.Wait(); err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			result.ExitCode = exitErr.ExitCode()
+		} else {
+			return nil, fmt.Errorf("pct exec stream %d: %w", ctid, err)
+		}
+	}
+
+	return result, nil
 }
 
 // BuildExecScriptCommand builds the command slice for running a script with env vars.
