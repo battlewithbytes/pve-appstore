@@ -76,6 +76,15 @@ export const api = {
 
   installDetail: (id: string) => fetchJSON<InstallDetail>(`${BASE}/installs/${id}`),
 
+  startContainer: (id: string) =>
+    fetchJSON<{ status: string; install_id: string }>(`${BASE}/installs/${id}/start`, { method: 'POST' }),
+
+  stopContainer: (id: string) =>
+    fetchJSON<{ status: string; install_id: string }>(`${BASE}/installs/${id}/stop`, { method: 'POST' }),
+
+  restartContainer: (id: string) =>
+    fetchJSON<{ status: string; install_id: string }>(`${BASE}/installs/${id}/restart`, { method: 'POST' }),
+
   uninstall: (id: string, keepVolumes?: boolean) =>
     fetchJSON<Job>(`${BASE}/installs/${id}/uninstall`, {
       method: 'POST',
@@ -121,5 +130,10 @@ export const api = {
   terminalUrl: (id: string, token: string) => {
     const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     return `${proto}//${window.location.host}${BASE}/installs/${id}/terminal?token=${encodeURIComponent(token)}`;
+  },
+
+  journalLogsUrl: (id: string, token: string) => {
+    const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    return `${proto}//${window.location.host}${BASE}/installs/${id}/logs?token=${encodeURIComponent(token)}`;
   },
 };

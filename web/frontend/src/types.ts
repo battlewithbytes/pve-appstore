@@ -243,8 +243,13 @@ export interface LogsResponse {
   last_id: number;
 }
 
+export interface InstallListItem extends Install {
+  ip?: string;
+  uptime?: number;
+}
+
 export interface InstallsResponse {
-  installs: Install[];
+  installs: InstallListItem[];
   total: number;
 }
 

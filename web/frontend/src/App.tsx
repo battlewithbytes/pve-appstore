@@ -4,7 +4,7 @@ import { FitAddon } from '@xterm/addon-fit'
 import { WebLinksAddon } from '@xterm/addon-web-links'
 import '@xterm/xterm/css/xterm.css'
 import { api } from './api'
-import type { AppSummary, AppDetail, AppInput, HealthResponse, Job, LogEntry, Install, InstallDetail, ConfigDefaultsResponse, MountPoint, MountInfo, BrowseEntry, ExportResponse, ExportRecipe, InstallRequest, DevicePassthrough, AppStatusResponse } from './types'
+import type { AppSummary, AppDetail, AppInput, HealthResponse, Job, LogEntry, InstallDetail, InstallListItem, ConfigDefaultsResponse, MountPoint, MountInfo, BrowseEntry, ExportResponse, ExportRecipe, InstallRequest, DevicePassthrough, AppStatusResponse } from './types'
 
 function useHash() {
   const [hash, setHash] = useState(window.location.hash)
@@ -1233,9 +1233,13 @@ function UninstallDialog({ appName, ctid, mountPoints, onConfirm, onCancel }: {
 
 // --- Installs List ---
 
-function InstallsList(_props: { requireAuth: (cb: () => void) => void }) {
-  const [installs, setInstalls] = useState<Install[]>([])
+function InstallsList({ requireAuth }: { requireAuth: (cb: () => void) => void }) {
+  const [installs, setInstalls] = useState<InstallListItem[]>([])
   const [loading, setLoading] = useState(true)
+  const [contextMenu, setContextMenu] = useState<{ install: InstallListItem; x: number; y: number } | null>(null)
+  const [showTerminal, setShowTerminal] = useState<string | null>(null)
+  const [showLogs, setShowLogs] = useState<string | null>(null)
+  const [actionLoading, setActionLoading] = useState<string | null>(null)
 
   const fetchInstalls = useCallback(async () => {
     try {
@@ -1246,55 +1250,280 @@ function InstallsList(_props: { requireAuth: (cb: () => void) => void }) {
   }, [])
 
   useEffect(() => { fetchInstalls() }, [fetchInstalls])
-
-  // Poll status every 10 seconds
   useEffect(() => {
     const interval = setInterval(fetchInstalls, 10000)
     return () => clearInterval(interval)
   }, [fetchInstalls])
 
+  const handleAction = async (action: string, installId: string) => {
+    setActionLoading(installId)
+    try {
+      switch (action) {
+        case 'start': await api.startContainer(installId); break
+        case 'stop': await api.stopContainer(installId); break
+        case 'restart': await api.restartContainer(installId); break
+        case 'uninstall': {
+          const job = await api.uninstall(installId)
+          window.location.hash = `#/job/${job.id}`
+          return
+        }
+      }
+      setTimeout(fetchInstalls, 1000)
+      setTimeout(fetchInstalls, 4000)
+    } catch (e) {
+      alert(e instanceof Error ? e.message : `${action} failed`)
+    }
+    setActionLoading(null)
+  }
+
+  const resolveUrl = (inst: InstallListItem, url: string) =>
+    inst.ip ? url.replace(/\{\{ip\}\}/g, inst.ip) : url
+
+  const getServiceUrls = (inst: InstallListItem) =>
+    inst.outputs
+      ? Object.entries(inst.outputs).filter(([, v]) => v.startsWith('http')).map(([k, v]) => ({ key: k, url: resolveUrl(inst, v) }))
+      : []
+
+  const gridCols = 'grid-cols-[40px_1.5fr_90px_160px_110px_50px_70px_90px_36px]'
+
   return (
     <div>
       <h2 className="text-xl font-bold text-text-primary mb-5 font-mono">Installed Apps</h2>
       {loading ? <Center>Loading...</Center> : installs.length === 0 ? <Center>No apps installed</Center> : (
-        <div className="flex flex-col gap-3">
+        <div className="bg-bg-card border border-border rounded-lg overflow-x-auto">
+          {/* Table header */}
+          <div className={`grid ${gridCols} gap-2 px-4 py-2 bg-bg-secondary text-[10px] text-text-muted font-mono uppercase tracking-wider border-b border-border items-center`}>
+            <span></span>
+            <span>App</span>
+            <span>Status</span>
+            <span>Network</span>
+            <span>Resources</span>
+            <span>Boot</span>
+            <span>Uptime</span>
+            <span>Created</span>
+            <span></span>
+          </div>
+          {/* Rows */}
           {installs.map(inst => {
             const isRunning = inst.status === 'running'
             const isUninstalled = inst.status === 'uninstalled'
-            const hasVolumes = inst.mount_points && inst.mount_points.length > 0
+            const urls = getServiceUrls(inst)
+            const isLoading = actionLoading === inst.id
             return (
-              <a key={inst.id} href={`#/install/${inst.id}`} className={`bg-bg-card border rounded-lg p-4 no-underline text-inherit flex justify-between items-center hover:shadow-[0_0_20px_rgba(0,255,157,0.1)] transition-all group cursor-pointer ${isUninstalled ? 'border-border border-dashed opacity-75 hover:opacity-100' : 'border-border hover:border-border-hover'}`}>
-                <div className="flex items-center gap-4">
-                  <div className="w-10 h-10 rounded-lg bg-bg-secondary flex items-center justify-center overflow-hidden">
-                    <img src={`/api/apps/${inst.app_id}/icon`} alt="" className="w-8 h-8 rounded-md" onError={e => { (e.target as HTMLImageElement).style.display = 'none' }} />
-                  </div>
-                  <div>
-                    <div className="flex items-center gap-2">
-                      <h3 className="text-base font-semibold text-text-primary group-hover:text-primary transition-colors">{inst.app_name}</h3>
-                      {inst.app_version && <span className="text-xs text-text-muted font-mono">v{inst.app_version}</span>}
-                    </div>
-                    <div className="flex items-center gap-3 mt-1 text-xs text-text-muted font-mono">
-                      {inst.ctid > 0 && <span>CT {inst.ctid}</span>}
-                      <span>{inst.cores}c / {inst.memory_mb}MB / {inst.disk_gb}GB</span>
-                      {isUninstalled && hasVolumes && <Badge className="bg-primary/10 text-primary">{inst.mount_points!.length} vol preserved</Badge>}
-                    </div>
-                  </div>
+              <div key={inst.id}
+                className={`grid ${gridCols} gap-2 px-4 py-3 border-b border-border items-center hover:bg-bg-secondary/50 cursor-pointer transition-colors ${isUninstalled ? 'opacity-60' : ''} ${isLoading ? 'opacity-50 pointer-events-none' : ''}`}
+                onClick={() => window.location.hash = `#/install/${inst.id}`}>
+                {/* Icon */}
+                <div className="w-8 h-8 rounded bg-bg-secondary overflow-hidden flex items-center justify-center flex-shrink-0">
+                  <img src={`/api/apps/${inst.app_id}/icon`} alt="" className="w-7 h-7 rounded" onError={e => { (e.target as HTMLImageElement).style.display = 'none' }} />
                 </div>
-                <div className="flex items-center gap-2">
+                {/* Name+Version+CTID */}
+                <div className="min-w-0">
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    <span className="text-sm font-semibold text-text-primary truncate">{inst.app_name}</span>
+                    {inst.app_version && <span className="text-[10px] text-text-muted font-mono">v{inst.app_version}</span>}
+                  </div>
+                  {inst.ctid > 0 && <div className="text-[10px] text-text-muted font-mono">CT {inst.ctid}</div>}
+                </div>
+                {/* Status */}
+                <div className="flex items-center gap-1.5">
                   {isUninstalled ? (
-                    <Badge className="bg-status-warning/10 text-status-warning">uninstalled</Badge>
+                    <span className="text-[10px] font-mono text-status-warning">uninstalled</span>
                   ) : (
                     <>
                       <StatusDot running={isRunning} />
-                      <span className={`text-sm font-mono ${isRunning ? 'text-status-running' : 'text-status-stopped'}`}>{inst.status}</span>
+                      <span className={`text-xs font-mono ${isRunning ? 'text-status-running' : 'text-status-stopped'}`}>{inst.status}</span>
                     </>
                   )}
                 </div>
-              </a>
+                {/* Network: IP + URLs */}
+                <div className="min-w-0 text-xs font-mono text-text-secondary">
+                  {inst.ip && <div className="truncate">{inst.ip}</div>}
+                  {urls.slice(0, 2).map(u => (
+                    <a key={u.key} href={u.url} target="_blank" rel="noreferrer"
+                      onClick={e => e.stopPropagation()}
+                      className="text-primary hover:underline block truncate text-[10px]">{u.url.replace(/^https?:\/\//, '')}</a>
+                  ))}
+                  {urls.length > 2 && <span className="text-[10px] text-text-muted">+{urls.length - 2} more</span>}
+                </div>
+                {/* Resources */}
+                <span className="text-xs font-mono text-text-muted">{inst.cores}c / {inst.memory_mb}MB / {inst.disk_gb}GB</span>
+                {/* Boot */}
+                <span className="text-xs font-mono text-text-muted">{inst.onboot ? 'On' : 'Off'}</span>
+                {/* Uptime */}
+                <span className="text-xs font-mono text-text-muted">
+                  {isRunning && inst.uptime ? formatUptime(inst.uptime) : '-'}
+                </span>
+                {/* Created */}
+                <span className="text-[10px] font-mono text-text-muted">
+                  {new Date(inst.created_at).toLocaleDateString()}
+                </span>
+                {/* Actions button */}
+                <button
+                  onClick={e => { e.stopPropagation(); setContextMenu({ install: inst, x: e.clientX, y: e.clientY }) }}
+                  className="text-text-muted hover:text-primary bg-transparent border-none cursor-pointer text-base font-mono p-0 leading-none"
+                  title="Actions">&#x22EE;</button>
+              </div>
             )
           })}
         </div>
       )}
+
+      {/* Context Menu */}
+      {contextMenu && (
+        <InstallContextMenu
+          install={contextMenu.install}
+          x={contextMenu.x}
+          y={contextMenu.y}
+          onClose={() => setContextMenu(null)}
+          requireAuth={requireAuth}
+          onAction={(action, id) => { setContextMenu(null); requireAuth(() => handleAction(action, id)) }}
+          onShell={id => { setContextMenu(null); requireAuth(() => setShowTerminal(id)) }}
+          onLogs={id => { setContextMenu(null); setShowLogs(id) }}
+        />
+      )}
+
+      {showTerminal && <TerminalModal installId={showTerminal} onClose={() => setShowTerminal(null)} />}
+      {showLogs && <LogViewerModal installId={showLogs} onClose={() => setShowLogs(null)} />}
+    </div>
+  )
+}
+
+function InstallContextMenu({ install, x, y, onClose, onAction, onShell, onLogs }: {
+  install: InstallListItem;
+  x: number; y: number;
+  onClose: () => void;
+  requireAuth: (cb: () => void) => void;
+  onAction: (action: string, id: string) => void;
+  onShell: (id: string) => void;
+  onLogs: (id: string) => void;
+}) {
+  const isRunning = install.status === 'running'
+  const isStopped = install.status === 'stopped'
+  const isUninstalled = install.status === 'uninstalled'
+
+  const menuY = Math.min(y, window.innerHeight - 320)
+  const menuX = Math.min(x, window.innerWidth - 200)
+
+  return (
+    <>
+      <div className="fixed inset-0 z-[299]" onClick={onClose} />
+      <div style={{ position: 'fixed', top: menuY, left: menuX, zIndex: 300 }}
+        className="bg-bg-card border border-border rounded-lg shadow-lg py-1 min-w-[170px]">
+        {isStopped && (
+          <CtxMenuItem label="Start" onClick={() => onAction('start', install.id)} />
+        )}
+        {isRunning && (
+          <>
+            <CtxMenuItem label="Stop" onClick={() => onAction('stop', install.id)} />
+            <CtxMenuItem label="Restart" onClick={() => onAction('restart', install.id)} />
+          </>
+        )}
+        {(isRunning || isStopped) && <div className="border-t border-border my-1" />}
+        {isRunning && (
+          <>
+            <CtxMenuItem label="Logs" onClick={() => onLogs(install.id)} />
+            <CtxMenuItem label="Shell" onClick={() => onShell(install.id)} />
+            <div className="border-t border-border my-1" />
+          </>
+        )}
+        <CtxMenuItem label="Details" onClick={() => { onClose(); window.location.hash = `#/install/${install.id}` }} />
+        <CtxMenuItem label="App Store Page" onClick={() => { onClose(); window.location.hash = `#/app/${install.app_id}` }} />
+        {!isUninstalled && (
+          <>
+            <div className="border-t border-border my-1" />
+            <CtxMenuItem label="Remove" danger onClick={() => onAction('uninstall', install.id)} />
+          </>
+        )}
+      </div>
+    </>
+  )
+}
+
+function CtxMenuItem({ label, onClick, danger }: { label: string; onClick: () => void; danger?: boolean }) {
+  return (
+    <button onClick={onClick}
+      className={`w-full text-left px-4 py-2 text-sm font-mono bg-transparent border-none cursor-pointer transition-colors ${danger ? 'text-status-stopped hover:bg-status-stopped/10' : 'text-text-secondary hover:bg-bg-secondary hover:text-text-primary'}`}>
+      {label}
+    </button>
+  )
+}
+
+function LogViewerModal({ installId, onClose }: { installId: string; onClose: () => void }) {
+  const termRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!termRef.current) return
+
+    const term = new Terminal({
+      cursorBlink: false,
+      disableStdin: true,
+      fontFamily: "'JetBrains Mono', monospace",
+      fontSize: 13,
+      theme: {
+        background: '#0A0A0A',
+        foreground: '#9CA3AF',
+        cursor: 'transparent',
+        selectionBackground: 'rgba(0,255,157,0.3)',
+      },
+    })
+
+    const fitAddon = new FitAddon()
+    term.loadAddon(fitAddon)
+    term.loadAddon(new WebLinksAddon())
+
+    term.open(termRef.current)
+    fitAddon.fit()
+
+    let ws: WebSocket | null = null
+    let cancelled = false
+
+    api.terminalToken().then(({ token }) => {
+      if (cancelled) return
+
+      const wsUrl = api.journalLogsUrl(installId, token)
+      ws = new WebSocket(wsUrl)
+
+      ws.onopen = () => {
+        term.writeln('\x1b[32m--- Journal log stream started ---\x1b[0m\r')
+      }
+
+      ws.onmessage = (event) => {
+        const text = typeof event.data === 'string' ? event.data : new TextDecoder().decode(event.data)
+        for (const line of text.split('\n')) {
+          if (line) term.writeln(line)
+        }
+      }
+
+      ws.onclose = () => {
+        term.writeln('\r\n\x1b[31m--- Log stream ended ---\x1b[0m')
+      }
+
+      ws.onerror = () => {
+        term.writeln('\r\n\x1b[31mWebSocket error.\x1b[0m')
+      }
+    }).catch(() => {
+      term.writeln('\x1b[31mFailed to get log token. Are you logged in?\x1b[0m')
+    })
+
+    const handleResize = () => fitAddon.fit()
+    window.addEventListener('resize', handleResize)
+
+    return () => {
+      cancelled = true
+      window.removeEventListener('resize', handleResize)
+      if (ws) ws.close()
+      term.dispose()
+    }
+  }, [installId])
+
+  return (
+    <div className="fixed inset-0 bg-black/95 flex flex-col z-[200]">
+      <div className="flex items-center justify-between px-4 py-2 bg-bg-card border-b border-border">
+        <span className="text-text-secondary font-mono text-sm">journalctl &mdash; {installId}</span>
+        <button onClick={onClose} className="text-text-muted hover:text-text-primary bg-transparent border-none cursor-pointer text-lg font-mono">&times;</button>
+      </div>
+      <div ref={termRef} className="flex-1 p-2" />
     </div>
   )
 }

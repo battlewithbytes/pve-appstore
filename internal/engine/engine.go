@@ -160,6 +160,48 @@ func (e *Engine) CancelJob(jobID string) error {
 	return nil
 }
 
+// StartContainer starts a stopped container for an existing install.
+func (e *Engine) StartContainer(installID string) error {
+	inst, err := e.store.GetInstall(installID)
+	if err != nil {
+		return fmt.Errorf("install %q not found", installID)
+	}
+	if inst.Status == "uninstalled" || inst.CTID == 0 {
+		return fmt.Errorf("install %q has no active container", installID)
+	}
+	return e.cm.Start(context.Background(), inst.CTID)
+}
+
+// StopContainer gracefully stops a container for an existing install.
+func (e *Engine) StopContainer(installID string) error {
+	inst, err := e.store.GetInstall(installID)
+	if err != nil {
+		return fmt.Errorf("install %q not found", installID)
+	}
+	if inst.Status == "uninstalled" || inst.CTID == 0 {
+		return fmt.Errorf("install %q has no active container", installID)
+	}
+	return e.cm.Shutdown(context.Background(), inst.CTID, 30)
+}
+
+// RestartContainer stops then starts a container for an existing install.
+func (e *Engine) RestartContainer(installID string) error {
+	inst, err := e.store.GetInstall(installID)
+	if err != nil {
+		return fmt.Errorf("install %q not found", installID)
+	}
+	if inst.Status == "uninstalled" || inst.CTID == 0 {
+		return fmt.Errorf("install %q has no active container", installID)
+	}
+	ctx := context.Background()
+	if err := e.cm.Shutdown(ctx, inst.CTID, 30); err != nil {
+		// Fallback to force stop
+		_ = e.cm.Stop(ctx, inst.CTID)
+	}
+	time.Sleep(2 * time.Second)
+	return e.cm.Start(ctx, inst.CTID)
+}
+
 // Close closes the engine's resources.
 func (e *Engine) Close() error {
 	return e.store.Close()
@@ -600,6 +642,13 @@ func (e *Engine) ListInstalls() ([]*Install, error) {
 	return e.store.ListInstalls()
 }
 
+// InstallListItem extends Install with lightweight live data for the list view.
+type InstallListItem struct {
+	Install
+	IP     string `json:"ip,omitempty"`
+	Uptime int64  `json:"uptime"`
+}
+
 // ListInstallsLive returns all installations with live status refreshed from Proxmox.
 func (e *Engine) ListInstallsLive() ([]*Install, error) {
 	installs, err := e.store.ListInstalls()
@@ -618,6 +667,34 @@ func (e *Engine) ListInstallsLive() ([]*Install, error) {
 	}
 
 	return installs, nil
+}
+
+// ListInstallsEnriched returns all installations with IP and uptime from Proxmox.
+func (e *Engine) ListInstallsEnriched() ([]*InstallListItem, error) {
+	installs, err := e.store.ListInstalls()
+	if err != nil {
+		return nil, err
+	}
+
+	ctx := context.Background()
+	items := make([]*InstallListItem, 0, len(installs))
+	for _, inst := range installs {
+		item := &InstallListItem{Install: *inst}
+		if inst.Status == "uninstalled" || inst.CTID == 0 {
+			items = append(items, item)
+			continue
+		}
+		if sd, err := e.cm.StatusDetail(ctx, inst.CTID); err == nil {
+			item.Status = sd.Status
+			item.Uptime = sd.Uptime
+		}
+		if ip, err := e.cm.GetIP(inst.CTID); err == nil && ip != "" {
+			item.IP = ip
+		}
+		items = append(items, item)
+	}
+
+	return items, nil
 }
 
 // Reinstall creates a new container for a previously uninstalled app, reattaching preserved volumes.

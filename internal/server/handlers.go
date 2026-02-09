@@ -381,19 +381,58 @@ func (s *Server) handleListInstalls(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	installs, err := s.engine.ListInstallsLive()
+	installs, err := s.engine.ListInstallsEnriched()
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	if installs == nil {
-		installs = []*engine.Install{}
+		installs = []*engine.InstallListItem{}
 	}
 
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"installs": installs,
 		"total":    len(installs),
 	})
+}
+
+func (s *Server) handleStartContainer(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if s.engine == nil {
+		writeError(w, http.StatusServiceUnavailable, "engine not available")
+		return
+	}
+	if err := s.engine.StartContainer(id); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "started", "install_id": id})
+}
+
+func (s *Server) handleStopContainer(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if s.engine == nil {
+		writeError(w, http.StatusServiceUnavailable, "engine not available")
+		return
+	}
+	if err := s.engine.StopContainer(id); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "stopped", "install_id": id})
+}
+
+func (s *Server) handleRestartContainer(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if s.engine == nil {
+		writeError(w, http.StatusServiceUnavailable, "engine not available")
+		return
+	}
+	if err := s.engine.RestartContainer(id); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "restarted", "install_id": id})
 }
 
 func (s *Server) handleGetInstall(w http.ResponseWriter, r *http.Request) {
