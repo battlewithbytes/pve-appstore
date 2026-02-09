@@ -7,12 +7,36 @@ import (
 	"encoding/hex"
 	"fmt"
 	"path/filepath"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/battlewithbytes/pve-appstore/internal/catalog"
 	"github.com/battlewithbytes/pve-appstore/internal/config"
 	"github.com/battlewithbytes/pve-appstore/internal/pct"
 )
+
+// ContainerStatusDetail holds detailed runtime information about a container.
+type ContainerStatusDetail struct {
+	Status  string  `json:"status"`
+	Uptime  int64   `json:"uptime"`
+	CPU     float64 `json:"cpu"`
+	CPUs    int     `json:"cpus"`
+	Mem     int64   `json:"mem"`
+	MaxMem  int64   `json:"maxmem"`
+	Disk    int64   `json:"disk"`
+	MaxDisk int64   `json:"maxdisk"`
+	NetIn   int64   `json:"netin"`
+	NetOut  int64   `json:"netout"`
+}
+
+// StorageInfo holds resolved information about a Proxmox storage.
+type StorageInfo struct {
+	ID        string // Proxmox storage ID (e.g. "media-storage")
+	Type      string // Storage type (e.g. "zfspool", "dir", "lvmthin")
+	Path      string // Resolved filesystem path (empty if not browsable)
+	Browsable bool   // true if the storage has a real filesystem path
+}
 
 // ContainerManager abstracts container lifecycle operations.
 // API-based operations use context; shell-based operations (Exec, Push) do not.
@@ -24,12 +48,28 @@ type ContainerManager interface {
 	Shutdown(ctx context.Context, ctid int, timeout int) error
 	Destroy(ctx context.Context, ctid int) error
 	Status(ctx context.Context, ctid int) (string, error)
+	StatusDetail(ctx context.Context, ctid int) (*ContainerStatusDetail, error)
 	ResolveTemplate(ctx context.Context, name, storage string) string
 	Exec(ctid int, command []string) (*pct.ExecResult, error)
 	ExecStream(ctid int, command []string, onLine func(line string)) (*pct.ExecResult, error)
 	ExecScript(ctid int, scriptPath string, env map[string]string) (*pct.ExecResult, error)
 	Push(ctid int, src, dst, perms string) error
 	GetIP(ctid int) (string, error)
+	GetConfig(ctx context.Context, ctid int) (map[string]interface{}, error)
+	DetachMountPoints(ctx context.Context, ctid int, indexes []int) error
+	GetStorageInfo(ctx context.Context, storageID string) (*StorageInfo, error)
+}
+
+// MountPointOption defines a mount point for container creation.
+type MountPointOption struct {
+	Index     int
+	Type      string // "volume" or "bind"
+	Storage   string // Proxmox storage (e.g. "local-lvm") — volume only
+	SizeGB    int    // size for new volume (0 if reattaching existing)
+	MountPath string
+	VolumeID  string // non-empty when reattaching existing volume
+	HostPath  string // host path — bind only
+	ReadOnly  bool
 }
 
 // CreateOptions defines the parameters for creating a new container.
@@ -47,6 +87,18 @@ type CreateOptions struct {
 	Features     []string
 	OnBoot       bool
 	Tags         string
+	MountPoints  []MountPointOption
+	Devices      []DevicePassthrough
+}
+
+// gpuProfiles maps GPU profile names to device passthrough configurations.
+var gpuProfiles = map[string][]DevicePassthrough{
+	"dri-render": {{Path: "/dev/dri/renderD128", GID: 44, Mode: "0666"}},
+	"nvidia-basic": {
+		{Path: "/dev/nvidia0"},
+		{Path: "/dev/nvidiactl"},
+		{Path: "/dev/nvidia-uvm"},
+	},
 }
 
 // Engine manages the job lifecycle.
@@ -55,6 +107,8 @@ type Engine struct {
 	catalog *catalog.Catalog
 	store   *Store
 	cm      ContainerManager
+	mu      sync.Mutex
+	cancels map[string]context.CancelFunc
 }
 
 // New creates a new Engine, opening the SQLite database.
@@ -65,17 +119,69 @@ func New(cfg *config.Config, cat *catalog.Catalog, dataDir string, cm ContainerM
 		return nil, fmt.Errorf("opening job store: %w", err)
 	}
 
-	return &Engine{
+	e := &Engine{
 		cfg:     cfg,
 		catalog: cat,
 		store:   store,
 		cm:      cm,
-	}, nil
+		cancels: make(map[string]context.CancelFunc),
+	}
+
+	// Recover orphaned jobs from previous run
+	if n, err := store.RecoverOrphanedJobs(); err != nil {
+		fmt.Printf("  engine:  warning: orphan recovery failed: %v\n", err)
+	} else if n > 0 {
+		fmt.Printf("  engine:  recovered %d orphaned job(s) from previous run\n", n)
+	}
+
+	return e, nil
+}
+
+// CancelJob cancels a running job by ID.
+// It cancels the context and also stops the container to kill any running pct exec.
+func (e *Engine) CancelJob(jobID string) error {
+	e.mu.Lock()
+	cancel, ok := e.cancels[jobID]
+	e.mu.Unlock()
+	if !ok {
+		return fmt.Errorf("job %q is not running", jobID)
+	}
+	cancel()
+
+	// Also stop the container to interrupt any running pct exec (e.g. pip install)
+	job, err := e.store.GetJob(jobID)
+	if err == nil && job.CTID > 0 {
+		go func() {
+			ctx := context.Background()
+			_ = e.cm.Stop(ctx, job.CTID)
+		}()
+	}
+
+	return nil
 }
 
 // Close closes the engine's resources.
 func (e *Engine) Close() error {
 	return e.store.Close()
+}
+
+// ErrDuplicate is returned when an install is blocked by an existing install or active job.
+type ErrDuplicate struct {
+	Message   string
+	InstallID string // non-empty if blocked by existing install
+	JobID     string // non-empty if blocked by active job
+}
+
+func (e *ErrDuplicate) Error() string { return e.Message }
+
+// HasActiveInstallForApp checks if the given app has a non-uninstalled install.
+func (e *Engine) HasActiveInstallForApp(appID string) (*Install, bool) {
+	return e.store.HasActiveInstallForApp(appID)
+}
+
+// HasActiveJobForApp checks if the given app has a non-terminal install job.
+func (e *Engine) HasActiveJobForApp(appID string) (*Job, bool) {
+	return e.store.HasActiveJobForApp(appID)
 }
 
 // StartInstall creates a new install job and runs it asynchronously.
@@ -84,6 +190,20 @@ func (e *Engine) StartInstall(req InstallRequest) (*Job, error) {
 	app, ok := e.catalog.Get(req.AppID)
 	if !ok {
 		return nil, fmt.Errorf("app %q not found in catalog", req.AppID)
+	}
+
+	// Prevent duplicate installs
+	if inst, exists := e.store.HasActiveInstallForApp(req.AppID); exists {
+		return nil, &ErrDuplicate{
+			Message:   fmt.Sprintf("app %q is already installed (CTID %d, status: %s)", req.AppID, inst.CTID, inst.Status),
+			InstallID: inst.ID,
+		}
+	}
+	if job, exists := e.store.HasActiveJobForApp(req.AppID); exists {
+		return nil, &ErrDuplicate{
+			Message: fmt.Sprintf("app %q already has an active install job (state: %s)", req.AppID, job.State),
+			JobID:   job.ID,
+		}
 	}
 
 	// Apply defaults from config, then from manifest, then from request
@@ -117,24 +237,54 @@ func (e *Engine) StartInstall(req InstallRequest) (*Job, error) {
 		diskGB = req.DiskGB
 	}
 
+	// Hostname defaults to app ID
+	hostname := req.Hostname
+	if hostname == "" {
+		hostname = req.AppID
+	}
+	// OnBoot/Unprivileged: request overrides manifest defaults
+	onboot := app.LXC.Defaults.OnBoot
+	if req.OnBoot != nil {
+		onboot = *req.OnBoot
+	}
+	unprivileged := app.LXC.Defaults.Unprivileged
+	if req.Unprivileged != nil {
+		unprivileged = *req.Unprivileged
+	}
+
 	now := time.Now()
 	job := &Job{
-		ID:        generateID(),
-		Type:      JobTypeInstall,
-		State:     StateQueued,
-		AppID:     req.AppID,
-		AppName:   app.Name,
-		Node:      e.cfg.NodeName,
-		Pool:      e.cfg.Pool,
-		Storage:   storage,
-		Bridge:    bridge,
-		Cores:     cores,
-		MemoryMB:  memoryMB,
-		DiskGB:    diskGB,
-		Inputs:    req.Inputs,
-		Outputs:   make(map[string]string),
-		CreatedAt: now,
-		UpdatedAt: now,
+		ID:           generateID(),
+		Type:         JobTypeInstall,
+		State:        StateQueued,
+		AppID:        req.AppID,
+		AppName:      app.Name,
+		Node:         e.cfg.NodeName,
+		Pool:         e.cfg.Pool,
+		Storage:      storage,
+		Bridge:       bridge,
+		Cores:        cores,
+		MemoryMB:     memoryMB,
+		DiskGB:       diskGB,
+		Hostname:     hostname,
+		OnBoot:       onboot,
+		Unprivileged: unprivileged,
+		Inputs:       req.Inputs,
+		Outputs:      make(map[string]string),
+		Devices:      req.Devices,
+		EnvVars:      req.EnvVars,
+		CreatedAt:    now,
+		UpdatedAt:    now,
+	}
+
+	// Auto-add GPU devices from manifest profiles if none specified
+	if len(job.Devices) == 0 && len(app.GPU.Profiles) > 0 && e.cfg.GPU.Policy != config.GPUPolicyNone {
+		for _, profile := range app.GPU.Profiles {
+			if devs, ok := gpuProfiles[profile]; ok {
+				job.Devices = append(job.Devices, devs...)
+				break // use first matching profile
+			}
+		}
 	}
 
 	if job.Inputs == nil {
@@ -148,32 +298,93 @@ func (e *Engine) StartInstall(req InstallRequest) (*Job, error) {
 		}
 	}
 
+	// Build mount points from manifest volumes + request bind mounts + extra mounts
+	mpIndex := 0
+	for _, vol := range app.Volumes {
+		volType := vol.Type
+		if volType == "" {
+			volType = "volume"
+		}
+		mp := MountPoint{
+			Index:     mpIndex,
+			Name:      vol.Name,
+			Type:      volType,
+			MountPath: vol.MountPath,
+			SizeGB:    vol.SizeGB,
+			ReadOnly:  vol.ReadOnly,
+		}
+		// For volume types: allow user override to bind mount, or per-volume storage
+		if volType == "volume" {
+			if hp, ok := req.BindMounts[vol.Name]; ok && hp != "" {
+				// User wants to use a host path instead of Proxmox volume
+				mp.Type = "bind"
+				mp.HostPath = hp
+				mp.SizeGB = 0
+				mp.Storage = ""
+			} else if vs, ok := req.VolumeStorages[vol.Name]; ok && vs != "" {
+				mp.Storage = vs
+			}
+		}
+		if volType == "bind" {
+			// Get host path from request, fall back to default
+			if hp, ok := req.BindMounts[vol.Name]; ok && hp != "" {
+				mp.HostPath = hp
+			} else if vol.DefaultHostPath != "" {
+				mp.HostPath = vol.DefaultHostPath
+			}
+			// Skip optional bind mounts with no host path
+			if !vol.Required && mp.HostPath == "" {
+				continue
+			}
+		}
+		job.MountPoints = append(job.MountPoints, mp)
+		mpIndex++
+	}
+	// Add extra user-defined mounts
+	for _, em := range req.ExtraMounts {
+		if em.HostPath == "" || em.MountPath == "" {
+			continue
+		}
+		job.MountPoints = append(job.MountPoints, MountPoint{
+			Index:     mpIndex,
+			Name:      fmt.Sprintf("extra-%d", mpIndex),
+			Type:      "bind",
+			MountPath: em.MountPath,
+			HostPath:  em.HostPath,
+			ReadOnly:  em.ReadOnly,
+		})
+		mpIndex++
+	}
+
 	if err := e.store.CreateJob(job); err != nil {
 		return nil, fmt.Errorf("creating job: %w", err)
 	}
 
-	// Run asynchronously
-	go e.runInstall(job)
+	// Run asynchronously with cancel support
+	ctx, cancel := context.WithCancel(context.Background())
+	e.mu.Lock()
+	e.cancels[job.ID] = cancel
+	e.mu.Unlock()
+
+	go func() {
+		defer func() {
+			e.mu.Lock()
+			delete(e.cancels, job.ID)
+			e.mu.Unlock()
+			cancel()
+		}()
+		e.runInstall(ctx, job)
+	}()
 
 	return job, nil
 }
 
 // Uninstall stops and destroys a container for an installed app.
-func (e *Engine) Uninstall(installID string) (*Job, error) {
+// If keepVolumes is true, mount point volumes are detached before destroy and preserved.
+func (e *Engine) Uninstall(installID string, keepVolumes bool) (*Job, error) {
 	// Find the install
-	installs, err := e.store.ListInstalls()
+	inst, err := e.store.GetInstall(installID)
 	if err != nil {
-		return nil, fmt.Errorf("listing installs: %w", err)
-	}
-
-	var target *Install
-	for _, inst := range installs {
-		if inst.ID == installID {
-			target = inst
-			break
-		}
-	}
-	if target == nil {
 		return nil, fmt.Errorf("install %q not found", installID)
 	}
 
@@ -182,11 +393,11 @@ func (e *Engine) Uninstall(installID string) (*Job, error) {
 		ID:        generateID(),
 		Type:      JobTypeUninstall,
 		State:     StateQueued,
-		AppID:     target.AppID,
-		AppName:   target.AppName,
-		CTID:      target.CTID,
-		Node:      target.Node,
-		Pool:      target.Pool,
+		AppID:     inst.AppID,
+		AppName:   inst.AppName,
+		CTID:      inst.CTID,
+		Node:      inst.Node,
+		Pool:      inst.Pool,
 		CreatedAt: now,
 		UpdatedAt: now,
 	}
@@ -195,35 +406,92 @@ func (e *Engine) Uninstall(installID string) (*Job, error) {
 		return nil, fmt.Errorf("creating uninstall job: %w", err)
 	}
 
-	go e.runUninstall(job, target)
+	go e.runUninstall(job, inst, keepVolumes)
 
 	return job, nil
 }
 
-func (e *Engine) runUninstall(job *Job, inst *Install) {
+func (e *Engine) runUninstall(job *Job, inst *Install, keepVolumes bool) {
 	ctx := &installContext{engine: e, job: job}
 
-	ctx.info("Starting uninstall of %s (CTID %d)", inst.AppName, inst.CTID)
+	ctx.info("Starting uninstall of %s (CTID %d, keepVolumes=%v)", inst.AppName, inst.CTID, keepVolumes)
 
 	// Stop container
 	ctx.transition("stopping")
 	ctx.info("Stopping container %d...", inst.CTID)
 	bgCtx := context.Background()
-	status, _ := e.cm.Status(bgCtx, inst.CTID)
-	if status == "running" {
-		if err := e.cm.Shutdown(bgCtx, inst.CTID, 30); err != nil {
-			ctx.warn("Graceful shutdown failed, forcing stop: %v", err)
-			e.cm.Stop(bgCtx, inst.CTID)
+
+	// Try graceful shutdown first, then force stop
+	ctx.info("Attempting graceful shutdown of container %d (timeout 30s)...", inst.CTID)
+	if err := e.cm.Shutdown(bgCtx, inst.CTID, 30); err != nil {
+		ctx.warn("Graceful shutdown failed: %v — forcing stop", err)
+		if err := e.cm.Stop(bgCtx, inst.CTID); err != nil {
+			ctx.warn("Force stop error: %v", err)
+		}
+	}
+	ctx.info("Shutdown/stop command completed for container %d", inst.CTID)
+
+	// If keeping volumes, detach managed volumes before destroy (bind mounts don't need detaching)
+	if keepVolumes && len(inst.MountPoints) > 0 {
+		var managedIndexes []int
+		for _, mp := range inst.MountPoints {
+			if mp.Type == "volume" {
+				managedIndexes = append(managedIndexes, mp.Index)
+			}
+		}
+
+		if len(managedIndexes) > 0 {
+			ctx.transition("detaching_volumes")
+
+			// Read fresh config to get current volume IDs
+			if config, err := e.cm.GetConfig(bgCtx, inst.CTID); err == nil {
+				for i := range inst.MountPoints {
+					if inst.MountPoints[i].Type != "volume" {
+						continue
+					}
+					key := fmt.Sprintf("mp%d", inst.MountPoints[i].Index)
+					if val, ok := config[key]; ok {
+						if valStr, ok := val.(string); ok {
+							parts := strings.SplitN(valStr, ",", 2)
+							if len(parts) > 0 {
+								inst.MountPoints[i].VolumeID = parts[0]
+							}
+						}
+					}
+				}
+			}
+
+			// Detach only managed volume mount points from config
+			for _, mp := range inst.MountPoints {
+				if mp.Type == "volume" {
+					ctx.info("Detaching volume %s (%s): %s", mp.Name, fmt.Sprintf("mp%d", mp.Index), mp.VolumeID)
+				}
+			}
+			if err := e.cm.DetachMountPoints(bgCtx, inst.CTID, managedIndexes); err != nil {
+				ctx.warn("Failed to detach mount points: %v — volumes may be destroyed", err)
+			}
 		}
 	}
 
-	// Destroy container
+	// Destroy container with retries (container may need a moment to fully stop)
 	ctx.transition("destroying")
 	ctx.info("Destroying container %d...", inst.CTID)
-	if err := e.cm.Destroy(bgCtx, inst.CTID); err != nil {
-		ctx.log("error", "Failed to destroy container: %v", err)
+	var destroyErr error
+	for attempt := 0; attempt < 5; attempt++ {
+		if attempt > 0 {
+			ctx.info("Retry %d: waiting before destroy attempt...", attempt)
+			time.Sleep(5 * time.Second)
+		}
+		destroyErr = e.cm.Destroy(bgCtx, inst.CTID)
+		if destroyErr == nil {
+			break
+		}
+		ctx.warn("Destroy attempt %d failed: %v", attempt+1, destroyErr)
+	}
+	if destroyErr != nil {
+		ctx.log("error", "Failed to destroy container after retries: %v", destroyErr)
 		job.State = StateFailed
-		job.Error = fmt.Sprintf("destroy: %v", err)
+		job.Error = fmt.Sprintf("destroy: %v", destroyErr)
 		now := time.Now()
 		job.UpdatedAt = now
 		job.CompletedAt = &now
@@ -231,8 +499,24 @@ func (e *Engine) runUninstall(job *Job, inst *Install) {
 		return
 	}
 
-	// Remove install record
-	e.store.db.Exec("DELETE FROM installs WHERE id=?", inst.ID)
+	// Only preserve install record if there are managed volumes worth keeping
+	hasManagedVolumes := false
+	for _, mp := range inst.MountPoints {
+		if mp.Type == "volume" {
+			hasManagedVolumes = true
+			break
+		}
+	}
+	if keepVolumes && hasManagedVolumes {
+		// Preserve install record with "uninstalled" status and volume IDs
+		inst.Status = "uninstalled"
+		inst.CTID = 0
+		e.store.UpdateInstall(inst)
+		ctx.info("Install record preserved with managed volume(s)")
+	} else {
+		// Remove install record entirely
+		e.store.db.Exec("DELETE FROM installs WHERE id=?", inst.ID)
+	}
 
 	ctx.transition(StateCompleted)
 	now := time.Now()
@@ -261,9 +545,222 @@ func (e *Engine) GetLogsSince(jobID string, afterID int) ([]*LogEntry, int, erro
 	return e.store.GetLogsSince(jobID, afterID)
 }
 
+// InstallDetail combines stored install data with live container status.
+type InstallDetail struct {
+	Install
+	IP              string                `json:"ip,omitempty"`
+	Live            *ContainerStatusDetail `json:"live,omitempty"`
+	CatalogVersion  string                `json:"catalog_version,omitempty"`
+	UpdateAvailable bool                  `json:"update_available"`
+}
+
+// GetInstall returns a single install by ID.
+func (e *Engine) GetInstall(id string) (*Install, error) {
+	return e.store.GetInstall(id)
+}
+
+// GetInstallDetail returns an install enriched with live data.
+func (e *Engine) GetInstallDetail(id string) (*InstallDetail, error) {
+	inst, err := e.store.GetInstall(id)
+	if err != nil {
+		return nil, err
+	}
+
+	detail := &InstallDetail{Install: *inst}
+
+	// Only fetch live data for active installs (not uninstalled)
+	if inst.Status != "uninstalled" && inst.CTID > 0 {
+		ctx := context.Background()
+
+		// Fetch live status
+		if sd, err := e.cm.StatusDetail(ctx, inst.CTID); err == nil {
+			detail.Live = sd
+			detail.Status = sd.Status
+		}
+
+		// Fetch IP
+		if ip, err := e.cm.GetIP(inst.CTID); err == nil && ip != "" {
+			detail.IP = ip
+		}
+	}
+
+	// Check catalog version
+	if app, ok := e.catalog.Get(inst.AppID); ok {
+		detail.CatalogVersion = app.Version
+		if inst.AppVersion != "" && app.Version != inst.AppVersion {
+			detail.UpdateAvailable = true
+		}
+	}
+
+	return detail, nil
+}
+
 // ListInstalls returns all installations.
 func (e *Engine) ListInstalls() ([]*Install, error) {
 	return e.store.ListInstalls()
+}
+
+// ListInstallsLive returns all installations with live status refreshed from Proxmox.
+func (e *Engine) ListInstallsLive() ([]*Install, error) {
+	installs, err := e.store.ListInstalls()
+	if err != nil {
+		return nil, err
+	}
+
+	ctx := context.Background()
+	for _, inst := range installs {
+		if inst.Status == "uninstalled" || inst.CTID == 0 {
+			continue
+		}
+		if status, err := e.cm.Status(ctx, inst.CTID); err == nil {
+			inst.Status = status
+		}
+	}
+
+	return installs, nil
+}
+
+// Reinstall creates a new container for a previously uninstalled app, reattaching preserved volumes.
+func (e *Engine) Reinstall(installID string, req ReinstallRequest) (*Job, error) {
+	inst, err := e.store.GetInstall(installID)
+	if err != nil {
+		return nil, fmt.Errorf("install %q not found", installID)
+	}
+	if inst.Status != "uninstalled" {
+		return nil, fmt.Errorf("install %q is not uninstalled (status: %s)", installID, inst.Status)
+	}
+	if len(inst.MountPoints) == 0 {
+		return nil, fmt.Errorf("install %q has no preserved volumes to reattach", installID)
+	}
+
+	// Look up the app
+	app, ok := e.catalog.Get(inst.AppID)
+	if !ok {
+		return nil, fmt.Errorf("app %q not found in catalog", inst.AppID)
+	}
+
+	// Use existing values with optional overrides
+	storage := inst.Storage
+	if req.Storage != "" {
+		storage = req.Storage
+	}
+	bridge := inst.Bridge
+	if req.Bridge != "" {
+		bridge = req.Bridge
+	}
+	cores := inst.Cores
+	if req.Cores > 0 {
+		cores = req.Cores
+	}
+	memoryMB := inst.MemoryMB
+	if req.MemoryMB > 0 {
+		memoryMB = req.MemoryMB
+	}
+	diskGB := inst.DiskGB
+	if req.DiskGB > 0 {
+		diskGB = req.DiskGB
+	}
+
+	now := time.Now()
+	job := &Job{
+		ID:          generateID(),
+		Type:        JobTypeReinstall,
+		State:       StateQueued,
+		AppID:       inst.AppID,
+		AppName:     inst.AppName,
+		Node:        e.cfg.NodeName,
+		Pool:        inst.Pool,
+		Storage:     storage,
+		Bridge:      bridge,
+		Cores:       cores,
+		MemoryMB:    memoryMB,
+		DiskGB:      diskGB,
+		Inputs:      req.Inputs,
+		Outputs:     make(map[string]string),
+		MountPoints: inst.MountPoints, // Carry preserved volumes with VolumeIDs
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	}
+
+	if job.Inputs == nil {
+		job.Inputs = make(map[string]string)
+	}
+	// Apply input defaults from manifest
+	for _, input := range app.Inputs {
+		if _, exists := job.Inputs[input.Key]; !exists && input.Default != nil {
+			job.Inputs[input.Key] = fmt.Sprintf("%v", input.Default)
+		}
+	}
+
+	if err := e.store.CreateJob(job); err != nil {
+		return nil, fmt.Errorf("creating reinstall job: %w", err)
+	}
+
+	// Run install pipeline — on success, update the existing install record
+	go e.runReinstall(job, inst)
+
+	return job, nil
+}
+
+func (e *Engine) runReinstall(job *Job, inst *Install) {
+	app, ok := e.catalog.Get(job.AppID)
+	if !ok {
+		job.State = StateFailed
+		job.Error = fmt.Sprintf("app %q not found in catalog", job.AppID)
+		now := time.Now()
+		job.UpdatedAt = now
+		job.CompletedAt = &now
+		e.store.UpdateJob(job)
+		return
+	}
+
+	ctx := &installContext{
+		engine:   e,
+		job:      job,
+		manifest: app,
+	}
+
+	ctx.info("Starting reinstall of %s with %d preserved volume(s)", app.Name, len(job.MountPoints))
+
+	for _, step := range installSteps {
+		ctx.transition(step.state)
+
+		if err := step.fn(ctx); err != nil {
+			ctx.log("error", "Failed at %s: %v", step.state, err)
+			ctx.job.State = StateFailed
+			ctx.job.Error = fmt.Sprintf("%s: %v", step.state, err)
+			now := time.Now()
+			ctx.job.UpdatedAt = now
+			ctx.job.CompletedAt = &now
+			e.store.UpdateJob(ctx.job)
+			return
+		}
+	}
+
+	// Success — update the existing install record
+	ctx.transition(StateCompleted)
+	now := time.Now()
+	ctx.job.CompletedAt = &now
+	e.store.UpdateJob(ctx.job)
+
+	inst.CTID = ctx.job.CTID
+	inst.Status = "running"
+	inst.Storage = ctx.job.Storage
+	inst.Bridge = ctx.job.Bridge
+	inst.Cores = ctx.job.Cores
+	inst.MemoryMB = ctx.job.MemoryMB
+	inst.DiskGB = ctx.job.DiskGB
+	inst.Outputs = ctx.job.Outputs
+	inst.MountPoints = ctx.job.MountPoints
+	inst.AppVersion = app.Version
+	e.store.UpdateInstall(inst)
+
+	ctx.info("Reinstall complete! Container %d is running with reattached volumes.", ctx.job.CTID)
+}
+
+// GetStorageInfo returns resolved storage information for a Proxmox storage ID.
+func (e *Engine) GetStorageInfo(ctx context.Context, storageID string) (*StorageInfo, error) {
+	return e.cm.GetStorageInfo(ctx, storageID)
 }
 
 func generateID() string {

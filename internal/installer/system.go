@@ -117,6 +117,7 @@ func createAPIToken(answers *InstallerAnswers, res *DiscoveredResources) error {
 	// 2. Create custom role with least-privilege permissions
 	perms := strings.Join([]string{
 		"VM.Allocate",
+		"VM.Audit",
 		"VM.Config.Disk",
 		"VM.Config.CPU",
 		"VM.Config.Memory",

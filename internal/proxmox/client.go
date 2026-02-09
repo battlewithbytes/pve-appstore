@@ -72,6 +72,40 @@ func NewClient(cfg ClientConfig) (*Client, error) {
 	}, nil
 }
 
+// StorageInfo holds configuration details for a Proxmox storage from GET /storage/{id}.
+type StorageInfo struct {
+	ID         string `json:"storage"`
+	Type       string `json:"type"`
+	Content    string `json:"content"`
+	Path       string `json:"path,omitempty"`       // dir, nfs, cifs
+	Mountpoint string `json:"mountpoint,omitempty"` // zfspool
+	Pool       string `json:"pool,omitempty"`       // zfspool
+}
+
+// ListStorages returns all storages from the Proxmox cluster.
+func (c *Client) ListStorages(ctx context.Context) ([]StorageInfo, error) {
+	var storages []StorageInfo
+	if err := c.doRequest(ctx, "GET", "/storage", nil, &storages); err != nil {
+		return nil, fmt.Errorf("listing storages: %w", err)
+	}
+	return storages, nil
+}
+
+// GetStorageInfo returns the configuration for a single Proxmox storage.
+func (c *Client) GetStorageInfo(ctx context.Context, storage string) (*StorageInfo, error) {
+	// Use the list endpoint (works with broader permissions) and filter
+	storages, err := c.ListStorages(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for _, si := range storages {
+		if si.ID == storage {
+			return &si, nil
+		}
+	}
+	return nil, fmt.Errorf("storage %q not found", storage)
+}
+
 // apiResponse wraps the standard Proxmox {"data": ...} envelope.
 type apiResponse struct {
 	Data   json.RawMessage        `json:"data"`

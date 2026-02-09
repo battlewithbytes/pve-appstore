@@ -33,6 +33,10 @@ async def health():
 @app.post("/crawl", response_model=CrawlResponse)
 async def crawl(req: CrawlRequest):
     try:
+        url = req.url.strip()
+        if not url.startswith(("http://", "https://", "file://", "raw:")):
+            url = "https://" + url
+        req.url = url
         browser_cfg = BrowserConfig(headless=os.getenv("CRAWL4AI_HEADLESS", "true").lower() == "true")
         run_cfg = CrawlerRunConfig(
             word_count_threshold=req.word_count_threshold,
@@ -72,7 +76,8 @@ pre{background:#f3f4f6;padding:16px;border-radius:8px;overflow:auto;max-height:5
 async function doCrawl(){
   const btn=document.getElementById('btn');
   btn.disabled=true; btn.textContent='Crawling...';
-  const url=document.getElementById('url').value;
+  let url=document.getElementById('url').value.trim();
+  if(url && !url.match(/^(https?|file):\/\//)) { url='https://'+url; document.getElementById('url').value=url; }
   try{
     const r=await fetch('/crawl',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({url})});
     const d=await r.json();

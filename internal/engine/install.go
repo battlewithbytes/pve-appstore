@@ -13,6 +13,9 @@ import (
 
 // installSteps defines the ordered state machine for an install job.
 // Each step returns the next state or an error (which moves to "failed").
+// StateReadVolumeIDs is the state for reading volume IDs after container creation.
+const StateReadVolumeIDs = "read_volume_ids"
+
 var installSteps = []struct {
 	state string
 	fn    func(ctx *installContext) error
@@ -22,6 +25,7 @@ var installSteps = []struct {
 	{StateValidatePlacement, stepValidatePlacement},
 	{StateAllocateCTID, stepAllocateCTID},
 	{StateCreateContainer, stepCreateContainer},
+	{StateReadVolumeIDs, stepReadVolumeIDs},
 	{StateConfigureContainer, stepConfigureContainer},
 	{StateStartContainer, stepStartContainer},
 	{StateWaitForNetwork, stepWaitForNetwork},
@@ -33,6 +37,7 @@ var installSteps = []struct {
 
 // installContext carries state through the install pipeline.
 type installContext struct {
+	ctx      context.Context
 	engine   *Engine
 	job      *Job
 	manifest *catalog.AppManifest
@@ -64,7 +69,7 @@ func (ctx *installContext) transition(state string) {
 }
 
 // runInstall executes the full install pipeline for a job.
-func (e *Engine) runInstall(job *Job) {
+func (e *Engine) runInstall(bgCtx context.Context, job *Job) {
 	app, ok := e.catalog.Get(job.AppID)
 	if !ok {
 		job.State = StateFailed
@@ -77,6 +82,7 @@ func (e *Engine) runInstall(job *Job) {
 	}
 
 	ctx := &installContext{
+		ctx:      bgCtx,
 		engine:   e,
 		job:      job,
 		manifest: app,
@@ -85,9 +91,24 @@ func (e *Engine) runInstall(job *Job) {
 	ctx.info("Starting install of %s (%s)", app.Name, app.ID)
 
 	for _, step := range installSteps {
+		// Check for cancellation between steps
+		select {
+		case <-bgCtx.Done():
+			ctx.warn("Job cancelled by user")
+			e.cleanupCancelledJob(ctx)
+			return
+		default:
+		}
+
 		ctx.transition(step.state)
 
 		if err := step.fn(ctx); err != nil {
+			// Check if the error was due to cancellation
+			if bgCtx.Err() != nil {
+				ctx.warn("Job cancelled by user during %s", step.state)
+				e.cleanupCancelledJob(ctx)
+				return
+			}
 			ctx.log("error", "Failed at %s: %v", step.state, err)
 			ctx.job.State = StateFailed
 			ctx.job.Error = fmt.Sprintf("%s: %v", step.state, err)
@@ -105,16 +126,30 @@ func (e *Engine) runInstall(job *Job) {
 	ctx.job.CompletedAt = &now
 	e.store.UpdateJob(ctx.job)
 
-	// Record the installation
+	// Record the installation with all enriched fields
 	e.store.CreateInstall(&Install{
-		ID:        ctx.job.ID,
-		AppID:     ctx.job.AppID,
-		AppName:   ctx.job.AppName,
-		CTID:      ctx.job.CTID,
-		Node:      ctx.job.Node,
-		Pool:      ctx.job.Pool,
-		Status:    "running",
-		CreatedAt: now,
+		ID:           ctx.job.ID,
+		AppID:        ctx.job.AppID,
+		AppName:      ctx.job.AppName,
+		AppVersion:   ctx.manifest.Version,
+		CTID:         ctx.job.CTID,
+		Node:         ctx.job.Node,
+		Pool:         ctx.job.Pool,
+		Storage:      ctx.job.Storage,
+		Bridge:       ctx.job.Bridge,
+		Cores:        ctx.job.Cores,
+		MemoryMB:     ctx.job.MemoryMB,
+		DiskGB:       ctx.job.DiskGB,
+		Hostname:     ctx.job.Hostname,
+		OnBoot:       ctx.job.OnBoot,
+		Unprivileged: ctx.job.Unprivileged,
+		Inputs:       ctx.job.Inputs,
+		Outputs:      ctx.job.Outputs,
+		MountPoints:  ctx.job.MountPoints,
+		Devices:      ctx.job.Devices,
+		EnvVars:      ctx.job.EnvVars,
+		Status:       "running",
+		CreatedAt:    now,
 	})
 
 	ctx.info("Install complete! Container %d is running.", ctx.job.CTID)
@@ -177,12 +212,40 @@ func stepCreateContainer(ctx *installContext) error {
 		Cores:        ctx.job.Cores,
 		MemoryMB:     ctx.job.MemoryMB,
 		Bridge:       ctx.job.Bridge,
-		Hostname:     ctx.job.AppID,
-		Unprivileged: ctx.manifest.LXC.Defaults.Unprivileged,
+		Hostname:     ctx.job.Hostname,
+		Unprivileged: ctx.job.Unprivileged,
 		Pool:         ctx.job.Pool,
 		Features:     ctx.manifest.LXC.Defaults.Features,
-		OnBoot:       ctx.manifest.LXC.Defaults.OnBoot,
+		OnBoot:       ctx.job.OnBoot,
 		Tags:         "appstore;managed",
+	}
+
+	// Mount points are pre-built on the job (by StartInstall or Reinstall)
+	for _, mp := range ctx.job.MountPoints {
+		mpStorage := mp.Storage
+		if mpStorage == "" {
+			mpStorage = ctx.job.Storage
+		}
+		opt := MountPointOption{
+			Index:     mp.Index,
+			Type:      mp.Type,
+			MountPath: mp.MountPath,
+			Storage:   mpStorage,
+			SizeGB:    mp.SizeGB,
+			VolumeID:  mp.VolumeID,
+			HostPath:  mp.HostPath,
+			ReadOnly:  mp.ReadOnly,
+		}
+		opts.MountPoints = append(opts.MountPoints, opt)
+	}
+	// Device passthrough
+	opts.Devices = ctx.job.Devices
+
+	if len(ctx.job.MountPoints) > 0 {
+		ctx.info("Configuring %d mount(s)", len(ctx.job.MountPoints))
+	}
+	if len(ctx.job.Devices) > 0 {
+		ctx.info("Passing through %d device(s)", len(ctx.job.Devices))
 	}
 
 	ctx.info("Creating container %d (template=%s, %d cores, %d MB, %d GB)",
@@ -193,6 +256,50 @@ func stepCreateContainer(ctx *installContext) error {
 	}
 
 	ctx.info("Container %d created", ctx.job.CTID)
+	return nil
+}
+
+func stepReadVolumeIDs(ctx *installContext) error {
+	// Only need to read volume IDs for managed volumes (not bind mounts)
+	hasManagedVolumes := false
+	for _, mp := range ctx.job.MountPoints {
+		if mp.Type == "volume" {
+			hasManagedVolumes = true
+			break
+		}
+	}
+	if !hasManagedVolumes {
+		return nil
+	}
+
+	config, err := ctx.engine.cm.GetConfig(context.Background(), ctx.job.CTID)
+	if err != nil {
+		ctx.warn("Failed to read container config for volume IDs: %v", err)
+		return nil // non-fatal
+	}
+
+	for i := range ctx.job.MountPoints {
+		if ctx.job.MountPoints[i].Type == "bind" {
+			continue
+		}
+		key := fmt.Sprintf("mp%d", ctx.job.MountPoints[i].Index)
+		val, ok := config[key]
+		if !ok {
+			continue
+		}
+		// Value format: "local-lvm:vm-104-disk-1,mp=/mnt/media,..." — extract the volume ID
+		valStr, ok := val.(string)
+		if !ok {
+			continue
+		}
+		parts := strings.SplitN(valStr, ",", 2)
+		if len(parts) > 0 {
+			ctx.job.MountPoints[i].VolumeID = parts[0]
+			ctx.info("Volume %s (%s): %s", ctx.job.MountPoints[i].Name, key, parts[0])
+		}
+	}
+
+	ctx.engine.store.UpdateJob(ctx.job)
 	return nil
 }
 
@@ -299,8 +406,21 @@ func stepPushAssets(ctx *installContext) error {
 	return nil
 }
 
+// mergeEnvVars combines manifest and job env vars; job overrides manifest.
+func mergeEnvVars(manifest map[string]string, job map[string]string) map[string]string {
+	merged := make(map[string]string)
+	for k, v := range manifest {
+		merged[k] = v
+	}
+	for k, v := range job {
+		merged[k] = v
+	}
+	return merged
+}
+
 func stepProvision(ctx *installContext) error {
-	cmd := buildProvisionCommand(ctx.manifest.Provisioning.Script, "install")
+	envVars := mergeEnvVars(ctx.manifest.Provisioning.Env, ctx.job.EnvVars)
+	cmd := buildProvisionCommand(ctx.manifest.Provisioning.Script, "install", envVars)
 
 	ctx.info("Running provisioning: python3 -m appstore.runner ... install %s",
 		filepath.Base(ctx.manifest.Provisioning.Script))
@@ -386,7 +506,8 @@ func stepHealthcheck(ctx *installContext) error {
 	}
 
 	ctx.info("Running healthcheck...")
-	cmd := buildProvisionCommand(ctx.manifest.Provisioning.Script, "healthcheck")
+	envVars := mergeEnvVars(ctx.manifest.Provisioning.Env, ctx.job.EnvVars)
+	cmd := buildProvisionCommand(ctx.manifest.Provisioning.Script, "healthcheck", envVars)
 	result, err := ctx.engine.cm.Exec(ctx.job.CTID, cmd)
 	if err != nil {
 		ctx.warn("Healthcheck error: %v", err)
@@ -430,4 +551,31 @@ func stepCollectOutputs(ctx *installContext) error {
 	ctx.engine.store.UpdateJob(ctx.job)
 
 	return nil
+}
+
+// cleanupCancelledJob handles cleanup when a job is cancelled.
+// If a container was allocated, attempt to stop and destroy it.
+func (e *Engine) cleanupCancelledJob(ctx *installContext) {
+	ctx.job.State = StateCancelled
+	ctx.job.Error = "cancelled by user"
+	now := time.Now()
+	ctx.job.UpdatedAt = now
+	ctx.job.CompletedAt = &now
+	e.store.UpdateJob(ctx.job)
+
+	// If a CTID was allocated, try to clean up the container
+	if ctx.job.CTID > 0 {
+		ctx.info("Cleaning up container %d...", ctx.job.CTID)
+		cleanCtx := context.Background() // fresh context since the job context is cancelled
+		// Try stop first, ignore errors (may not be running)
+		_ = e.cm.Stop(cleanCtx, ctx.job.CTID)
+		time.Sleep(2 * time.Second)
+		if err := e.cm.Destroy(cleanCtx, ctx.job.CTID); err != nil {
+			ctx.warn("Failed to destroy container %d during cancel cleanup: %v", ctx.job.CTID, err)
+		} else {
+			ctx.info("Container %d destroyed", ctx.job.CTID)
+		}
+	}
+
+	ctx.info("Job cancelled and cleaned up")
 }

@@ -20,6 +20,7 @@ type AppManifest struct {
 	Tags        []string `yaml:"tags" json:"tags"`
 	Homepage    string   `yaml:"homepage,omitempty" json:"homepage,omitempty"`
 	License     string   `yaml:"license,omitempty" json:"license,omitempty"`
+	Official    bool     `yaml:"official,omitempty" json:"official"`
 	Maintainers []string `yaml:"maintainers,omitempty" json:"maintainers,omitempty"`
 
 	LXC          LXCConfig        `yaml:"lxc" json:"lxc"`
@@ -28,6 +29,7 @@ type AppManifest struct {
 	Permissions  PermissionsSpec  `yaml:"permissions,omitempty" json:"permissions,omitempty"`
 	Outputs      []OutputSpec     `yaml:"outputs,omitempty" json:"outputs,omitempty"`
 	GPU          GPUSpec          `yaml:"gpu,omitempty" json:"gpu,omitempty"`
+	Volumes      []VolumeSpec     `yaml:"volumes,omitempty" json:"volumes,omitempty"`
 
 	// Computed fields (not from YAML)
 	IconPath   string `yaml:"-" json:"icon_path,omitempty"`
@@ -83,6 +85,21 @@ type OutputSpec struct {
 	Key   string `yaml:"key" json:"key"`
 	Label string `yaml:"label" json:"label"`
 	Value string `yaml:"value" json:"value"`
+}
+
+// VolumeSpec declares a persistent volume mount for an app.
+// Type "volume" (default) creates a Proxmox managed disk image.
+// Type "bind" mounts a host directory into the container.
+type VolumeSpec struct {
+	Name            string `yaml:"name" json:"name"`
+	Type            string `yaml:"type" json:"type"`                                       // "volume" or "bind"
+	MountPath       string `yaml:"mount_path" json:"mount_path"`
+	SizeGB          int    `yaml:"size_gb,omitempty" json:"size_gb,omitempty"`              // only for type=volume
+	Label           string `yaml:"label" json:"label"`
+	DefaultHostPath string `yaml:"default_host_path,omitempty" json:"default_host_path,omitempty"` // suggested default for bind
+	Required        bool   `yaml:"required" json:"required"`
+	ReadOnly        bool   `yaml:"read_only,omitempty" json:"read_only,omitempty"`
+	Description     string `yaml:"description,omitempty" json:"description,omitempty"`
 }
 
 type GPUSpec struct {
@@ -179,6 +196,27 @@ func (m *AppManifest) Validate() error {
 	for _, t := range m.GPU.Supported {
 		if !validGPUTypes[strings.ToLower(t)] {
 			return fmt.Errorf("manifest %s: gpu.supported type %q is invalid", m.ID, t)
+		}
+	}
+
+	// Volumes
+	for i := range m.Volumes {
+		vol := &m.Volumes[i]
+		// Default type to "volume" for backward compat
+		if vol.Type == "" {
+			vol.Type = "volume"
+		}
+		if vol.Name == "" {
+			return fmt.Errorf("manifest %s: volume name is required", m.ID)
+		}
+		if vol.Type != "volume" && vol.Type != "bind" {
+			return fmt.Errorf("manifest %s: volume %s type must be \"volume\" or \"bind\"", m.ID, vol.Name)
+		}
+		if vol.MountPath == "" || vol.MountPath[0] != '/' {
+			return fmt.Errorf("manifest %s: volume %s mount_path must be an absolute path", m.ID, vol.Name)
+		}
+		if vol.Type == "volume" && vol.SizeGB < 1 {
+			return fmt.Errorf("manifest %s: volume %s size_gb must be >= 1", m.ID, vol.Name)
 		}
 	}
 

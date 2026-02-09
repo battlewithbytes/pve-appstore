@@ -6,6 +6,7 @@ export interface AppSummary {
   categories: string[];
   tags: string[];
   has_icon: boolean;
+  official?: boolean;
   gpu_required: boolean;
   gpu_support?: string[];
 }
@@ -20,6 +21,7 @@ export interface AppDetail {
   tags: string[];
   homepage?: string;
   license?: string;
+  official?: boolean;
   maintainers?: string[];
   lxc: {
     ostemplate: string;
@@ -38,6 +40,7 @@ export interface AppDetail {
     timeout_sec?: number;
   };
   outputs?: AppOutput[];
+  volumes?: VolumeSpec[];
   gpu: {
     supported?: string[];
     required: boolean;
@@ -65,8 +68,16 @@ export interface AppInput {
   group?: string;
 }
 
+export interface StorageDetail {
+  id: string;
+  type: string;
+  browsable: boolean;
+  path?: string;
+}
+
 export interface ConfigDefaultsResponse {
   storages: string[];
+  storage_details: StorageDetail[];
   bridges: string[];
   defaults: {
     cores: number;
@@ -75,10 +86,57 @@ export interface ConfigDefaultsResponse {
   };
 }
 
+export interface DevicePassthrough {
+  path: string;
+  gid?: number;
+  mode?: string;
+}
+
 export interface AppOutput {
   key: string;
   label: string;
   value: string;
+}
+
+export interface VolumeSpec {
+  name: string;
+  type: 'volume' | 'bind';
+  mount_path: string;
+  size_gb?: number;
+  label: string;
+  default_host_path?: string;
+  required: boolean;
+  read_only?: boolean;
+  description?: string;
+}
+
+export interface MountPoint {
+  index: number;
+  name: string;
+  type: string;
+  mount_path: string;
+  size_gb?: number;
+  volume_id?: string;
+  host_path?: string;
+  storage?: string;
+  read_only?: boolean;
+}
+
+export interface MountInfo {
+  path: string;
+  fs_type: string;
+  device: string;
+}
+
+export interface BrowseEntry {
+  name: string;
+  path: string;
+  is_dir: boolean;
+}
+
+export interface BrowseResponse {
+  path: string;
+  entries: BrowseEntry[];
 }
 
 export interface HealthResponse {
@@ -106,11 +164,17 @@ export interface Job {
   ctid: number;
   node: string;
   pool: string;
+  storage: string;
+  bridge: string;
   cores: number;
   memory_mb: number;
   disk_gb: number;
+  hostname?: string;
+  onboot: boolean;
+  unprivileged: boolean;
   inputs?: Record<string, string>;
   outputs?: Record<string, string>;
+  mount_points?: MountPoint[];
   error?: string;
   created_at: string;
   updated_at: string;
@@ -128,11 +192,45 @@ export interface Install {
   id: string;
   app_id: string;
   app_name: string;
+  app_version: string;
   ctid: number;
   node: string;
   pool: string;
+  storage: string;
+  bridge: string;
+  cores: number;
+  memory_mb: number;
+  disk_gb: number;
+  hostname?: string;
+  onboot?: boolean;
+  unprivileged?: boolean;
+  inputs?: Record<string, string>;
+  outputs?: Record<string, string>;
+  mount_points?: MountPoint[];
+  devices?: DevicePassthrough[];
+  env_vars?: Record<string, string>;
   status: string;
   created_at: string;
+}
+
+export interface ContainerLiveStatus {
+  status: string;
+  uptime: number;
+  cpu: number;
+  cpus: number;
+  mem: number;
+  maxmem: number;
+  disk: number;
+  maxdisk: number;
+  netin: number;
+  netout: number;
+}
+
+export interface InstallDetail extends Install {
+  ip?: string;
+  live?: ContainerLiveStatus;
+  catalog_version?: string;
+  update_available: boolean;
 }
 
 export interface JobsResponse {
@@ -151,10 +249,59 @@ export interface InstallsResponse {
 }
 
 export interface InstallRequest {
+  app_id?: string;
   storage?: string;
   bridge?: string;
   cores?: number;
   memory_mb?: number;
   disk_gb?: number;
+  hostname?: string;
+  onboot?: boolean;
+  unprivileged?: boolean;
   inputs?: Record<string, string>;
+  bind_mounts?: Record<string, string>;
+  extra_mounts?: { host_path: string; mount_path: string; read_only?: boolean }[];
+  volume_storages?: Record<string, string>;
+  devices?: DevicePassthrough[];
+  env_vars?: Record<string, string>;
+}
+
+export interface ExportRecipe {
+  app_id: string;
+  storage: string;
+  bridge: string;
+  cores: number;
+  memory_mb: number;
+  disk_gb: number;
+  hostname?: string;
+  onboot?: boolean;
+  unprivileged?: boolean;
+  inputs?: Record<string, string>;
+  devices?: DevicePassthrough[];
+  env_vars?: Record<string, string>;
+  ports?: { key: string; label: string; value: number; protocol: string }[];
+  bind_mounts?: Record<string, string>;
+  volume_storages?: Record<string, string>;
+  extra_mounts?: { host_path: string; mount_path: string; read_only?: boolean }[];
+}
+
+export interface ExportResponse {
+  exported_at: string;
+  node: string;
+  recipes: ExportRecipe[];
+  installs: Install[];
+}
+
+export interface ApplyResponse {
+  jobs: { app_id: string; job_id: string }[];
+}
+
+export interface AppStatusResponse {
+  installed: boolean;
+  install_id?: string;
+  install_status?: string;
+  ctid?: number;
+  job_active: boolean;
+  job_id?: string;
+  job_state?: string;
 }

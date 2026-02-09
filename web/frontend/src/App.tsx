@@ -1,6 +1,10 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
+import { Terminal } from '@xterm/xterm'
+import { FitAddon } from '@xterm/addon-fit'
+import { WebLinksAddon } from '@xterm/addon-web-links'
+import '@xterm/xterm/css/xterm.css'
 import { api } from './api'
-import type { AppSummary, AppDetail, AppInput, HealthResponse, Job, LogEntry, Install, ConfigDefaultsResponse } from './types'
+import type { AppSummary, AppDetail, AppInput, HealthResponse, Job, LogEntry, Install, InstallDetail, ConfigDefaultsResponse, MountPoint, MountInfo, BrowseEntry, ExportResponse, ExportRecipe, InstallRequest, DevicePassthrough, AppStatusResponse } from './types'
 
 function useHash() {
   const [hash, setHash] = useState(window.location.hash)
@@ -47,22 +51,27 @@ function App() {
 
   const appMatch = hash.match(/^#\/app\/(.+)$/)
   const jobMatch = hash.match(/^#\/job\/(.+)$/)
+  const installMatch = hash.match(/^#\/install\/(.+)$/)
   const isInstalls = hash === '#/installs'
   const isJobs = hash === '#/jobs'
+  const isConfig = hash === '#/config'
 
   let content
   if (jobMatch) content = <JobView id={jobMatch[1]} />
+  else if (installMatch) content = <InstallDetailView id={installMatch[1]} requireAuth={requireAuth} />
   else if (appMatch) content = <AppDetailView id={appMatch[1]} requireAuth={requireAuth} />
   else if (isInstalls) content = <InstallsList requireAuth={requireAuth} />
   else if (isJobs) content = <JobsList />
+  else if (isConfig) content = <ConfigView requireAuth={requireAuth} />
   else content = <AppList />
 
   return (
-    <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column' }}>
+    <div className="min-h-screen flex flex-col bg-bg-primary">
       <Header health={health} authed={authed} authRequired={authRequired} onLogout={handleLogout} onLogin={() => setShowLogin(true)} />
-      <main style={{ flex: 1, maxWidth: 1200, margin: '0 auto', padding: '24px 16px', width: '100%' }}>
+      <main className="flex-1 max-w-[1200px] mx-auto px-4 py-6 w-full">
         {content}
       </main>
+      <Footer />
       {showLogin && <LoginModal onSuccess={handleLoginSuccess} onClose={() => { setShowLogin(false); setLoginCallback(null) }} />}
     </div>
   )
@@ -70,34 +79,47 @@ function App() {
 
 function Header({ health, authed, authRequired, onLogout, onLogin }: { health: HealthResponse | null; authed: boolean; authRequired: boolean; onLogout: () => void; onLogin: () => void }) {
   return (
-    <header style={{ background: '#16213e', borderBottom: '1px solid #2a2a4a', padding: '12px 24px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 24 }}>
-        <a href="#/" style={{ textDecoration: 'none', color: 'inherit', display: 'flex', alignItems: 'center', gap: 12 }}>
-          <span style={{ fontSize: 24 }}>&#9881;</span>
-          <span style={{ fontSize: 18, fontWeight: 700, color: '#fff' }}>PVE App Store</span>
+    <header className="bg-bg-primary border-b border-border px-6 py-3 flex items-center justify-between">
+      <div className="flex items-center gap-6">
+        <a href="#/" className="no-underline text-inherit flex items-center gap-3">
+          <span className="text-primary text-2xl font-mono font-bold">&gt;_</span>
+          <span className="text-lg font-bold text-text-primary font-mono tracking-tight">PVE App Store</span>
         </a>
-        <nav style={{ display: 'flex', gap: 16 }}>
-          <a href="#/" style={navStyle}>Apps</a>
-          <a href="#/installs" style={navStyle}>Installed</a>
-          <a href="#/jobs" style={navStyle}>Jobs</a>
+        <nav className="flex gap-4">
+          <a href="#/" className="text-text-secondary hover:text-primary no-underline text-sm font-mono uppercase tracking-wider transition-colors">Apps</a>
+          <a href="#/installs" className="text-text-secondary hover:text-primary no-underline text-sm font-mono uppercase tracking-wider transition-colors">Installed</a>
+          <a href="#/jobs" className="text-text-secondary hover:text-primary no-underline text-sm font-mono uppercase tracking-wider transition-colors">Jobs</a>
+          <a href="#/config" className="text-text-secondary hover:text-primary no-underline text-sm font-mono uppercase tracking-wider transition-colors">Config</a>
         </nav>
       </div>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 16, fontSize: 13, color: '#888' }}>
+      <div className="flex items-center gap-4 text-xs text-text-muted font-mono">
         {health && <>
-          <span>Node: {health.node}</span>
+          <span>node:{health.node}</span>
           <span>v{health.version}</span>
         </>}
         {authRequired && (authed ? (
-          <button onClick={onLogout} style={{ background: 'none', border: '1px solid #2a2a4a', borderRadius: 6, color: '#888', fontSize: 12, padding: '4px 10px', cursor: 'pointer' }}>Logout</button>
+          <button onClick={onLogout} className="bg-transparent border border-border rounded px-3 py-1 text-text-muted text-xs font-mono cursor-pointer hover:border-primary hover:text-primary transition-colors">logout</button>
         ) : (
-          <button onClick={onLogin} style={{ background: 'none', border: '1px solid #e94560', borderRadius: 6, color: '#e94560', fontSize: 12, padding: '4px 10px', cursor: 'pointer' }}>Login</button>
+          <button onClick={onLogin} className="bg-transparent border border-primary rounded px-3 py-1 text-primary text-xs font-mono cursor-pointer hover:bg-primary hover:text-bg-primary transition-colors">login</button>
         ))}
       </div>
     </header>
   )
 }
 
-const navStyle: React.CSSProperties = { color: '#7ec8e3', textDecoration: 'none', fontSize: 14 }
+function Footer() {
+  return (
+    <footer className="border-t border-border px-6 py-4 mt-8">
+      <div className="max-w-[1200px] mx-auto flex flex-col sm:flex-row items-center justify-between gap-2 text-xs text-text-muted font-mono">
+        <span>&copy; {new Date().getFullYear()} BattleWithBytes.io</span>
+        <div className="flex items-center gap-4">
+          <a href="https://github.com/battlewithbytes/pve-appstore-catalog" target="_blank" rel="noreferrer" className="text-text-muted hover:text-primary transition-colors">App Catalog</a>
+          <a href="https://github.com/battlewithbytes/pve-appstore" target="_blank" rel="noreferrer" className="text-text-muted hover:text-primary transition-colors">GitHub</a>
+        </div>
+      </div>
+    </footer>
+  )
+}
 
 // --- App List ---
 
@@ -125,17 +147,17 @@ function AppList() {
 
   return (
     <div>
-      <div style={{ display: 'flex', gap: 12, marginBottom: 24, flexWrap: 'wrap' }}>
+      <div className="flex gap-3 mb-6 flex-wrap">
         <input type="text" placeholder="Search apps..." value={search} onChange={e => setSearch(e.target.value)}
-          style={{ flex: 1, minWidth: 200, padding: '10px 16px', background: '#0f3460', border: '1px solid #2a2a4a', borderRadius: 8, color: '#fff', fontSize: 14, outline: 'none' }} />
+          className="flex-1 min-w-[200px] px-4 py-2.5 bg-bg-secondary border border-border rounded-lg text-text-primary text-sm outline-none focus:border-primary focus:ring-1 focus:ring-primary transition-colors font-mono placeholder:text-text-muted" />
         <select value={category} onChange={e => setCategory(e.target.value)}
-          style={{ padding: '10px 16px', background: '#0f3460', border: '1px solid #2a2a4a', borderRadius: 8, color: '#fff', fontSize: 14, outline: 'none' }}>
+          className="px-4 py-2.5 bg-bg-secondary border border-border rounded-lg text-text-primary text-sm outline-none focus:border-primary font-mono cursor-pointer">
           <option value="">All Categories</option>
           {categories.map(c => <option key={c} value={c}>{c}</option>)}
         </select>
       </div>
       {loading ? <Center>Loading...</Center> : apps.length === 0 ? <Center>No apps found</Center> : (
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: 16 }}>
+        <div className="grid grid-cols-[repeat(auto-fill,minmax(300px,1fr))] gap-4">
           {apps.map(app => <AppCard key={app.id} app={app} />)}
         </div>
       )}
@@ -145,22 +167,21 @@ function AppList() {
 
 function AppCard({ app }: { app: AppSummary }) {
   return (
-    <a href={`#/app/${app.id}`} style={{ display: 'block', background: '#16213e', border: '1px solid #2a2a4a', borderRadius: 12, padding: 20, textDecoration: 'none', color: 'inherit', transition: 'border-color 0.2s, transform 0.2s' }}
-      onMouseEnter={e => { e.currentTarget.style.borderColor = '#e94560'; e.currentTarget.style.transform = 'translateY(-2px)' }}
-      onMouseLeave={e => { e.currentTarget.style.borderColor = '#2a2a4a'; e.currentTarget.style.transform = 'none' }}>
-      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 16 }}>
-        <div style={{ width: 48, height: 48, borderRadius: 10, background: '#0f3460', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 22, flexShrink: 0 }}>
-          {app.has_icon ? <img src={`/api/apps/${app.id}/icon`} alt="" style={{ width: 40, height: 40, borderRadius: 8 }} /> : app.name[0]}
+    <a href={`#/app/${app.id}`} className="block bg-bg-card border border-border rounded-lg p-5 no-underline text-inherit transition-all duration-200 hover:border-border-hover hover:shadow-[0_0_20px_rgba(0,255,157,0.15)] hover:-translate-y-0.5 group">
+      <div className="flex items-start gap-4">
+        <div className="w-12 h-12 rounded-lg bg-bg-secondary flex items-center justify-center text-xl shrink-0 overflow-hidden">
+          {app.has_icon ? <img src={`/api/apps/${app.id}/icon`} alt="" className="w-10 h-10 rounded-lg" /> : <span className="text-primary font-mono">{app.name[0]}</span>}
         </div>
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <h3 style={{ fontSize: 16, fontWeight: 600, color: '#fff' }}>{app.name}</h3>
-            <span style={{ fontSize: 12, color: '#888' }}>v{app.version}</span>
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2">
+            <h3 className="text-base font-semibold text-text-primary group-hover:text-primary transition-colors">{app.name}</h3>
+            <span className="text-xs text-text-muted font-mono">v{app.version}</span>
+            {app.official && <Badge className="bg-primary/10 text-primary">official</Badge>}
           </div>
-          <p style={{ fontSize: 13, color: '#aaa', marginTop: 4, overflow: 'hidden', textOverflow: 'ellipsis', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' }}>{app.description}</p>
-          <div style={{ display: 'flex', gap: 6, marginTop: 8, flexWrap: 'wrap' }}>
-            {app.categories.map(c => <Badge key={c} bg="#0f3460" color="#7ec8e3">{c}</Badge>)}
-            {app.gpu_support && app.gpu_support.length > 0 && <Badge bg="#1a3a1a" color="#4ade80">GPU {app.gpu_required ? 'Required' : 'Optional'}</Badge>}
+          <p className="text-sm text-text-secondary mt-1 overflow-hidden text-ellipsis line-clamp-2">{app.description}</p>
+          <div className="flex gap-1.5 mt-2 flex-wrap">
+            {app.categories.map(c => <Badge key={c} className="bg-bg-secondary text-text-secondary">{c}</Badge>)}
+            {app.gpu_support && app.gpu_support.length > 0 && <Badge className="bg-primary/10 text-primary">GPU {app.gpu_required ? 'Required' : 'Optional'}</Badge>}
           </div>
         </div>
       </div>
@@ -185,14 +206,16 @@ function AppDetailView({ id, requireAuth }: { id: string; requireAuth: (cb: () =
   const [readme, setReadme] = useState('')
   const [error, setError] = useState('')
   const [showInstall, setShowInstall] = useState(false)
+  const [appStatus, setAppStatus] = useState<AppStatusResponse | null>(null)
 
   useEffect(() => {
-    setApp(null); setError('')
+    setApp(null); setError(''); setAppStatus(null)
     api.app(id).then(setApp).catch(e => setError(e.message))
     api.appReadme(id).then(setReadme)
+    api.appStatus(id).then(setAppStatus).catch(() => {})
   }, [id])
 
-  if (error) return <div><BackLink /><Center color="#e94560">{error}</Center></div>
+  if (error) return <div><BackLink /><Center className="text-status-stopped">{error}</Center></div>
   if (!app) return <Center>Loading...</Center>
 
   const inputGroups = app.inputs && app.inputs.length > 0 ? groupInputs(app.inputs) : null
@@ -200,34 +223,43 @@ function AppDetailView({ id, requireAuth }: { id: string; requireAuth: (cb: () =
   return (
     <div>
       <BackLink />
-      <div style={{ marginTop: 16, display: 'flex', alignItems: 'flex-start', gap: 20 }}>
-        <div style={{ width: 64, height: 64, borderRadius: 14, background: '#0f3460', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 28, flexShrink: 0 }}>
-          {app.icon_path ? <img src={`/api/apps/${app.id}/icon`} alt="" style={{ width: 56, height: 56, borderRadius: 10 }} /> : app.name[0]}
+      <div className="mt-4 flex items-start gap-5">
+        <div className="w-16 h-16 rounded-xl bg-bg-secondary flex items-center justify-center text-3xl shrink-0 overflow-hidden">
+          {app.icon_path ? <img src={`/api/apps/${app.id}/icon`} alt="" className="w-14 h-14 rounded-lg" /> : <span className="text-primary font-mono">{app.name[0]}</span>}
         </div>
-        <div style={{ flex: 1 }}>
-          <h1 style={{ fontSize: 24, fontWeight: 700, color: '#fff' }}>{app.name}</h1>
-          <p style={{ fontSize: 14, color: '#aaa', marginTop: 4 }}>{app.description}</p>
-          <div style={{ display: 'flex', gap: 12, marginTop: 8, fontSize: 13, color: '#888', alignItems: 'center' }}>
+        <div className="flex-1">
+          <div className="flex items-center gap-3">
+            <h1 className="text-2xl font-bold text-text-primary">{app.name}</h1>
+            {app.official && <Badge className="bg-primary/10 text-primary">official</Badge>}
+          </div>
+          <p className="text-sm text-text-secondary mt-1">{app.description}</p>
+          <div className="flex gap-3 mt-2 text-sm text-text-muted items-center font-mono">
             <span>v{app.version}</span>
             {app.license && <span>{app.license}</span>}
-            {app.homepage && <a href={app.homepage} target="_blank" rel="noreferrer" style={{ color: '#7ec8e3' }}>Homepage</a>}
+            {app.homepage && <a href={app.homepage} target="_blank" rel="noreferrer" className="text-primary hover:underline">{'>'}homepage</a>}
           </div>
         </div>
-        <button onClick={() => requireAuth(() => setShowInstall(true))} style={{ ...btnStyle, background: '#e94560', color: '#fff' }}>Install</button>
+        {appStatus?.installed ? (
+          <a href={`#/install/${appStatus.install_id}`} className="px-6 py-2.5 bg-bg-secondary border border-primary text-primary font-semibold font-mono uppercase text-sm rounded-lg hover:bg-primary/10 transition-all no-underline">Installed</a>
+        ) : appStatus?.job_active ? (
+          <a href={`#/job/${appStatus.job_id}`} className="px-6 py-2.5 bg-bg-secondary border border-status-warning text-status-warning font-semibold font-mono uppercase text-sm rounded-lg hover:bg-status-warning/10 transition-all no-underline">Installing...</a>
+        ) : (
+          <button onClick={() => requireAuth(() => setShowInstall(true))} className="px-6 py-2.5 bg-primary text-bg-primary font-semibold font-mono uppercase text-sm rounded-lg hover:shadow-[0_0_20px_rgba(0,255,157,0.3)] transition-all cursor-pointer border-none">Install</button>
+        )}
       </div>
 
       {app.overview && (
-        <div style={{ marginTop: 20, background: '#16213e', border: '1px solid #2a2a4a', borderRadius: 12, padding: 24 }}>
-          <h3 style={{ fontSize: 14, fontWeight: 600, color: '#fff', marginBottom: 12, textTransform: 'uppercase', letterSpacing: '0.5px' }}>Overview</h3>
+        <div className="mt-5 bg-bg-card border border-border rounded-lg p-6">
+          <h3 className="text-xs font-semibold text-text-muted mb-3 uppercase tracking-wider font-mono">Overview</h3>
           {app.overview.split('\n\n').map((p, i) => (
-            <p key={i} style={{ fontSize: 14, color: '#ccc', lineHeight: 1.7, marginTop: i > 0 ? 12 : 0 }}>{p}</p>
+            <p key={i} className={`text-sm text-text-secondary leading-7 ${i > 0 ? 'mt-3' : ''}`}>{p}</p>
           ))}
         </div>
       )}
 
       {showInstall && <InstallWizard app={app} onClose={() => setShowInstall(false)} />}
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 16, marginTop: 24 }}>
+      <div className="grid grid-cols-[repeat(auto-fit,minmax(280px,1fr))] gap-4 mt-6">
         <InfoCard title="Default Resources">
           <InfoRow label="OS Template" value={app.lxc.ostemplate} />
           <InfoRow label="CPU Cores" value={String(app.lxc.defaults.cores)} />
@@ -236,12 +268,34 @@ function AppDetailView({ id, requireAuth }: { id: string; requireAuth: (cb: () =
           <InfoRow label="Unprivileged" value={app.lxc.defaults.unprivileged ? 'Yes' : 'No'} />
           {app.lxc.defaults.features && app.lxc.defaults.features.length > 0 && <InfoRow label="Features" value={app.lxc.defaults.features.join(', ')} />}
         </InfoCard>
+        {app.volumes && app.volumes.length > 0 && (
+          <InfoCard title="Mounts">
+            {app.volumes.map(vol => (
+              <div key={vol.name} className="py-1.5 border-b border-border last:border-b-0">
+                <div className="flex justify-between items-center text-sm">
+                  <div className="flex items-center gap-2">
+                    <span className="text-text-primary">{vol.label || vol.name}</span>
+                    <Badge className={vol.type === 'bind' ? 'bg-status-warning/10 text-status-warning' : 'bg-primary/10 text-primary'}>
+                      {vol.type || 'volume'}
+                    </Badge>
+                    {!vol.required && <Badge className="bg-bg-secondary text-text-muted">optional</Badge>}
+                  </div>
+                  {vol.size_gb ? <span className="text-text-muted font-mono">{vol.size_gb} GB</span> : null}
+                </div>
+                <div className="text-xs text-text-muted font-mono mt-0.5">{vol.mount_path}</div>
+                {vol.default_host_path && <div className="text-xs text-text-muted font-mono">default: {vol.default_host_path}</div>}
+                {vol.description && <div className="text-xs text-text-secondary mt-0.5">{vol.description}</div>}
+              </div>
+            ))}
+            <p className="text-xs text-text-muted mt-2 italic">Managed volumes survive uninstall; bind mounts reference existing host paths.</p>
+          </InfoCard>
+        )}
         {app.gpu.supported && app.gpu.supported.length > 0 && (
           <InfoCard title="GPU Support">
             <InfoRow label="Required" value={app.gpu.required ? 'Yes' : 'No'} />
             <InfoRow label="Supported" value={app.gpu.supported.join(', ')} />
             {app.gpu.profiles && <InfoRow label="Profiles" value={app.gpu.profiles.join(', ')} />}
-            {app.gpu.notes && <p style={{ fontSize: 13, color: '#aaa', marginTop: 8 }}>{app.gpu.notes}</p>}
+            {app.gpu.notes && <p className="text-sm text-text-secondary mt-2">{app.gpu.notes}</p>}
           </InfoCard>
         )}
         {app.outputs && app.outputs.length > 0 && (
@@ -252,25 +306,25 @@ function AppDetailView({ id, requireAuth }: { id: string; requireAuth: (cb: () =
       </div>
 
       {inputGroups && (
-        <div style={{ marginTop: 24 }}>
-          <h3 style={{ fontSize: 14, fontWeight: 600, color: '#fff', marginBottom: 16, textTransform: 'uppercase', letterSpacing: '0.5px' }}>Configuration Reference</h3>
+        <div className="mt-6">
+          <h3 className="text-xs font-semibold text-text-muted mb-4 uppercase tracking-wider font-mono">Configuration Reference</h3>
           {Object.entries(inputGroups).map(([group, inputs]) => (
-            <div key={group} style={{ background: '#16213e', border: '1px solid #2a2a4a', borderRadius: 12, padding: 20, marginBottom: 12 }}>
-              <h4 style={{ fontSize: 13, color: '#7ec8e3', textTransform: 'uppercase', marginBottom: 12, letterSpacing: '0.5px' }}>{group}</h4>
+            <div key={group} className="bg-bg-card border border-border rounded-lg p-5 mb-3">
+              <h4 className="text-xs text-primary uppercase mb-3 tracking-wider font-mono">{group}</h4>
               {inputs.map(inp => (
-                <div key={inp.key} style={{ padding: '10px 0', borderBottom: '1px solid #2a2a4a' }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                      <span style={{ fontSize: 14, color: '#fff', fontWeight: 500 }}>{inp.label}</span>
-                      <Badge bg="#0f3460" color="#7ec8e3">{inp.type}</Badge>
-                      {inp.required && <Badge bg="#e9456022" color="#e94560">required</Badge>}
+                <div key={inp.key} className="py-2.5 border-b border-border last:border-b-0">
+                  <div className="flex justify-between items-center">
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm text-text-primary font-medium">{inp.label}</span>
+                      <Badge className="bg-bg-secondary text-text-secondary">{inp.type}</Badge>
+                      {inp.required && <Badge className="bg-status-stopped/10 text-status-stopped">required</Badge>}
                     </div>
                     {inp.default !== undefined && (
-                      <span style={{ fontSize: 13, color: '#888' }}>Default: <span style={{ color: '#ddd' }}>{String(inp.default)}</span></span>
+                      <span className="text-sm text-text-muted font-mono">default: <span className="text-text-secondary">{String(inp.default)}</span></span>
                     )}
                   </div>
-                  {inp.description && <p style={{ fontSize: 13, color: '#aaa', marginTop: 6, lineHeight: 1.5 }}>{inp.description}</p>}
-                  {inp.help && <p style={{ fontSize: 12, color: '#666', marginTop: 4, fontStyle: 'italic' }}>{inp.help}</p>}
+                  {inp.description && <p className="text-sm text-text-secondary mt-1.5 leading-relaxed">{inp.description}</p>}
+                  {inp.help && <p className="text-xs text-text-muted mt-1 italic">{inp.help}</p>}
                 </div>
               ))}
             </div>
@@ -279,9 +333,9 @@ function AppDetailView({ id, requireAuth }: { id: string; requireAuth: (cb: () =
       )}
 
       {readme && (
-        <div style={{ marginTop: 24, background: '#16213e', border: '1px solid #2a2a4a', borderRadius: 12, padding: 24 }}>
-          <h3 style={{ fontSize: 16, fontWeight: 600, color: '#fff', marginBottom: 12 }}>README</h3>
-          <pre style={{ fontSize: 13, color: '#ccc', whiteSpace: 'pre-wrap', lineHeight: 1.6 }}>{readme}</pre>
+        <div className="mt-6 bg-bg-card border border-border rounded-lg p-6">
+          <h3 className="text-base font-semibold text-text-primary mb-3">README</h3>
+          <pre className="text-sm text-text-secondary whitespace-pre-wrap leading-relaxed font-mono">{readme}</pre>
         </div>
       )}
     </div>
@@ -299,10 +353,28 @@ function InstallWizard({ app, onClose }: { app: AppDetail; onClose: () => void }
   const [disk, setDisk] = useState(String(app.lxc.defaults.disk_gb))
   const [storage, setStorage] = useState('')
   const [bridge, setBridge] = useState('')
+  const [hostname, setHostname] = useState('')
+  const [onboot, setOnboot] = useState(app.lxc.defaults.onboot ?? true)
+  const [unprivileged, setUnprivileged] = useState(app.lxc.defaults.unprivileged ?? true)
   const [installing, setInstalling] = useState(false)
   const [error, setError] = useState('')
   const [showAdvanced, setShowAdvanced] = useState(false)
   const [defaults, setDefaults] = useState<ConfigDefaultsResponse | null>(null)
+  const [bindMounts, setBindMounts] = useState<Record<string, string>>(() => {
+    const d: Record<string, string> = {}
+    app.volumes?.filter(v => v.type === 'bind' && v.default_host_path).forEach(v => { d[v.name] = v.default_host_path! })
+    return d
+  })
+  const [extraMounts, setExtraMounts] = useState<{ host_path: string; mount_path: string; read_only: boolean }[]>([])
+  const [storageInputMounts, setStorageInputMounts] = useState<Record<string, string>>({})
+  const [volumeStorages, setVolumeStorages] = useState<Record<string, string>>({})
+  const [volumeBindOverrides, setVolumeBindOverrides] = useState<Record<string, string>>({})
+  const [customVars, setCustomVars] = useState<{key: string; value: string}[]>([])
+  const [devices, setDevices] = useState<DevicePassthrough[]>([])
+  const [envVars] = useState<Record<string, string>>({})
+  const [envVarList, setEnvVarList] = useState<{key: string; value: string}[]>([])
+  const [browseTarget, setBrowseTarget] = useState<string | null>(null)
+  const [browseInitPath, setBrowseInitPath] = useState('/')
 
   useEffect(() => {
     api.configDefaults().then(d => {
@@ -312,17 +384,86 @@ function InstallWizard({ app, onClose }: { app: AppDetail; onClose: () => void }
     }).catch(() => {})
   }, [])
 
+  const volumeVolumes = (app.volumes || []).filter(v => (v.type || 'volume') === 'volume')
+  const bindVolumes = (app.volumes || []).filter(v => v.type === 'bind')
+  const hasMounts = volumeVolumes.length > 0 || bindVolumes.length > 0
+
+  const openBrowser = (target: string, currentPath?: string) => {
+    setBrowseTarget(target)
+    setBrowseInitPath(currentPath || '')
+  }
+
+  const handleBrowseSelect = (path: string) => {
+    if (!browseTarget) return
+    if (browseTarget.startsWith('extra-')) {
+      const idx = parseInt(browseTarget.replace('extra-', ''))
+      setExtraMounts(p => p.map((em, i) => i === idx ? { ...em, host_path: path } : em))
+    } else if (browseTarget.startsWith('storage-')) {
+      const key = browseTarget.replace('storage-', '')
+      setStorageInputMounts(p => ({ ...p, [key]: path }))
+    } else if (browseTarget.startsWith('volbind-')) {
+      const name = browseTarget.replace('volbind-', '')
+      setVolumeBindOverrides(p => ({ ...p, [name]: path }))
+    } else {
+      setBindMounts(p => ({ ...p, [browseTarget]: path }))
+    }
+    setBrowseTarget(null)
+  }
+
   const handleInstall = async () => {
     setInstalling(true); setError('')
     try {
-      const job = await api.installApp(app.id, {
+      // Merge custom variables into inputs
+      const allInputs = { ...inputs }
+      for (const cv of customVars) {
+        if (cv.key.trim()) allInputs[cv.key.trim()] = cv.value
+      }
+      const req: Record<string, unknown> = {
         cores: parseInt(cores) || undefined,
         memory_mb: parseInt(memory) || undefined,
         disk_gb: parseInt(disk) || undefined,
         storage: storage || undefined,
         bridge: bridge || undefined,
-        inputs,
-      })
+        hostname: hostname || undefined,
+        onboot,
+        unprivileged,
+        inputs: allInputs,
+      }
+      // Merge bind mounts: manifest bind volumes + volume-to-bind overrides
+      const allBindMounts = { ...bindMounts }
+      for (const [name, hp] of Object.entries(volumeBindOverrides)) {
+        if (hp) allBindMounts[name] = hp
+      }
+      if (Object.keys(allBindMounts).length > 0) req.bind_mounts = allBindMounts
+      // Per-volume storage overrides (only for volumes NOT overridden to bind)
+      const vs: Record<string, string> = {}
+      for (const [name, st] of Object.entries(volumeStorages)) {
+        if (st && st !== storage && !volumeBindOverrides[name]) vs[name] = st
+      }
+      if (Object.keys(vs).length > 0) req.volume_storages = vs
+      // Merge storage input mounts into extra mounts
+      const allExtras = [...extraMounts.filter(em => em.host_path && em.mount_path)]
+      for (const [key, hostPath] of Object.entries(storageInputMounts)) {
+        if (hostPath) {
+          const inp = app.inputs?.find(i => i.key === key)
+          allExtras.push({
+            host_path: hostPath,
+            mount_path: inputs[key] || String(inp?.default || ''),
+            read_only: false,
+          })
+        }
+      }
+      if (allExtras.length > 0) req.extra_mounts = allExtras
+      // Device passthrough
+      const validDevices = devices.filter(d => d.path.trim())
+      if (validDevices.length > 0) req.devices = validDevices
+      // Environment variables (merge overrides + custom)
+      const allEnv: Record<string, string> = { ...envVars }
+      for (const ev of envVarList) {
+        if (ev.key.trim()) allEnv[ev.key.trim()] = ev.value
+      }
+      if (Object.keys(allEnv).length > 0) req.env_vars = allEnv
+      const job = await api.installApp(app.id, req as InstallRequest)
       window.location.hash = `#/job/${job.id}`
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : 'Install failed')
@@ -330,52 +471,207 @@ function InstallWizard({ app, onClose }: { app: AppDetail; onClose: () => void }
     }
   }
 
-  const inputGroups = app.inputs && app.inputs.length > 0 ? groupInputs(app.inputs) : null
+  // Split inputs into storage-group (with path defaults) and the rest
+  // Fix 2: Skip storage inputs whose default path is under a managed volume
+  const managedMountPaths = volumeVolumes.map(v => v.mount_path)
+  const storagePathInputs: AppInput[] = []
+  const otherInputGroups: Record<string, AppInput[]> = {}
+  if (app.inputs) {
+    for (const inp of app.inputs) {
+      if (inp.group === 'Storage' && typeof inp.default === 'string' && inp.default.startsWith('/')) {
+        const isUnderManagedVolume = managedMountPaths.some(mp =>
+          inp.default === mp || (inp.default as string).startsWith(mp + '/')
+        )
+        if (!isUnderManagedVolume) {
+          storagePathInputs.push(inp)
+        }
+      } else {
+        const g = inp.group || 'General'
+        if (!otherInputGroups[g]) otherInputGroups[g] = []
+        otherInputGroups[g].push(inp)
+      }
+    }
+  }
+  const hasOtherInputs = Object.keys(otherInputGroups).length > 0
 
   return (
-    <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100 }}>
-      <div style={{ background: '#1a1a2e', border: '1px solid #2a2a4a', borderRadius: 16, padding: 32, width: '100%', maxWidth: 560, maxHeight: '90vh', overflow: 'auto' }}>
-        <h2 style={{ fontSize: 20, fontWeight: 700, color: '#fff', marginBottom: 20 }}>Install {app.name}</h2>
+    <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-[100]">
+      <div className="bg-bg-card border border-border rounded-xl p-8 w-full max-w-[560px] max-h-[90vh] overflow-auto">
+        <h2 className="text-xl font-bold text-text-primary mb-5 font-mono">Install {app.name}</h2>
 
-        <h4 style={sectionTitle}>Resources</h4>
+        <SectionTitle>Resources</SectionTitle>
         <FormRow label="CPU Cores"><FormInput value={cores} onChange={setCores} type="number" /></FormRow>
         <FormRow label="Memory (MB)"><FormInput value={memory} onChange={setMemory} type="number" /></FormRow>
-        <FormRow label="Disk (GB)"><FormInput value={disk} onChange={setDisk} type="number" /></FormRow>
+        <FormRow label="Disk (GB)" help="Root filesystem only — app data lives on separate volumes"><FormInput value={disk} onChange={setDisk} type="number" /></FormRow>
 
-        <h4 style={sectionTitle}>Networking & Storage</h4>
-        <FormRow label="Storage Pool">
+        <SectionTitle>Networking & Storage</SectionTitle>
+        <FormRow label="Storage Pool" description="Proxmox storage where the container's virtual disk will be created." help={`Disk size: ${disk} GB`}>
           {defaults && defaults.storages.length > 1 ? (
-            <select value={storage} onChange={e => setStorage(e.target.value)} style={inputStyle}>
+            <select value={storage} onChange={e => setStorage(e.target.value)} className="w-full px-3 py-2 bg-bg-secondary border border-border rounded-md text-text-primary text-sm outline-none focus:border-primary font-mono">
               {defaults.storages.map(s => <option key={s} value={s}>{s}</option>)}
             </select>
           ) : (
-            <span style={readonlyStyle}>{storage}</span>
+            <span className="block px-3 py-2 bg-bg-primary border border-border rounded-md text-text-secondary text-sm font-mono">{storage}</span>
           )}
         </FormRow>
-        <FormRow label="Network Bridge">
+        <FormRow label="Network Bridge" description="Proxmox virtual bridge that connects the container to your network." help="Container gets its own IP via DHCP on this bridge">
           {defaults && defaults.bridges.length > 1 ? (
-            <select value={bridge} onChange={e => setBridge(e.target.value)} style={inputStyle}>
+            <select value={bridge} onChange={e => setBridge(e.target.value)} className="w-full px-3 py-2 bg-bg-secondary border border-border rounded-md text-text-primary text-sm outline-none focus:border-primary font-mono">
               {defaults.bridges.map(b => <option key={b} value={b}>{b}</option>)}
             </select>
           ) : (
-            <span style={readonlyStyle}>{bridge}</span>
+            <span className="block px-3 py-2 bg-bg-primary border border-border rounded-md text-text-secondary text-sm font-mono">{bridge}</span>
           )}
         </FormRow>
 
-        {inputGroups && Object.entries(inputGroups).map(([group, groupInps]) => (
+        {/* Unified Mounts section */}
+        {(hasMounts || true) && (
+          <>
+            <SectionTitle>Mounts</SectionTitle>
+            <div className="text-[11px] text-text-muted font-mono mb-2 border-l-2 border-primary/30 pl-2">
+              Managed volumes survive container recreation. Bind mounts reference existing host paths.
+            </div>
+
+            {/* Managed volumes with toggle: PVE Volume vs Host Path */}
+            {volumeVolumes.map(vol => {
+              const isBind = volumeBindOverrides[vol.name] !== undefined
+              return (
+                <div key={vol.name} className="bg-bg-secondary rounded-lg p-3 mb-1.5">
+                  <div className="flex justify-between items-center">
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm text-text-primary">{vol.label || vol.name}</span>
+                      <span className="text-xs text-text-muted font-mono">{vol.mount_path}</span>
+                    </div>
+                    {!isBind && <span className="text-sm text-text-muted font-mono">{vol.size_gb} GB</span>}
+                  </div>
+                  <div className="flex items-center gap-2 mt-1.5">
+                    <button type="button" onClick={() => {
+                      if (isBind) {
+                        setVolumeBindOverrides(p => { const n = { ...p }; delete n[vol.name]; return n })
+                      } else {
+                        setVolumeBindOverrides(p => ({ ...p, [vol.name]: '' }))
+                      }
+                    }} className="text-[11px] text-primary bg-transparent border-none cursor-pointer p-0 font-mono hover:underline whitespace-nowrap">
+                      {isBind ? 'use pve volume' : 'use host path'}
+                    </button>
+                    {/* LVM-thin note when switching to host path on non-browsable storage */}
+                    {isBind && defaults?.storage_details && (() => {
+                      const volStorage = volumeStorages[vol.name] || storage
+                      const sd = defaults.storage_details.find(s => s.id === volStorage)
+                      if (sd && !sd.browsable) return (
+                        <span className="text-[10px] text-status-warning font-mono">
+                          {volStorage} is block storage ({sd.type}) — no host filesystem to browse
+                        </span>
+                      )
+                      return null
+                    })()}
+                    {isBind ? (
+                      <>
+                        <Badge className="bg-status-warning/10 text-status-warning">host path</Badge>
+                      </>
+                    ) : (
+                      <>
+                        {defaults && defaults.storages.length > 1 ? (
+                          <select value={volumeStorages[vol.name] || storage}
+                            onChange={e => setVolumeStorages(p => ({ ...p, [vol.name]: e.target.value }))}
+                            className="px-2 py-1 text-xs bg-bg-primary border border-border rounded text-text-primary font-mono">
+                            {defaults.storages.map(s => <option key={s} value={s}>{s}</option>)}
+                          </select>
+                        ) : (
+                          <span className="text-xs text-text-secondary font-mono">{storage}</span>
+                        )}
+                        <Badge className="bg-primary/10 text-primary">pve volume</Badge>
+                      </>
+                    )}
+                  </div>
+                  {isBind && (
+                    <div className="flex gap-2 mt-1.5">
+                      <FormInput value={volumeBindOverrides[vol.name]} onChange={v => setVolumeBindOverrides(p => ({ ...p, [vol.name]: v }))} placeholder="/host/path" />
+                      <button type="button" onClick={() => openBrowser(`volbind-${vol.name}`, volumeBindOverrides[vol.name] || '')}
+                        className="px-3 py-2 text-xs font-mono border border-border rounded-md text-text-secondary bg-bg-primary hover:border-primary hover:text-primary transition-colors cursor-pointer whitespace-nowrap">
+                        Browse
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )
+            })}
+
+            {/* Host path bind mounts from manifest */}
+            {bindVolumes.map(vol => (
+              <div key={vol.name} className="bg-bg-secondary rounded-lg p-3 mb-2">
+                <div className="flex items-center justify-between mb-1.5">
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm text-text-primary">{vol.label || vol.name}</span>
+                    <Badge className="bg-status-warning/10 text-status-warning">bind</Badge>
+                    {!vol.required && <Badge className="bg-bg-primary text-text-muted">optional</Badge>}
+                  </div>
+                </div>
+                <div className="flex gap-2 mb-1">
+                  <FormInput value={bindMounts[vol.name] || ''} onChange={v => setBindMounts(p => ({ ...p, [vol.name]: v }))} placeholder="/host/path" />
+                  <button type="button" onClick={() => openBrowser(vol.name, bindMounts[vol.name] || vol.default_host_path || '')}
+                    className="px-3 py-2 text-xs font-mono border border-border rounded-md text-text-secondary bg-bg-primary hover:border-primary hover:text-primary transition-colors cursor-pointer whitespace-nowrap">
+                    Browse
+                  </button>
+                </div>
+                <div className="text-[11px] text-text-muted font-mono">Container path: {vol.mount_path}</div>
+              </div>
+            ))}
+
+            {/* Extra user-added mounts (stacked card layout) */}
+            {extraMounts.map((em, i) => (
+              <div key={i} className="bg-bg-secondary rounded-lg p-3 mb-2">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-xs text-text-muted font-mono">Extra Path #{i + 1}</span>
+                  <button type="button" onClick={() => setExtraMounts(p => p.filter((_, j) => j !== i))}
+                    className="text-status-stopped text-sm bg-transparent border-none cursor-pointer hover:text-status-stopped/80 leading-none px-1">&times;</button>
+                </div>
+                <div className="flex gap-2 mb-1.5">
+                  <input type="text" value={em.host_path} onChange={e => setExtraMounts(p => p.map((x, j) => j === i ? { ...x, host_path: e.target.value } : x))} placeholder="/host/path"
+                    className="flex-1 px-3 py-2 bg-bg-primary border border-border rounded-md text-text-primary text-sm outline-none focus:border-primary font-mono placeholder:text-text-muted" />
+                  <button type="button" onClick={() => openBrowser(`extra-${i}`, em.host_path || '')}
+                    className="px-3 py-2 text-xs font-mono border border-border rounded-md text-text-secondary bg-bg-primary hover:border-primary hover:text-primary transition-colors cursor-pointer">
+                    Browse
+                  </button>
+                </div>
+                <div className="flex gap-2 items-center">
+                  <input type="text" value={em.mount_path} onChange={e => setExtraMounts(p => p.map((x, j) => j === i ? { ...x, mount_path: e.target.value } : x))} placeholder="/container/path"
+                    className="flex-1 px-3 py-2 bg-bg-primary border border-border rounded-md text-text-primary text-sm outline-none focus:border-primary font-mono placeholder:text-text-muted" />
+                  <label className="flex items-center gap-1.5 text-xs text-text-muted whitespace-nowrap cursor-pointer">
+                    <input type="checkbox" checked={em.read_only} onChange={e => setExtraMounts(p => p.map((x, j) => j === i ? { ...x, read_only: e.target.checked } : x))} className="w-3.5 h-3.5 accent-primary" />
+                    Read-only
+                  </label>
+                </div>
+              </div>
+            ))}
+
+            <button type="button" onClick={() => setExtraMounts(p => [...p, { host_path: '', mount_path: '', read_only: false }])}
+              className="text-primary text-xs font-mono bg-transparent border-none cursor-pointer hover:underline p-0">
+              + Add Path
+            </button>
+          </>
+        )}
+
+        {/* App inputs (non-storage-path groups) */}
+        {hasOtherInputs && (
+          <div className="mt-4 mb-1 text-[11px] text-text-muted font-mono border-l-2 border-primary/30 pl-2">
+            All app settings below apply inside the LXC container, not on the Proxmox host.
+          </div>
+        )}
+        {Object.entries(otherInputGroups).map(([group, groupInps]) => (
           <div key={group}>
-            <h4 style={sectionTitle}>{group}</h4>
+            <SectionTitle>{group}</SectionTitle>
             {groupInps.map(inp => (
               <FormRow key={inp.key} label={inp.label} help={inp.help} description={inp.description}>
                 {inp.type === 'select' && inp.validation?.enum ? (
-                  <select value={inputs[inp.key] || ''} onChange={e => setInputs(p => ({ ...p, [inp.key]: e.target.value }))} style={inputStyle}>
+                  <select value={inputs[inp.key] || ''} onChange={e => setInputs(p => ({ ...p, [inp.key]: e.target.value }))} className="w-full px-3 py-2 bg-bg-secondary border border-border rounded-md text-text-primary text-sm outline-none focus:border-primary font-mono">
                     {inp.validation.enum.map(v => <option key={v} value={v}>{v}</option>)}
                   </select>
                 ) : inp.type === 'boolean' ? (
-                  <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
+                  <label className="flex items-center gap-2 cursor-pointer">
                     <input type="checkbox" checked={inputs[inp.key] === 'true'} onChange={e => setInputs(p => ({ ...p, [inp.key]: e.target.checked ? 'true' : 'false' }))}
-                      style={{ width: 18, height: 18, accentColor: '#e94560' }} />
-                    <span style={{ fontSize: 13, color: '#aaa' }}>Enable</span>
+                      className="w-4 h-4 accent-primary" />
+                    <span className="text-sm text-text-secondary">Enable</span>
                   </label>
                 ) : (
                   <FormInput value={inputs[inp.key] || ''} onChange={v => setInputs(p => ({ ...p, [inp.key]: v }))}
@@ -386,29 +682,182 @@ function InstallWizard({ app, onClose }: { app: AppDetail; onClose: () => void }
           </div>
         ))}
 
-        <div style={{ marginTop: 20 }}>
-          <button onClick={() => setShowAdvanced(!showAdvanced)} style={{ background: 'none', border: 'none', color: '#7ec8e3', fontSize: 13, cursor: 'pointer', padding: 0 }}>
-            {showAdvanced ? 'Hide' : 'Show'} Advanced Settings
+        {/* Storage-path inputs with optional "mount externally" toggle */}
+        {storagePathInputs.length > 0 && (
+          <>
+            <SectionTitle>Storage</SectionTitle>
+            {storagePathInputs.map(inp => (
+              <div key={inp.key} className="mb-3">
+                <label className="text-sm text-text-secondary block mb-1">{inp.label}</label>
+                {inp.description && <div className="text-xs text-text-muted mb-1.5 leading-relaxed">{inp.description}</div>}
+                <FormInput value={inputs[inp.key] || ''} onChange={v => setInputs(p => ({ ...p, [inp.key]: v }))} />
+                {inp.help && <div className="text-[11px] text-text-muted mt-0.5 italic">{inp.help}</div>}
+                <div className="mt-1.5">
+                  <label className="flex items-center gap-2 text-xs text-text-muted cursor-pointer">
+                    <input type="checkbox" checked={!!storageInputMounts[inp.key]}
+                      onChange={e => {
+                        if (e.target.checked) {
+                          setStorageInputMounts(p => ({ ...p, [inp.key]: '' }))
+                        } else {
+                          setStorageInputMounts(p => { const n = { ...p }; delete n[inp.key]; return n })
+                        }
+                      }}
+                      className="w-3.5 h-3.5 accent-primary" />
+                    Mount from host path
+                  </label>
+                  {storageInputMounts[inp.key] !== undefined && (
+                    <div className="flex gap-2 mt-1.5">
+                      <FormInput value={storageInputMounts[inp.key]} onChange={v => setStorageInputMounts(p => ({ ...p, [inp.key]: v }))} placeholder="/host/path" />
+                      <button type="button" onClick={() => openBrowser(`storage-${inp.key}`, storageInputMounts[inp.key] || '')}
+                        className="px-3 py-2 text-xs font-mono border border-border rounded-md text-text-secondary bg-bg-secondary hover:border-primary hover:text-primary transition-colors cursor-pointer whitespace-nowrap">
+                        Browse
+                      </button>
+                    </div>
+                  )}
+                </div>
+              </div>
+            ))}
+          </>
+        )}
+
+        {/* Custom variables */}
+        <SectionTitle>Custom Config</SectionTitle>
+        {customVars.map((v, i) => (
+          <div key={i} className="flex gap-2 mb-1.5 items-center">
+            <input type="text" value={v.key} onChange={e => setCustomVars(p => p.map((x, j) => j === i ? { ...x, key: e.target.value } : x))} placeholder="KEY"
+              className="w-1/3 px-3 py-2 bg-bg-secondary border border-border rounded-md text-text-primary text-sm outline-none focus:border-primary font-mono placeholder:text-text-muted uppercase" />
+            <input type="text" value={v.value} onChange={e => setCustomVars(p => p.map((x, j) => j === i ? { ...x, value: e.target.value } : x))} placeholder="value"
+              className="flex-1 px-3 py-2 bg-bg-secondary border border-border rounded-md text-text-primary text-sm outline-none focus:border-primary font-mono placeholder:text-text-muted" />
+            <button type="button" onClick={() => setCustomVars(p => p.filter((_, j) => j !== i))}
+              className="text-status-stopped text-sm bg-transparent border-none cursor-pointer hover:text-status-stopped/80 leading-none px-1">&times;</button>
+          </div>
+        ))}
+        <button type="button" onClick={() => setCustomVars(p => [...p, { key: '', value: '' }])}
+          className="text-primary text-xs font-mono bg-transparent border-none cursor-pointer hover:underline p-0">
+          + Add Variable
+        </button>
+        <div className="text-[11px] text-text-muted mt-2">
+          Ports: LXC containers get their own IP — all ports are directly accessible.
+        </div>
+
+        {/* Device Passthrough */}
+        {(app.gpu.supported && app.gpu.supported.length > 0) && (
+          <>
+            <SectionTitle>Device Passthrough</SectionTitle>
+            {app.gpu.profiles && app.gpu.profiles.length > 0 && (
+              <div className="text-xs text-text-muted mb-2 font-mono">GPU profiles: {app.gpu.profiles.join(', ')}</div>
+            )}
+            <label className="flex items-center gap-2 text-xs text-text-muted cursor-pointer mb-2">
+              <input type="checkbox" checked={devices.length > 0}
+                onChange={e => {
+                  if (e.target.checked) {
+                    // Auto-populate from GPU profiles
+                    const profileDevs: DevicePassthrough[] = []
+                    for (const profile of (app.gpu.profiles || [])) {
+                      if (profile === 'dri-render') profileDevs.push({ path: '/dev/dri/renderD128', gid: 44, mode: '0666' })
+                      else if (profile === 'nvidia-basic') {
+                        profileDevs.push({ path: '/dev/nvidia0' }, { path: '/dev/nvidiactl' }, { path: '/dev/nvidia-uvm' })
+                      }
+                    }
+                    setDevices(profileDevs.length > 0 ? profileDevs : [{ path: '' }])
+                  } else setDevices([])
+                }}
+                className="w-3.5 h-3.5 accent-primary" />
+              Enable GPU/device passthrough
+            </label>
+            {devices.map((dev, i) => (
+              <div key={i} className="flex gap-2 mb-1.5 items-center">
+                <input type="text" value={dev.path} onChange={e => setDevices(p => p.map((x, j) => j === i ? { ...x, path: e.target.value } : x))} placeholder="/dev/dri/renderD128"
+                  className="flex-1 px-3 py-2 bg-bg-secondary border border-border rounded-md text-text-primary text-sm outline-none focus:border-primary font-mono placeholder:text-text-muted" />
+                <button type="button" onClick={() => setDevices(p => p.filter((_, j) => j !== i))}
+                  className="text-status-stopped text-sm bg-transparent border-none cursor-pointer hover:text-status-stopped/80 leading-none px-1">&times;</button>
+              </div>
+            ))}
+            {devices.length > 0 && (
+              <button type="button" onClick={() => setDevices(p => [...p, { path: '' }])}
+                className="text-primary text-xs font-mono bg-transparent border-none cursor-pointer hover:underline p-0">
+                + Add Device
+              </button>
+            )}
+          </>
+        )}
+
+        {/* Environment Variables */}
+        {(app.provisioning as { env?: Record<string, string> }).env && Object.keys((app.provisioning as { env?: Record<string, string> }).env || {}).length > 0 && (
+          <>
+            <SectionTitle>Environment Variables</SectionTitle>
+            <div className="text-[11px] text-text-muted font-mono mb-2 border-l-2 border-primary/30 pl-2">
+              Manifest defaults (passed to provision script):
+            </div>
+            {Object.entries((app.provisioning as { env?: Record<string, string> }).env || {}).map(([k, v]) => (
+              <div key={k} className="flex gap-2 mb-1 text-xs font-mono">
+                <span className="text-text-muted w-1/3 truncate">{k}</span>
+                <span className="text-text-secondary flex-1 truncate">{envVars[k] ?? v}</span>
+              </div>
+            ))}
+          </>
+        )}
+        {envVarList.length > 0 && (
+          <>
+            {!((app.provisioning as { env?: Record<string, string> }).env && Object.keys((app.provisioning as { env?: Record<string, string> }).env || {}).length > 0) && <SectionTitle>Environment Variables</SectionTitle>}
+            {envVarList.map((ev, i) => (
+              <div key={i} className="flex gap-2 mb-1.5 items-center">
+                <input type="text" value={ev.key} onChange={e => setEnvVarList(p => p.map((x, j) => j === i ? { ...x, key: e.target.value } : x))} placeholder="ENV_KEY"
+                  className="w-1/3 px-3 py-2 bg-bg-secondary border border-border rounded-md text-text-primary text-sm outline-none focus:border-primary font-mono placeholder:text-text-muted uppercase" />
+                <input type="text" value={ev.value} onChange={e => setEnvVarList(p => p.map((x, j) => j === i ? { ...x, value: e.target.value } : x))} placeholder="value"
+                  className="flex-1 px-3 py-2 bg-bg-secondary border border-border rounded-md text-text-primary text-sm outline-none focus:border-primary font-mono placeholder:text-text-muted" />
+                <button type="button" onClick={() => setEnvVarList(p => p.filter((_, j) => j !== i))}
+                  className="text-status-stopped text-sm bg-transparent border-none cursor-pointer hover:text-status-stopped/80 leading-none px-1">&times;</button>
+              </div>
+            ))}
+          </>
+        )}
+        <button type="button" onClick={() => setEnvVarList(p => [...p, { key: '', value: '' }])}
+          className="text-primary text-xs font-mono bg-transparent border-none cursor-pointer hover:underline p-0 mt-1">
+          + Add Env Var
+        </button>
+
+        {/* Advanced settings */}
+        <div className="mt-5">
+          <button onClick={() => setShowAdvanced(!showAdvanced)} className="bg-transparent border-none text-primary text-sm cursor-pointer p-0 font-mono hover:underline">
+            {showAdvanced ? '- hide' : '+ show'} advanced
           </button>
           {showAdvanced && (
-            <div style={{ marginTop: 12, background: '#0f3460', borderRadius: 8, padding: 16 }}>
-              <InfoRow label="OS Template" value={app.lxc.ostemplate} />
-              <InfoRow label="Unprivileged" value={app.lxc.defaults.unprivileged ? 'Yes' : 'No'} />
-              {app.lxc.defaults.features && app.lxc.defaults.features.length > 0 && <InfoRow label="Features" value={app.lxc.defaults.features.join(', ')} />}
-              <InfoRow label="Start on Boot" value={app.lxc.defaults.onboot ? 'Yes' : 'No'} />
+            <div className="mt-3 space-y-3">
+              <FormRow label="Hostname" description="Container hostname on the network" help={`Defaults to: ${app.id}`}>
+                <FormInput value={hostname} onChange={setHostname} placeholder={app.id} />
+              </FormRow>
+              <FormRow label="Start on Boot">
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input type="checkbox" checked={onboot} onChange={e => setOnboot(e.target.checked)} className="w-4 h-4 accent-primary" />
+                  <span className="text-sm text-text-secondary">Auto-start when Proxmox host boots</span>
+                </label>
+              </FormRow>
+              <FormRow label="Unprivileged">
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input type="checkbox" checked={unprivileged} onChange={e => setUnprivileged(e.target.checked)} className="w-4 h-4 accent-primary" />
+                  <span className="text-sm text-text-secondary">Run as unprivileged container (recommended)</span>
+                </label>
+              </FormRow>
+              <div className="text-[11px] text-text-muted font-mono mt-2">
+                OS: {app.lxc.ostemplate} | Features: {(app.lxc.defaults.features || []).join(', ') || 'none'}
+              </div>
             </div>
           )}
         </div>
 
-        {error && <div style={{ color: '#e94560', fontSize: 13, marginTop: 12 }}>{error}</div>}
+        {error && <div className="text-status-stopped text-sm mt-3 font-mono">{error}</div>}
 
-        <div style={{ display: 'flex', gap: 12, marginTop: 24, justifyContent: 'flex-end' }}>
-          <button onClick={onClose} style={{ ...btnStyle, background: '#333' }}>Cancel</button>
-          <button onClick={handleInstall} disabled={installing} style={{ ...btnStyle, background: '#e94560', color: '#fff', opacity: installing ? 0.6 : 1 }}>
+        <div className="flex gap-3 mt-6 justify-end">
+          <button onClick={onClose} className="px-5 py-2.5 text-sm font-semibold border border-border rounded-lg cursor-pointer text-text-secondary bg-transparent hover:border-text-secondary transition-colors font-mono">Cancel</button>
+          <button onClick={handleInstall} disabled={installing} className="px-5 py-2.5 text-sm font-semibold border-none rounded-lg cursor-pointer bg-primary text-bg-primary hover:shadow-[0_0_20px_rgba(0,255,157,0.3)] transition-all disabled:opacity-50 font-mono">
             {installing ? 'Installing...' : 'Install'}
           </button>
         </div>
       </div>
+      {browseTarget !== null && (
+        <DirectoryBrowser initialPath={browseInitPath} onSelect={handleBrowseSelect} onClose={() => setBrowseTarget(null)} />
+      )}
     </div>
   )
 }
@@ -418,46 +867,70 @@ function InstallWizard({ app, onClose }: { app: AppDetail; onClose: () => void }
 function JobView({ id }: { id: string }) {
   const [job, setJob] = useState<Job | null>(null)
   const [logs, setLogs] = useState<LogEntry[]>([])
+  const [cancelling, setCancelling] = useState(false)
+  const [cancelError, setCancelError] = useState('')
   const lastLogId = useRef(0)
   const logEndRef = useRef<HTMLDivElement>(null)
+
+  const refreshJob = useCallback(async () => {
+    try {
+      const [j, l] = await Promise.all([api.job(id), api.jobLogs(id, lastLogId.current)])
+      setJob(j)
+      if (l.logs && l.logs.length > 0) {
+        setLogs(prev => [...prev, ...l.logs])
+        lastLogId.current = l.last_id
+      }
+    } catch { /* ignore */ }
+  }, [id])
 
   useEffect(() => {
     api.job(id).then(setJob).catch(() => {})
     api.jobLogs(id).then(d => { setLogs(d.logs || []); lastLogId.current = d.last_id })
   }, [id])
 
-  // Poll for updates while job is active
   useEffect(() => {
-    if (!job || job.state === 'completed' || job.state === 'failed') return
-    const interval = setInterval(async () => {
-      try {
-        const [j, l] = await Promise.all([api.job(id), api.jobLogs(id, lastLogId.current)])
-        setJob(j)
-        if (l.logs && l.logs.length > 0) {
-          setLogs(prev => [...prev, ...l.logs])
-          lastLogId.current = l.last_id
-        }
-      } catch { /* ignore */ }
-    }, 1500)
+    if (!job || job.state === 'completed' || job.state === 'failed' || job.state === 'cancelled') return
+    const interval = setInterval(refreshJob, 1500)
     return () => clearInterval(interval)
-  }, [id, job?.state])
+  }, [id, job?.state, refreshJob])
 
   useEffect(() => { logEndRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [logs])
 
+  const handleCancel = async () => {
+    setCancelling(true)
+    setCancelError('')
+    try {
+      await api.cancelJob(id)
+      // Immediately refresh to pick up state change
+      setTimeout(refreshJob, 500)
+      setTimeout(refreshJob, 2000)
+      setTimeout(refreshJob, 5000)
+    } catch (e) {
+      setCancelError(e instanceof Error ? e.message : 'Cancel failed')
+      setCancelling(false)
+    }
+  }
+
   if (!job) return <Center>Loading...</Center>
 
-  const done = job.state === 'completed' || job.state === 'failed'
-  const stateColor = job.state === 'completed' ? '#4ade80' : job.state === 'failed' ? '#e94560' : '#f59e0b'
+  const done = job.state === 'completed' || job.state === 'failed' || job.state === 'cancelled'
 
   return (
     <div>
       <BackLink />
-      <div style={{ marginTop: 16, display: 'flex', alignItems: 'center', gap: 16 }}>
-        <h2 style={{ fontSize: 20, fontWeight: 700, color: '#fff' }}>{job.type === 'install' ? 'Installing' : 'Uninstalling'} {job.app_name}</h2>
-        <span style={{ fontSize: 13, padding: '3px 10px', borderRadius: 6, background: stateColor + '22', color: stateColor, fontWeight: 600 }}>{job.state}</span>
+      <div className="mt-4 flex items-center gap-4">
+        <h2 className="text-xl font-bold text-text-primary">{job.type === 'install' ? 'Installing' : job.type === 'uninstall' ? 'Uninstalling' : 'Reinstalling'} {job.app_name}</h2>
+        <StateBadge state={job.state} />
+        {!done && (
+          <button onClick={handleCancel} disabled={cancelling} className="ml-auto px-4 py-1.5 text-sm font-mono rounded-lg border border-status-stopped/50 text-status-stopped hover:bg-status-stopped/10 transition-colors disabled:opacity-50">
+            {cancelling ? 'Cancelling...' : 'Cancel'}
+          </button>
+        )}
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 12, marginTop: 16 }}>
+      {cancelError && <div className="mt-3 p-3 bg-status-stopped/10 border border-status-stopped/30 rounded-lg text-status-stopped text-sm font-mono">{cancelError}</div>}
+
+      <div className="grid grid-cols-[repeat(auto-fit,minmax(200px,1fr))] gap-3 mt-4">
         <InfoCard title="Job Info">
           <InfoRow label="Job ID" value={job.id} />
           <InfoRow label="CTID" value={job.ctid ? String(job.ctid) : 'pending'} />
@@ -472,18 +945,287 @@ function JobView({ id }: { id: string }) {
         )}
       </div>
 
-      {job.error && <div style={{ marginTop: 16, padding: 16, background: '#2a1a1a', border: '1px solid #e94560', borderRadius: 8, color: '#e94560', fontSize: 13 }}>{job.error}</div>}
+      {job.error && <div className="mt-4 p-4 bg-status-stopped/10 border border-status-stopped/30 rounded-lg text-status-stopped text-sm font-mono">{job.error}</div>}
 
-      <div style={{ marginTop: 20, background: '#0d1117', border: '1px solid #2a2a4a', borderRadius: 12, padding: 16, maxHeight: 400, overflow: 'auto' }}>
-        <h4 style={{ fontSize: 13, color: '#888', marginBottom: 8, textTransform: 'uppercase' }}>Logs</h4>
-        {logs.length === 0 ? <div style={{ color: '#555', fontSize: 13 }}>Waiting for logs...</div> : logs.map((l, i) => (
-          <div key={i} style={{ fontSize: 12, fontFamily: 'monospace', padding: '2px 0', color: l.level === 'error' ? '#e94560' : l.level === 'warn' ? '#f59e0b' : '#aaa' }}>
-            <span style={{ color: '#555' }}>{new Date(l.timestamp).toLocaleTimeString()} </span>
+      <div className="mt-5 bg-bg-card border border-border rounded-lg p-4 max-h-[400px] overflow-auto">
+        <h4 className="text-xs text-text-muted mb-2 uppercase font-mono tracking-wider">Logs</h4>
+        {logs.length === 0 ? <div className="text-text-muted text-sm font-mono">Waiting for logs...</div> : logs.map((l, i) => (
+          <div key={i} className={`text-xs font-mono py-0.5 ${l.level === 'error' ? 'text-status-stopped' : l.level === 'warn' ? 'text-status-warning' : 'text-text-secondary'}`}>
+            <span className="text-text-muted">{new Date(l.timestamp).toLocaleTimeString()} </span>
             {l.message}
           </div>
         ))}
         <div ref={logEndRef} />
-        {!done && <div style={{ color: '#f59e0b', fontSize: 12, marginTop: 8, fontFamily: 'monospace' }}>&#9679; Running...</div>}
+        {!done && !cancelling && <div className="text-status-warning text-xs mt-2 font-mono flex items-center gap-2"><span className="inline-block w-2 h-2 rounded-full bg-status-warning animate-pulse-glow" /> Running...</div>}
+        {!done && cancelling && <div className="text-status-stopped text-xs mt-2 font-mono flex items-center gap-2"><span className="inline-block w-2 h-2 rounded-full bg-status-stopped animate-pulse-glow" /> Cancelling...</div>}
+        {job.state === 'cancelled' && <div className="text-text-muted text-xs mt-2 font-mono flex items-center gap-2"><span className="inline-block w-2 h-2 rounded-full bg-text-muted" /> Cancelled</div>}
+      </div>
+    </div>
+  )
+}
+
+// --- Install Detail View ---
+
+function InstallDetailView({ id, requireAuth }: { id: string; requireAuth: (cb: () => void) => void }) {
+  const [detail, setDetail] = useState<InstallDetail | null>(null)
+  const [appInfo, setAppInfo] = useState<AppDetail | null>(null)
+  const [error, setError] = useState('')
+  const [uninstalling, setUninstalling] = useState(false)
+  const [reinstalling, setReinstalling] = useState(false)
+  const [showTerminal, setShowTerminal] = useState(false)
+  const [showUninstallDialog, setShowUninstallDialog] = useState(false)
+
+  const fetchDetail = useCallback(() => {
+    api.installDetail(id).then(d => {
+      setDetail(d)
+      if (!appInfo) api.app(d.app_id).then(setAppInfo).catch(() => {})
+    }).catch(e => setError(e.message))
+  }, [id, appInfo])
+
+  useEffect(() => { fetchDetail() }, [fetchDetail])
+
+  useEffect(() => {
+    if (detail?.status === 'uninstalled') return // no polling for uninstalled
+    const interval = setInterval(fetchDetail, 5000)
+    return () => clearInterval(interval)
+  }, [fetchDetail, detail?.status])
+
+  const handleUninstall = (keepVolumes: boolean) => {
+    requireAuth(async () => {
+      if (!detail) return
+      setUninstalling(true)
+      setShowUninstallDialog(false)
+      try {
+        const j = await api.uninstall(detail.id, keepVolumes)
+        window.location.hash = `#/job/${j.id}`
+      } catch (e: unknown) {
+        alert(e instanceof Error ? e.message : 'Uninstall failed')
+        setUninstalling(false)
+      }
+    })
+  }
+
+  const handleReinstall = () => {
+    requireAuth(async () => {
+      if (!detail) return
+      setReinstalling(true)
+      try {
+        const j = await api.reinstall(detail.id)
+        window.location.hash = `#/job/${j.id}`
+      } catch (e: unknown) {
+        alert(e instanceof Error ? e.message : 'Reinstall failed')
+        setReinstalling(false)
+      }
+    })
+  }
+
+  if (error) return <div><BackLink href="#/installs" label="Back to installed" /><Center className="text-status-stopped">{error}</Center></div>
+  if (!detail) return <Center>Loading...</Center>
+
+  const isUninstalled = detail.status === 'uninstalled'
+  const isRunning = !isUninstalled && (detail.live?.status === 'running' || detail.status === 'running')
+  const live = detail.live
+  const hasVolumes = detail.mount_points && detail.mount_points.length > 0
+
+  return (
+    <div>
+      <BackLink href="#/installs" label="Back to installed" />
+
+      {/* Header */}
+      <div className="mt-4 flex items-start justify-between">
+        <div className="flex items-center gap-4">
+          <div className="w-14 h-14 rounded-xl bg-bg-secondary flex items-center justify-center overflow-hidden">
+            <img src={`/api/apps/${detail.app_id}/icon`} alt="" className="w-12 h-12 rounded-lg" onError={e => { (e.target as HTMLImageElement).style.display = 'none' }} />
+          </div>
+          <div>
+            <div className="flex items-center gap-3">
+              <h1 className="text-2xl font-bold text-text-primary">{detail.app_name}</h1>
+              {detail.app_version && <span className="text-sm text-text-muted font-mono">v{detail.app_version}</span>}
+              {isUninstalled ? (
+                <Badge className="bg-status-warning/10 text-status-warning">uninstalled</Badge>
+              ) : (
+                <>
+                  <StatusDot running={isRunning} />
+                  <span className={`text-sm font-mono ${isRunning ? 'text-status-running' : 'text-status-stopped'}`}>{detail.live?.status || detail.status}</span>
+                </>
+              )}
+            </div>
+            <div className="flex items-center gap-4 mt-1 text-sm text-text-muted font-mono">
+              {detail.ctid > 0 && <span>CT {detail.ctid}</span>}
+              {detail.ip && <span>IP: <span className="text-primary">{detail.ip}</span></span>}
+              {live && live.uptime > 0 && <span>uptime: {formatUptime(live.uptime)}</span>}
+            </div>
+            <div className="flex items-center gap-3 mt-1.5 text-xs font-mono">
+              <a href={`#/app/${detail.app_id}`} className="text-primary hover:underline">App Store Page</a>
+              {appInfo?.homepage && <><span className="text-text-muted">|</span><a href={appInfo.homepage} target="_blank" rel="noreferrer" className="text-primary hover:underline">Project Homepage</a></>}
+            </div>
+          </div>
+        </div>
+        <div className="flex gap-2">
+          {isUninstalled && hasVolumes && (
+            <button onClick={handleReinstall} disabled={reinstalling} className="px-4 py-2 text-sm font-mono border-none rounded-lg cursor-pointer text-bg-primary bg-primary hover:shadow-[0_0_20px_rgba(0,255,157,0.3)] transition-all disabled:opacity-50 font-semibold">
+              {reinstalling ? 'Reinstalling...' : 'Reinstall'}
+            </button>
+          )}
+          {isRunning && (
+            <button onClick={() => setShowTerminal(true)} className="px-4 py-2 text-sm font-mono border border-border rounded-lg cursor-pointer text-text-primary bg-transparent hover:border-primary hover:text-primary transition-colors">
+              &gt;_ Shell
+            </button>
+          )}
+          {!isUninstalled && (
+            <button onClick={() => hasVolumes ? setShowUninstallDialog(true) : handleUninstall(false)} disabled={uninstalling} className="px-4 py-2 text-sm font-mono border border-status-stopped/30 rounded-lg cursor-pointer text-status-stopped bg-status-stopped/10 hover:bg-status-stopped/20 transition-colors disabled:opacity-50">
+              {uninstalling ? 'Removing...' : 'Uninstall'}
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* Uninstall dialog with keep-volumes toggle */}
+      {showUninstallDialog && detail && (
+        <UninstallDialog
+          appName={detail.app_name}
+          ctid={detail.ctid}
+          mountPoints={detail.mount_points || []}
+          onConfirm={handleUninstall}
+          onCancel={() => setShowUninstallDialog(false)}
+        />
+      )}
+
+      {/* Update available banner */}
+      {detail.update_available && (
+        <div className="mt-4 p-3 bg-status-warning/10 border border-status-warning/30 rounded-lg flex items-center gap-3">
+          <span className="text-status-warning text-sm font-mono">Update available: v{detail.app_version} &rarr; v{detail.catalog_version}</span>
+        </div>
+      )}
+
+      {/* Uninstalled with volumes banner */}
+      {isUninstalled && hasVolumes && (
+        <div className="mt-4 p-3 bg-primary/10 border border-primary/30 rounded-lg">
+          <span className="text-primary text-sm font-mono">Data preserved: {detail.mount_points!.length} volume(s) available for reinstall</span>
+        </div>
+      )}
+
+      {/* Resource cards */}
+      {live && isRunning && (
+        <div className="grid grid-cols-[repeat(auto-fit,minmax(200px,1fr))] gap-3 mt-4">
+          <ResourceCard label="CPU" value={`${(live.cpu * 100).toFixed(1)}%`} sub={`${live.cpus} core${live.cpus > 1 ? 's' : ''}`} pct={live.cpu * 100} />
+          <ResourceCard label="Memory" value={formatBytes(live.mem)} sub={formatBytes(live.maxmem)} pct={live.maxmem > 0 ? (live.mem / live.maxmem) * 100 : 0} />
+          <ResourceCard label="Disk" value={formatBytes(live.disk)} sub={formatBytes(live.maxdisk)} pct={live.maxdisk > 0 ? (live.disk / live.maxdisk) * 100 : 0} />
+          <ResourceCard label="Network" value={`${formatBytesShort(live.netin)} in`} sub={`${formatBytesShort(live.netout)} out`} />
+        </div>
+      )}
+
+      {/* Mounts */}
+      {hasVolumes && (
+        <div className="mt-4 bg-bg-card border border-border rounded-lg p-5">
+          <h3 className="text-xs font-semibold text-text-muted mb-3 uppercase tracking-wider font-mono">Mounts</h3>
+          <div className="grid grid-cols-[repeat(auto-fit,minmax(200px,1fr))] gap-3">
+            {detail.mount_points!.map(mp => (
+              <div key={mp.index} className="bg-bg-secondary rounded-lg p-3">
+                <div className="flex items-center gap-2">
+                  <span className="text-sm font-medium text-text-primary">{mp.name}</span>
+                  <Badge className={mp.type === 'bind' ? 'bg-status-warning/10 text-status-warning' : 'bg-primary/10 text-primary'}>
+                    {mp.type || 'volume'}
+                  </Badge>
+                  {mp.read_only && <Badge className="bg-bg-primary text-text-muted">ro</Badge>}
+                </div>
+                <div className="text-xs text-text-muted font-mono mt-1">{mp.mount_path}</div>
+                {mp.type === 'bind' && mp.host_path && (
+                  <div className="text-xs text-text-secondary font-mono">host: {mp.host_path}</div>
+                )}
+                {(mp.type === 'volume' || !mp.type) && (
+                  <>
+                    {mp.size_gb ? <div className="text-xs text-text-muted font-mono">{mp.size_gb} GB</div> : null}
+                    {mp.volume_id && <div className="text-xs text-primary font-mono mt-1 truncate" title={mp.volume_id}>{mp.volume_id}</div>}
+                  </>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Outputs / URLs */}
+      {detail.outputs && Object.keys(detail.outputs).length > 0 && (
+        <div className="mt-4 bg-bg-card border border-border rounded-lg p-5">
+          <h3 className="text-xs font-semibold text-text-muted mb-3 uppercase tracking-wider font-mono">Service URLs & Outputs</h3>
+          {Object.entries(detail.outputs).map(([k, v]) => {
+            const resolved = detail.ip ? v.replace(/\{\{ip\}\}/g, detail.ip) : v
+            return <InfoRow key={k} label={k} value={resolved} />
+          })}
+        </div>
+      )}
+
+      {/* Config info */}
+      <div className="grid grid-cols-[repeat(auto-fit,minmax(250px,1fr))] gap-3 mt-4">
+        <InfoCard title="Container Config">
+          <InfoRow label="CTID" value={detail.ctid > 0 ? String(detail.ctid) : '-'} />
+          <InfoRow label="Node" value={detail.node} />
+          <InfoRow label="Pool" value={detail.pool || '-'} />
+          <InfoRow label="Storage" value={detail.storage || '-'} />
+          <InfoRow label="Bridge" value={detail.bridge || '-'} />
+        </InfoCard>
+        <InfoCard title="Resources (configured)">
+          <InfoRow label="CPU Cores" value={String(detail.cores)} />
+          <InfoRow label="Memory" value={`${detail.memory_mb} MB`} />
+          <InfoRow label="Disk" value={`${detail.disk_gb} GB`} />
+        </InfoCard>
+      </div>
+
+      {showTerminal && (
+        <TerminalModal installId={detail.id} onClose={() => setShowTerminal(false)} />
+      )}
+    </div>
+  )
+}
+
+// --- Uninstall Dialog ---
+
+function UninstallDialog({ appName, ctid, mountPoints, onConfirm, onCancel }: {
+  appName: string; ctid: number; mountPoints: MountPoint[];
+  onConfirm: (keepVolumes: boolean) => void; onCancel: () => void;
+}) {
+  const [keepVolumes, setKeepVolumes] = useState(true)
+
+  return (
+    <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-[100]">
+      <div className="bg-bg-card border border-border rounded-xl p-8 w-full max-w-[480px]">
+        <h2 className="text-lg font-bold text-text-primary mb-2 font-mono">Uninstall {appName}</h2>
+        <p className="text-sm text-text-secondary mb-4">This will destroy container CT {ctid}.</p>
+
+        {mountPoints.length > 0 && (
+          <div className="mb-4">
+            <label className="flex items-center gap-3 cursor-pointer p-3 bg-bg-secondary rounded-lg">
+              <input type="checkbox" checked={keepVolumes} onChange={e => setKeepVolumes(e.target.checked)} className="w-4 h-4 accent-primary" />
+              <div>
+                <span className="text-sm text-text-primary font-medium">Keep data volumes</span>
+                <p className="text-xs text-text-muted mt-0.5">Preserve {mountPoints.length} volume(s) for future reinstall</p>
+              </div>
+            </label>
+
+            <div className="mt-3 space-y-1">
+              {mountPoints.map(mp => (
+                <div key={mp.index} className={`flex justify-between text-xs font-mono px-3 py-1.5 rounded ${keepVolumes ? 'bg-primary/10 text-primary' : 'bg-status-stopped/10 text-status-stopped'}`}>
+                  <span>{mp.name} ({mp.mount_path})</span>
+                  <span>{keepVolumes ? 'preserved' : 'destroyed'}</span>
+                </div>
+              ))}
+            </div>
+
+            {!keepVolumes && (
+              <div className="mt-3 p-2.5 bg-status-stopped/10 border border-status-stopped/30 rounded text-status-stopped text-xs font-mono">
+                Warning: This will permanently delete all data in these volumes.
+              </div>
+            )}
+          </div>
+        )}
+
+        <div className="flex gap-3 justify-end">
+          <button onClick={onCancel} className="px-5 py-2.5 text-sm font-semibold border border-border rounded-lg cursor-pointer text-text-secondary bg-transparent hover:border-text-secondary transition-colors font-mono">Cancel</button>
+          <button onClick={() => onConfirm(keepVolumes)} className="px-5 py-2.5 text-sm font-semibold border-none rounded-lg cursor-pointer bg-status-stopped text-white hover:opacity-90 transition-all font-mono">
+            Uninstall
+          </button>
+        </div>
       </div>
     </div>
   )
@@ -491,29 +1233,245 @@ function JobView({ id }: { id: string }) {
 
 // --- Installs List ---
 
-function InstallsList({ requireAuth }: { requireAuth: (cb: () => void) => void }) {
+function InstallsList(_props: { requireAuth: (cb: () => void) => void }) {
   const [installs, setInstalls] = useState<Install[]>([])
   const [loading, setLoading] = useState(true)
 
-  useEffect(() => { api.installs().then(d => { setInstalls(d.installs || []); setLoading(false) }) }, [])
+  const fetchInstalls = useCallback(async () => {
+    try {
+      const d = await api.installs()
+      setInstalls(d.installs || [])
+    } catch { /* ignore */ }
+    setLoading(false)
+  }, [])
+
+  useEffect(() => { fetchInstalls() }, [fetchInstalls])
+
+  // Poll status every 10 seconds
+  useEffect(() => {
+    const interval = setInterval(fetchInstalls, 10000)
+    return () => clearInterval(interval)
+  }, [fetchInstalls])
 
   return (
     <div>
-      <h2 style={{ fontSize: 20, fontWeight: 700, color: '#fff', marginBottom: 20 }}>Installed Apps</h2>
+      <h2 className="text-xl font-bold text-text-primary mb-5 font-mono">Installed Apps</h2>
       {loading ? <Center>Loading...</Center> : installs.length === 0 ? <Center>No apps installed</Center> : (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-          {installs.map(inst => (
-            <div key={inst.id} style={{ background: '#16213e', border: '1px solid #2a2a4a', borderRadius: 12, padding: 16, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <div>
-                <h3 style={{ fontSize: 16, fontWeight: 600, color: '#fff' }}>{inst.app_name}</h3>
-                <div style={{ fontSize: 13, color: '#888', marginTop: 4 }}>CTID: {inst.ctid} | Pool: {inst.pool} | Status: <span style={{ color: inst.status === 'running' ? '#4ade80' : '#f59e0b' }}>{inst.status}</span></div>
-              </div>
-              <button onClick={() => requireAuth(async () => { if (confirm(`Uninstall ${inst.app_name}? This will destroy container ${inst.ctid}.`)) { const j = await api.uninstall(inst.id); window.location.hash = `#/job/${j.id}` } })}
-                style={{ ...btnStyle, background: '#e9456033', color: '#e94560', fontSize: 13 }}>Uninstall</button>
-            </div>
-          ))}
+        <div className="flex flex-col gap-3">
+          {installs.map(inst => {
+            const isRunning = inst.status === 'running'
+            const isUninstalled = inst.status === 'uninstalled'
+            const hasVolumes = inst.mount_points && inst.mount_points.length > 0
+            return (
+              <a key={inst.id} href={`#/install/${inst.id}`} className={`bg-bg-card border rounded-lg p-4 no-underline text-inherit flex justify-between items-center hover:shadow-[0_0_20px_rgba(0,255,157,0.1)] transition-all group cursor-pointer ${isUninstalled ? 'border-border border-dashed opacity-75 hover:opacity-100' : 'border-border hover:border-border-hover'}`}>
+                <div className="flex items-center gap-4">
+                  <div className="w-10 h-10 rounded-lg bg-bg-secondary flex items-center justify-center overflow-hidden">
+                    <img src={`/api/apps/${inst.app_id}/icon`} alt="" className="w-8 h-8 rounded-md" onError={e => { (e.target as HTMLImageElement).style.display = 'none' }} />
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <h3 className="text-base font-semibold text-text-primary group-hover:text-primary transition-colors">{inst.app_name}</h3>
+                      {inst.app_version && <span className="text-xs text-text-muted font-mono">v{inst.app_version}</span>}
+                    </div>
+                    <div className="flex items-center gap-3 mt-1 text-xs text-text-muted font-mono">
+                      {inst.ctid > 0 && <span>CT {inst.ctid}</span>}
+                      <span>{inst.cores}c / {inst.memory_mb}MB / {inst.disk_gb}GB</span>
+                      {isUninstalled && hasVolumes && <Badge className="bg-primary/10 text-primary">{inst.mount_points!.length} vol preserved</Badge>}
+                    </div>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2">
+                  {isUninstalled ? (
+                    <Badge className="bg-status-warning/10 text-status-warning">uninstalled</Badge>
+                  ) : (
+                    <>
+                      <StatusDot running={isRunning} />
+                      <span className={`text-sm font-mono ${isRunning ? 'text-status-running' : 'text-status-stopped'}`}>{inst.status}</span>
+                    </>
+                  )}
+                </div>
+              </a>
+            )
+          })}
         </div>
       )}
+    </div>
+  )
+}
+
+// --- Config View ---
+
+function ConfigView({ requireAuth }: { requireAuth: (cb: () => void) => void }) {
+  const [defaults, setDefaults] = useState<ConfigDefaultsResponse | null>(null)
+  const [exportData, setExportData] = useState<ExportResponse | null>(null)
+  const [loading, setLoading] = useState(false)
+  const [applyYaml, setApplyYaml] = useState('')
+  const [applyPreview, setApplyPreview] = useState<ExportRecipe[] | null>(null)
+  const [applyError, setApplyError] = useState('')
+  const [applyJobs, setApplyJobs] = useState<{ app_id: string; job_id: string }[]>([])
+  const [applying, setApplying] = useState(false)
+  const [installCount, setInstallCount] = useState(0)
+
+  useEffect(() => {
+    api.configDefaults().then(setDefaults).catch(() => {})
+    api.installs().then(d => setInstallCount(d.total || 0)).catch(() => {})
+  }, [])
+
+  const handleExport = () => {
+    requireAuth(async () => {
+      setLoading(true)
+      try {
+        const data = await api.configExport()
+        setExportData(data)
+      } catch { /* ignore */ }
+      setLoading(false)
+    })
+  }
+
+  const handleDownload = () => {
+    requireAuth(() => { api.configExportDownload() })
+  }
+
+  const handleCopy = async () => {
+    if (!exportData) return
+    const yaml = exportData.recipes.map(r => JSON.stringify(r, null, 2)).join('\n\n')
+    await navigator.clipboard.writeText(yaml)
+  }
+
+  const handlePreview = () => {
+    setApplyError('')
+    setApplyPreview(null)
+    try {
+      const parsed = JSON.parse(applyYaml)
+      const recipes = Array.isArray(parsed) ? parsed : parsed.recipes || [parsed]
+      if (!Array.isArray(recipes) || recipes.length === 0) {
+        setApplyError('No recipes found. Paste a JSON array of recipes or an export object.')
+        return
+      }
+      for (const r of recipes) {
+        if (!r.app_id) { setApplyError('Each recipe must have an app_id'); return }
+      }
+      setApplyPreview(recipes)
+    } catch {
+      setApplyError('Invalid JSON. Paste the recipes array from an export.')
+    }
+  }
+
+  const handleApply = () => {
+    if (!applyPreview) return
+    requireAuth(async () => {
+      setApplying(true)
+      setApplyError('')
+      try {
+        const result = await api.configApply(applyPreview as InstallRequest[])
+        setApplyJobs(result.jobs)
+        setApplyPreview(null)
+        setApplyYaml('')
+      } catch (e: unknown) {
+        setApplyError(e instanceof Error ? e.message : 'Apply failed')
+      }
+      setApplying(false)
+    })
+  }
+
+  return (
+    <div>
+      <h2 className="text-xl font-bold text-text-primary mb-5 font-mono">Configuration</h2>
+
+      {/* Section 1: Current Setup */}
+      <InfoCard title="Current Setup">
+        {defaults && (
+          <div className="space-y-1">
+            <InfoRow label="Storages" value={defaults.storages.join(', ') || '-'} />
+            {defaults.storage_details && defaults.storage_details.length > 0 && (
+              <div className="flex gap-1.5 flex-wrap my-1">
+                {defaults.storage_details.map(sd => (
+                  <Badge key={sd.id} className={sd.browsable ? 'bg-primary/10 text-primary' : 'bg-status-warning/10 text-status-warning'}>
+                    {sd.id} ({sd.type}{sd.browsable ? '' : ', block'})
+                  </Badge>
+                ))}
+              </div>
+            )}
+            <InfoRow label="Bridges" value={defaults.bridges.join(', ') || '-'} />
+            <InfoRow label="Default Resources" value={`${defaults.defaults.cores}c / ${defaults.defaults.memory_mb}MB / ${defaults.defaults.disk_gb}GB`} />
+            <InfoRow label="Active Installs" value={String(installCount)} />
+          </div>
+        )}
+      </InfoCard>
+
+      {/* Section 2: Export */}
+      <div className="mt-4 bg-bg-card border border-border rounded-lg p-5">
+        <h3 className="text-xs font-semibold text-text-muted mb-3 uppercase tracking-wider font-mono">Export Recipes</h3>
+        <div className="flex gap-2 mb-3">
+          <button onClick={handleExport} disabled={loading} className="px-4 py-2 text-sm font-mono border-none rounded-lg cursor-pointer bg-primary text-bg-primary hover:shadow-[0_0_20px_rgba(0,255,157,0.3)] transition-all disabled:opacity-50 font-semibold">
+            {loading ? 'Exporting...' : 'Export Recipes'}
+          </button>
+          <button onClick={handleDownload} className="px-4 py-2 text-sm font-mono border border-border rounded-lg cursor-pointer text-text-secondary bg-transparent hover:border-primary hover:text-primary transition-colors">
+            Download YAML
+          </button>
+          {exportData && (
+            <button onClick={handleCopy} className="px-4 py-2 text-sm font-mono border border-border rounded-lg cursor-pointer text-text-secondary bg-transparent hover:border-primary hover:text-primary transition-colors">
+              Copy to Clipboard
+            </button>
+          )}
+        </div>
+        {exportData && (
+          <div>
+            <div className="text-xs text-text-muted font-mono mb-2">
+              Exported {exportData.recipes.length} recipe(s) from {exportData.node} at {new Date(exportData.exported_at).toLocaleString()}
+            </div>
+            <pre className="bg-bg-secondary border border-border rounded-lg p-4 text-xs font-mono text-text-secondary max-h-[400px] overflow-auto whitespace-pre-wrap">
+              {JSON.stringify(exportData.recipes, null, 2)}
+            </pre>
+          </div>
+        )}
+      </div>
+
+      {/* Section 3: Apply / Restore */}
+      <div className="mt-4 bg-bg-card border border-border rounded-lg p-5">
+        <h3 className="text-xs font-semibold text-text-muted mb-3 uppercase tracking-wider font-mono">Apply / Restore</h3>
+        <p className="text-xs text-text-muted mb-3">Paste exported recipes JSON to restore apps with the same configuration.</p>
+        <textarea value={applyYaml} onChange={e => setApplyYaml(e.target.value)} placeholder='Paste recipes JSON here...'
+          rows={6}
+          className="w-full px-3 py-2 bg-bg-secondary border border-border rounded-md text-text-primary text-sm outline-none focus:border-primary font-mono placeholder:text-text-muted resize-y" />
+        {applyError && <div className="text-status-stopped text-xs mt-2 font-mono">{applyError}</div>}
+        <div className="flex gap-2 mt-3">
+          <button onClick={handlePreview} disabled={!applyYaml.trim()} className="px-4 py-2 text-sm font-mono border border-border rounded-lg cursor-pointer text-text-secondary bg-transparent hover:border-primary hover:text-primary transition-colors disabled:opacity-50">
+            Preview
+          </button>
+          {applyPreview && (
+            <button onClick={handleApply} disabled={applying} className="px-4 py-2 text-sm font-mono border-none rounded-lg cursor-pointer bg-primary text-bg-primary hover:shadow-[0_0_20px_rgba(0,255,157,0.3)] transition-all disabled:opacity-50 font-semibold">
+              {applying ? 'Applying...' : `Apply ${applyPreview.length} Recipe(s)`}
+            </button>
+          )}
+        </div>
+
+        {applyPreview && (
+          <div className="mt-3 border border-border rounded-lg overflow-hidden">
+            <div className="bg-bg-secondary px-3 py-2 text-xs font-mono text-text-muted uppercase tracking-wider">Preview</div>
+            {applyPreview.map((r, i) => (
+              <div key={i} className="flex justify-between items-center px-3 py-2 border-t border-border">
+                <div className="flex items-center gap-2">
+                  <span className="text-sm text-text-primary font-semibold">{r.app_id}</span>
+                  <span className="text-xs text-text-muted font-mono">{r.cores}c / {r.memory_mb}MB / {r.disk_gb}GB</span>
+                </div>
+                <span className="text-xs text-text-muted font-mono">{r.storage}</span>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {applyJobs.length > 0 && (
+          <div className="mt-3 border border-primary/30 rounded-lg bg-primary/10 p-3">
+            <div className="text-xs text-primary font-mono mb-2">Jobs created:</div>
+            {applyJobs.map(j => (
+              <a key={j.job_id} href={`#/job/${j.job_id}`} className="block text-sm text-primary font-mono hover:underline py-0.5">
+                {j.app_id} &rarr; {j.job_id}
+              </a>
+            ))}
+          </div>
+        )}
+      </div>
     </div>
   )
 }
@@ -526,25 +1484,275 @@ function JobsList() {
 
   useEffect(() => { api.jobs().then(d => { setJobs(d.jobs || []); setLoading(false) }) }, [])
 
-  const stateColor = (s: string) => s === 'completed' ? '#4ade80' : s === 'failed' ? '#e94560' : '#f59e0b'
-
   return (
     <div>
-      <h2 style={{ fontSize: 20, fontWeight: 700, color: '#fff', marginBottom: 20 }}>Jobs</h2>
+      <h2 className="text-xl font-bold text-text-primary mb-5 font-mono">Jobs</h2>
       {loading ? <Center>Loading...</Center> : jobs.length === 0 ? <Center>No jobs yet</Center> : (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+        <div className="flex flex-col gap-2">
           {jobs.map(j => (
-            <a key={j.id} href={`#/job/${j.id}`} style={{ background: '#16213e', border: '1px solid #2a2a4a', borderRadius: 10, padding: 14, textDecoration: 'none', color: 'inherit', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <div>
-                <span style={{ color: '#fff', fontWeight: 600 }}>{j.app_name}</span>
-                <span style={{ color: '#888', fontSize: 13, marginLeft: 8 }}>{j.type}</span>
-                {j.ctid > 0 && <span style={{ color: '#666', fontSize: 13, marginLeft: 8 }}>CT {j.ctid}</span>}
+            <a key={j.id} href={`#/job/${j.id}`} className="bg-bg-card border border-border rounded-lg px-4 py-3 no-underline text-inherit flex justify-between items-center hover:border-border-hover transition-colors">
+              <div className="flex items-center gap-3">
+                <span className="text-text-primary font-semibold">{j.app_name}</span>
+                <span className="text-text-muted text-sm font-mono">{j.type}</span>
+                {j.ctid > 0 && <span className="text-text-muted text-sm font-mono">CT {j.ctid}</span>}
               </div>
-              <span style={{ fontSize: 12, padding: '2px 8px', borderRadius: 4, background: stateColor(j.state) + '22', color: stateColor(j.state) }}>{j.state}</span>
+              <StateBadge state={j.state} />
             </a>
           ))}
         </div>
       )}
+    </div>
+  )
+}
+
+// --- Terminal Modal (xterm.js + WebSocket) ---
+
+function TerminalModal({ installId, onClose }: { installId: string; onClose: () => void }) {
+  const termRef = useRef<HTMLDivElement>(null)
+  const termInstance = useRef<Terminal | null>(null)
+  const wsRef = useRef<WebSocket | null>(null)
+
+  useEffect(() => {
+    if (!termRef.current) return
+
+    const term = new Terminal({
+      cursorBlink: true,
+      fontFamily: "'JetBrains Mono', monospace",
+      fontSize: 14,
+      theme: {
+        background: '#0A0A0A',
+        foreground: '#00FF9D',
+        cursor: '#00FF9D',
+        selectionBackground: 'rgba(0,255,157,0.3)',
+      },
+    })
+    termInstance.current = term
+
+    const fitAddon = new FitAddon()
+    term.loadAddon(fitAddon)
+    term.loadAddon(new WebLinksAddon())
+
+    term.open(termRef.current)
+    fitAddon.fit()
+
+    // Fetch a short-lived terminal token, then connect WebSocket
+    let ws: WebSocket | null = null
+    let cancelled = false
+
+    api.terminalToken().then(({ token }) => {
+      if (cancelled) return
+
+      const wsUrl = api.terminalUrl(installId, token)
+      ws = new WebSocket(wsUrl)
+      wsRef.current = ws
+
+      ws.binaryType = 'arraybuffer'
+
+      ws.onopen = () => {
+        term.writeln('\x1b[32mConnected to container shell.\x1b[0m\r\n')
+        ws!.send(JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows }))
+      }
+
+      ws.onmessage = (event) => {
+        if (event.data instanceof ArrayBuffer) {
+          term.write(new Uint8Array(event.data))
+        } else {
+          term.write(event.data)
+        }
+      }
+
+      ws.onclose = () => {
+        term.writeln('\r\n\x1b[31mConnection closed.\x1b[0m')
+      }
+
+      ws.onerror = () => {
+        term.writeln('\r\n\x1b[31mWebSocket error.\x1b[0m')
+      }
+
+      term.onData((data) => {
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          ws.send(data)
+        }
+      })
+    }).catch(() => {
+      term.writeln('\x1b[31mFailed to get terminal token. Are you logged in?\x1b[0m')
+    })
+
+    // Handle resize
+    const handleResize = () => {
+      fitAddon.fit()
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows }))
+      }
+    }
+    window.addEventListener('resize', handleResize)
+
+    return () => {
+      cancelled = true
+      window.removeEventListener('resize', handleResize)
+      if (ws) ws.close()
+      term.dispose()
+    }
+  }, [installId])
+
+  return (
+    <div className="fixed inset-0 bg-black/95 flex flex-col z-[200]">
+      <div className="flex items-center justify-between px-4 py-2 bg-bg-card border-b border-border">
+        <span className="text-primary font-mono text-sm">&gt;_ Terminal — {installId}</span>
+        <button onClick={onClose} className="text-text-muted hover:text-text-primary bg-transparent border-none cursor-pointer text-lg font-mono">&times;</button>
+      </div>
+      <div ref={termRef} className="flex-1 p-2" />
+    </div>
+  )
+}
+
+// --- Directory Browser ---
+
+function DirectoryBrowser({ initialPath, onSelect, onClose }: { initialPath: string; onSelect: (path: string) => void; onClose: () => void }) {
+  const [path, setPath] = useState(initialPath || '')
+  const [entries, setEntries] = useState<BrowseEntry[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+  const [manualPath, setManualPath] = useState(initialPath || '')
+  const [mounts, setMounts] = useState<MountInfo[]>([])
+  const [newFolderName, setNewFolderName] = useState('')
+  const [showNewFolder, setShowNewFolder] = useState(false)
+  const [refreshKey, setRefreshKey] = useState(0)
+
+  useEffect(() => {
+    api.browseMounts().then(d => {
+      const m = d.mounts || []
+      setMounts(m)
+      // If the current path isn't under any allowed mount, redirect to the first one
+      if (m.length > 0 && !m.some(mt => path === mt.path || path.startsWith(mt.path + '/'))) {
+        setPath(m[0].path)
+        setManualPath(m[0].path)
+      }
+    }).catch(() => {})
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (!path) return // wait for mounts to resolve the initial path
+    setLoading(true)
+    setError('')
+    api.browsePaths(path).then(d => {
+      setEntries(d.entries)
+      setManualPath(d.path)
+      setLoading(false)
+    }).catch(e => {
+      setError(e instanceof Error ? e.message : 'Failed to browse')
+      setEntries([])
+      setLoading(false)
+    })
+  }, [path, refreshKey])
+
+  const handleCreateFolder = async () => {
+    if (!newFolderName.trim()) return
+    try {
+      await api.browseMkdir(path + '/' + newFolderName.trim())
+      setNewFolderName('')
+      setShowNewFolder(false)
+      setRefreshKey(k => k + 1)
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : 'Failed to create folder')
+    }
+  }
+
+  const bookmarks = mounts.map(m => ({ label: m.path, path: m.path }))
+
+  const pathSegments = path.split('/').filter(Boolean)
+
+  return (
+    <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-[150]" onClick={onClose}>
+      <div className="bg-bg-card border border-border rounded-xl p-6 w-full max-w-[500px] max-h-[70vh] flex flex-col" onClick={e => e.stopPropagation()}>
+        <h3 className="text-sm font-bold text-text-primary mb-3 font-mono">Browse Host Path</h3>
+
+        {/* Bookmark chips */}
+        <div className="flex gap-1.5 mb-3 flex-wrap">
+          {bookmarks.map(bm => (
+            <button key={bm.path} onClick={() => setPath(bm.path)}
+              className={`px-2.5 py-1 text-[11px] font-mono rounded-md border cursor-pointer transition-colors ${
+                path.startsWith(bm.path) ? 'border-primary text-primary bg-primary/10' : 'border-border text-text-muted bg-bg-secondary hover:border-primary hover:text-primary'
+              }`}>
+              {bm.label}
+            </button>
+          ))}
+        </div>
+
+        <div className="flex gap-2 mb-3">
+          <input type="text" value={manualPath} onChange={e => setManualPath(e.target.value)}
+            onKeyDown={e => { if (e.key === 'Enter') setPath(manualPath) }}
+            className="flex-1 px-3 py-1.5 bg-bg-secondary border border-border rounded-md text-text-primary text-xs outline-none focus:border-primary font-mono" />
+          <button onClick={() => setPath(manualPath)} className="px-3 py-1.5 text-xs font-mono border border-border rounded-md text-text-secondary bg-bg-secondary hover:border-primary hover:text-primary transition-colors cursor-pointer">Go</button>
+        </div>
+
+        <div className="flex items-center gap-1 mb-2 text-xs font-mono flex-wrap">
+          <button onClick={() => setPath('/')} className="text-primary hover:underline bg-transparent border-none cursor-pointer p-0 font-mono text-xs">/</button>
+          {pathSegments.map((seg, i) => (
+            <span key={i} className="flex items-center gap-1">
+              <span className="text-text-muted">/</span>
+              <button onClick={() => setPath('/' + pathSegments.slice(0, i + 1).join('/'))}
+                className="text-primary hover:underline bg-transparent border-none cursor-pointer p-0 font-mono text-xs">{seg}</button>
+            </span>
+          ))}
+        </div>
+
+        <div className="flex-1 overflow-auto border border-border rounded-md bg-bg-secondary">
+          {loading ? (
+            <div className="p-4 text-text-muted text-xs font-mono">Loading...</div>
+          ) : error ? (
+            <div className="p-4 text-status-stopped text-xs font-mono">{error}</div>
+          ) : (
+            <>
+              {path !== '/' && (
+                <button onClick={() => setPath(path.replace(/\/[^/]+\/?$/, '') || '/')}
+                  className="w-full text-left px-3 py-1.5 text-xs font-mono text-primary hover:bg-primary/10 transition-colors bg-transparent border-none border-b border-border cursor-pointer flex items-center gap-2">
+                  <span className="text-text-muted">..</span> <span className="text-text-secondary">(up)</span>
+                </button>
+              )}
+              {entries.filter(e => e.is_dir).map(entry => (
+                <button key={entry.path} onClick={() => setPath(entry.path)}
+                  className="w-full text-left px-3 py-1.5 text-xs font-mono text-text-primary hover:bg-primary/10 transition-colors bg-transparent border-none cursor-pointer flex items-center gap-2">
+                  <span className="text-primary">&#128193;</span> {entry.name}/
+                </button>
+              ))}
+              {entries.filter(e => !e.is_dir).map(entry => (
+                <div key={entry.path} className="px-3 py-1.5 text-xs font-mono text-text-muted flex items-center gap-2">
+                  <span>&#128196;</span> {entry.name}
+                </div>
+              ))}
+              {entries.length === 0 && !error && (
+                <div className="p-4 text-text-muted text-xs font-mono italic">Empty directory</div>
+              )}
+            </>
+          )}
+        </div>
+
+        {/* New Folder inline */}
+        <div className="mt-2 flex items-center gap-2">
+          {showNewFolder ? (
+            <>
+              <input type="text" value={newFolderName} onChange={e => setNewFolderName(e.target.value)}
+                onKeyDown={e => { if (e.key === 'Enter') handleCreateFolder(); if (e.key === 'Escape') { setShowNewFolder(false); setNewFolderName('') } }}
+                placeholder="folder name" autoFocus
+                className="flex-1 px-3 py-1.5 bg-bg-secondary border border-border rounded-md text-text-primary text-xs outline-none focus:border-primary font-mono placeholder:text-text-muted" />
+              <button onClick={handleCreateFolder} className="px-3 py-1.5 text-xs font-mono border-none rounded-md text-bg-primary bg-primary cursor-pointer hover:shadow-[0_0_10px_rgba(0,255,157,0.3)] transition-all">Create</button>
+              <button onClick={() => { setShowNewFolder(false); setNewFolderName('') }} className="px-2 py-1.5 text-xs font-mono text-text-muted bg-transparent border-none cursor-pointer hover:text-text-primary">&times;</button>
+            </>
+          ) : (
+            <button onClick={() => setShowNewFolder(true)} className="text-primary text-xs font-mono bg-transparent border-none cursor-pointer hover:underline p-0">
+              + New Folder
+            </button>
+          )}
+        </div>
+
+        <div className="flex gap-3 mt-4 justify-end">
+          <button onClick={onClose} className="px-4 py-2 text-xs font-semibold border border-border rounded-lg cursor-pointer text-text-secondary bg-transparent hover:border-text-secondary transition-colors font-mono">Cancel</button>
+          <button onClick={() => onSelect(path)} className="px-4 py-2 text-xs font-semibold border-none rounded-lg cursor-pointer bg-primary text-bg-primary hover:shadow-[0_0_20px_rgba(0,255,157,0.3)] transition-all font-mono">
+            Select: {path}
+          </button>
+        </div>
+      </div>
     </div>
   )
 }
@@ -569,15 +1777,15 @@ function LoginModal({ onSuccess, onClose }: { onSuccess: () => void; onClose: ()
   }
 
   return (
-    <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 200 }}>
-      <form onSubmit={handleSubmit} style={{ background: '#1a1a2e', border: '1px solid #2a2a4a', borderRadius: 16, padding: 32, width: '100%', maxWidth: 380 }}>
-        <h2 style={{ fontSize: 18, fontWeight: 700, color: '#fff', marginBottom: 8 }}>Login Required</h2>
-        <p style={{ fontSize: 13, color: '#888', marginBottom: 20 }}>Enter your password to perform this action.</p>
+    <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-[200]">
+      <form onSubmit={handleSubmit} className="bg-bg-card border border-border rounded-xl p-8 w-full max-w-[380px]">
+        <h2 className="text-lg font-bold text-text-primary mb-2 font-mono">Login Required</h2>
+        <p className="text-sm text-text-muted mb-5">Enter your password to perform this action.</p>
         <FormInput value={password} onChange={setPassword} type="password" />
-        {error && <div style={{ color: '#e94560', fontSize: 13, marginTop: 8 }}>{error}</div>}
-        <div style={{ display: 'flex', gap: 12, marginTop: 20, justifyContent: 'flex-end' }}>
-          <button type="button" onClick={onClose} style={{ ...btnStyle, background: '#333' }}>Cancel</button>
-          <button type="submit" disabled={loading || !password} style={{ ...btnStyle, background: '#e94560', color: '#fff', opacity: loading || !password ? 0.6 : 1 }}>
+        {error && <div className="text-status-stopped text-sm mt-2 font-mono">{error}</div>}
+        <div className="flex gap-3 mt-5 justify-end">
+          <button type="button" onClick={onClose} className="px-5 py-2.5 text-sm font-semibold border border-border rounded-lg cursor-pointer text-text-secondary bg-transparent hover:border-text-secondary transition-colors font-mono">Cancel</button>
+          <button type="submit" disabled={loading || !password} className="px-5 py-2.5 text-sm font-semibold border-none rounded-lg cursor-pointer bg-primary text-bg-primary hover:shadow-[0_0_20px_rgba(0,255,157,0.3)] transition-all disabled:opacity-50 font-mono">
             {loading ? 'Logging in...' : 'Login'}
           </button>
         </div>
@@ -588,22 +1796,46 @@ function LoginModal({ onSuccess, onClose }: { onSuccess: () => void; onClose: ()
 
 // --- Shared Components ---
 
-function Center({ children, color }: { children: React.ReactNode; color?: string }) {
-  return <div style={{ textAlign: 'center', padding: 48, color: color || '#666' }}>{children}</div>
+function Center({ children, className }: { children: React.ReactNode; className?: string }) {
+  return <div className={`text-center py-12 text-text-muted ${className || ''}`}>{children}</div>
 }
 
-function BackLink() {
-  return <a href="#/" style={{ color: '#7ec8e3', fontSize: 14, textDecoration: 'none' }}>Back to apps</a>
+function BackLink({ href = '#/', label = 'Back to apps' }: { href?: string; label?: string }) {
+  return <a href={href} className="text-primary text-sm no-underline font-mono hover:underline">&larr; {label}</a>
 }
 
-function Badge({ children, bg, color }: { children: React.ReactNode; bg: string; color: string }) {
-  return <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 4, background: bg, color }}>{children}</span>
+function Badge({ children, className }: { children: React.ReactNode; className?: string }) {
+  return <span className={`text-[11px] px-2 py-0.5 rounded font-mono ${className || ''}`}>{children}</span>
+}
+
+function StatusDot({ running }: { running: boolean }) {
+  return <span className={`inline-block w-2.5 h-2.5 rounded-full ${running ? 'bg-status-running animate-pulse-glow text-status-running' : 'bg-status-stopped'}`} />
+}
+
+function StateBadge({ state }: { state: string }) {
+  const cls = state === 'completed' ? 'bg-status-running/10 text-status-running' : state === 'failed' ? 'bg-status-stopped/10 text-status-stopped' : state === 'cancelled' ? 'bg-text-muted/10 text-text-muted' : 'bg-status-warning/10 text-status-warning'
+  return <span className={`text-xs px-2.5 py-1 rounded font-mono font-semibold ${cls}`}>{state}</span>
+}
+
+function ResourceCard({ label, value, sub, pct }: { label: string; value: string; sub?: string; pct?: number }) {
+  return (
+    <div className="bg-bg-card border border-border rounded-lg p-4">
+      <div className="text-xs text-text-muted uppercase font-mono tracking-wider mb-2">{label}</div>
+      <div className="text-xl font-bold text-text-primary font-mono">{value}</div>
+      {sub && <div className="text-xs text-text-muted font-mono mt-1">/ {sub}</div>}
+      {pct !== undefined && (
+        <div className="mt-2 h-1.5 bg-bg-secondary rounded-full overflow-hidden">
+          <div className={`h-full rounded-full transition-all duration-500 ${pct > 80 ? 'bg-status-stopped' : pct > 50 ? 'bg-status-warning' : 'bg-primary'}`} style={{ width: `${Math.min(pct, 100)}%` }} />
+        </div>
+      )}
+    </div>
+  )
 }
 
 function InfoCard({ title, children }: { title: string; children: React.ReactNode }) {
   return (
-    <div style={{ background: '#16213e', border: '1px solid #2a2a4a', borderRadius: 12, padding: 20 }}>
-      <h3 style={{ fontSize: 14, fontWeight: 600, color: '#fff', marginBottom: 12, textTransform: 'uppercase', letterSpacing: '0.5px' }}>{title}</h3>
+    <div className="bg-bg-card border border-border rounded-lg p-5">
+      <h3 className="text-xs font-semibold text-text-muted mb-3 uppercase tracking-wider font-mono">{title}</h3>
       {children}
     </div>
   )
@@ -614,38 +1846,62 @@ function Linkify({ text }: { text: string }) {
   const parts = text.split(urlRegex)
   if (parts.length === 1) return <>{text}</>
   return <>{parts.map((part, i) => urlRegex.test(part)
-    ? <a key={i} href={part} target="_blank" rel="noreferrer" style={{ color: '#7ec8e3', textDecoration: 'underline' }}>{part}</a>
+    ? <a key={i} href={part} target="_blank" rel="noreferrer" className="text-primary hover:underline">{part}</a>
     : part
   )}</>
 }
 
 function InfoRow({ label, value }: { label: string; value: string }) {
   return (
-    <div style={{ display: 'flex', justifyContent: 'space-between', padding: '4px 0', fontSize: 13 }}>
-      <span style={{ color: '#888' }}>{label}</span>
-      <span style={{ color: '#ddd', textAlign: 'right', wordBreak: 'break-all' }}><Linkify text={value} /></span>
+    <div className="flex justify-between py-1 text-sm">
+      <span className="text-text-muted">{label}</span>
+      <span className="text-text-secondary text-right break-all"><Linkify text={value} /></span>
     </div>
   )
+}
+
+function SectionTitle({ children }: { children: React.ReactNode }) {
+  return <h4 className="text-xs text-primary uppercase mt-5 mb-2 tracking-wider font-mono">{children}</h4>
 }
 
 function FormRow({ label, help, description, children }: { label: string; help?: string; description?: string; children: React.ReactNode }) {
   return (
-    <div style={{ marginBottom: 12 }}>
-      <label style={{ fontSize: 13, color: '#aaa', display: 'block', marginBottom: 4 }}>{label}</label>
-      {description && <div style={{ fontSize: 12, color: '#888', marginBottom: 6, lineHeight: 1.4 }}>{description}</div>}
+    <div className="mb-3">
+      <label className="text-sm text-text-secondary block mb-1">{label}</label>
+      {description && <div className="text-xs text-text-muted mb-1.5 leading-relaxed">{description}</div>}
       {children}
-      {help && <div style={{ fontSize: 11, color: '#666', marginTop: 2, fontStyle: 'italic' }}>{help}</div>}
+      {help && <div className="text-[11px] text-text-muted mt-0.5 italic">{help}</div>}
     </div>
   )
 }
 
-function FormInput({ value, onChange, type = 'text' }: { value: string; onChange: (v: string) => void; type?: string }) {
-  return <input type={type} value={value} onChange={e => onChange(e.target.value)} style={inputStyle} />
+function FormInput({ value, onChange, type = 'text', placeholder }: { value: string; onChange: (v: string) => void; type?: string; placeholder?: string }) {
+  return <input type={type} value={value} onChange={e => onChange(e.target.value)} placeholder={placeholder} className="w-full px-3 py-2 bg-bg-secondary border border-border rounded-md text-text-primary text-sm outline-none focus:border-primary focus:ring-1 focus:ring-primary transition-colors font-mono placeholder:text-text-muted" />
 }
 
-const inputStyle: React.CSSProperties = { width: '100%', padding: '8px 12px', background: '#0f3460', border: '1px solid #2a2a4a', borderRadius: 6, color: '#fff', fontSize: 14, outline: 'none' }
-const readonlyStyle: React.CSSProperties = { display: 'block', padding: '8px 12px', background: '#0a2240', border: '1px solid #2a2a4a', borderRadius: 6, color: '#aaa', fontSize: 14 }
-const btnStyle: React.CSSProperties = { padding: '10px 24px', fontSize: 14, fontWeight: 600, border: 'none', borderRadius: 8, cursor: 'pointer', color: '#ddd' }
-const sectionTitle: React.CSSProperties = { fontSize: 13, color: '#7ec8e3', textTransform: 'uppercase', marginTop: 20, marginBottom: 8, letterSpacing: '0.5px' }
+// --- Helpers ---
+
+function formatUptime(seconds: number): string {
+  const d = Math.floor(seconds / 86400)
+  const h = Math.floor((seconds % 86400) / 3600)
+  const m = Math.floor((seconds % 3600) / 60)
+  if (d > 0) return `${d}d ${h}h`
+  if (h > 0) return `${h}h ${m}m`
+  return `${m}m`
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes === 0) return '0 B'
+  const units = ['B', 'KB', 'MB', 'GB', 'TB']
+  const i = Math.floor(Math.log(bytes) / Math.log(1024))
+  return `${(bytes / Math.pow(1024, i)).toFixed(1)} ${units[i]}`
+}
+
+function formatBytesShort(bytes: number): string {
+  if (bytes === 0) return '0B'
+  const units = ['B', 'K', 'M', 'G', 'T']
+  const i = Math.floor(Math.log(bytes) / Math.log(1024))
+  return `${(bytes / Math.pow(1024, i)).toFixed(1)}${units[i]}`
+}
 
 export default App

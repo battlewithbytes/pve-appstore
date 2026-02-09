@@ -21,16 +21,26 @@ license: MIT
 maintainers:
   - PVE App Store
 
+official: true
 lxc:
   ostemplate: debian-12
   defaults:
     unprivileged: true
     cores: 4
     memory_mb: 8192
-    disk_gb: 50
+    disk_gb: 8
     features:
       - nesting
     onboot: true
+
+volumes:
+  - name: models
+    type: volume
+    mount_path: /usr/share/ollama/.ollama/models
+    size_gb: 50
+    label: Model Storage
+    required: true
+    description: Downloaded LLM model files
 
 inputs:
   - key: model

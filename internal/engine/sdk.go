@@ -167,15 +167,14 @@ func pushPermissionsJSON(ctid int, cm ContainerManager, perms catalog.Permission
 }
 
 // buildProvisionCommand builds the command to run a Python provisioning script
-// via the SDK runner.
-func buildProvisionCommand(scriptName, action string) []string {
+// via the SDK runner. Extra environment variables are passed to the container.
+func buildProvisionCommand(scriptName, action string, envVars map[string]string) []string {
 	scriptPath := provisionTargetDir + "/" + filepath.Base(scriptName)
-	return []string{
-		"env", "PYTHONPATH=" + sdkTargetDir,
-		"python3", "-m", "appstore.runner",
-		inputsPath,
-		permissionsPath,
-		action,
-		scriptPath,
+	cmd := []string{"env", "PYTHONPATH=" + sdkTargetDir, "PYTHONUNBUFFERED=1"}
+	for k, v := range envVars {
+		cmd = append(cmd, k+"="+v)
 	}
+	cmd = append(cmd, "python3", "-u", "-m", "appstore.runner",
+		inputsPath, permissionsPath, action, scriptPath)
+	return cmd
 }

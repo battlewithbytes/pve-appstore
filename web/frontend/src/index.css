@@ -1,0 +1,44 @@
+@import "tailwindcss";
+
+@theme {
+  --color-primary: #00FF9D;
+  --color-primary-dim: #00CC7D;
+  --color-bg-primary: #0A0A0A;
+  --color-bg-secondary: #111827;
+  --color-bg-card: #0D1117;
+  --color-border: #1F2937;
+  --color-border-hover: #00FF9D;
+  --color-text-primary: #EDEDED;
+  --color-text-secondary: #9CA3AF;
+  --color-text-muted: #6B7280;
+  --color-status-running: #00FF9D;
+  --color-status-stopped: #FF4D4D;
+  --color-status-warning: #FFB800;
+  --font-sans: 'Inter', ui-sans-serif, system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, monospace;
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: #0A0A0A;
+}
+::-webkit-scrollbar-thumb {
+  background: #1F2937;
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #374151;
+}
+
+/* Pulse glow animation for status dots */
+@keyframes pulse-glow {
+  0%, 100% { opacity: 1; box-shadow: 0 0 4px currentColor; }
+  50% { opacity: 0.6; box-shadow: 0 0 8px currentColor; }
+}
+.animate-pulse-glow {
+  animation: pulse-glow 2s ease-in-out infinite;
+}

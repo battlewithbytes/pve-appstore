@@ -21,6 +21,7 @@ license: BSD-2-Clause
 maintainers:
   - PVE App Store
 
+official: true
 lxc:
   ostemplate: debian-12
   defaults:

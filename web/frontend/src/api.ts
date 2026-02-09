@@ -1,4 +1,4 @@
-import type { AppsResponse, AppDetail, CategoriesResponse, HealthResponse, JobsResponse, LogsResponse, InstallsResponse, InstallRequest, Job, ConfigDefaultsResponse } from './types';
+import type { AppsResponse, AppDetail, CategoriesResponse, HealthResponse, JobsResponse, LogsResponse, InstallsResponse, InstallRequest, InstallDetail, Job, ConfigDefaultsResponse, BrowseResponse, MountInfo, ExportResponse, ApplyResponse, AppStatusResponse } from './types';
 
 const BASE = '/api';
 
@@ -27,6 +27,8 @@ export const api = {
 
   categories: () => fetchJSON<CategoriesResponse>(`${BASE}/categories`),
 
+  appStatus: (id: string) => fetchJSON<AppStatusResponse>(`${BASE}/apps/${id}/status`),
+
   appReadme: async (id: string): Promise<string> => {
     const res = await fetch(`${BASE}/apps/${id}/readme`);
     if (!res.ok) return '';
@@ -44,6 +46,9 @@ export const api = {
 
   job: (id: string) => fetchJSON<Job>(`${BASE}/jobs/${id}`),
 
+  cancelJob: (id: string) =>
+    fetchJSON<{ status: string; job_id: string }>(`${BASE}/jobs/${id}/cancel`, { method: 'POST' }),
+
   jobLogs: (id: string, after?: number) => {
     const qs = after ? `?after=${after}` : '';
     return fetchJSON<LogsResponse>(`${BASE}/jobs/${id}/logs${qs}`);
@@ -51,10 +56,52 @@ export const api = {
 
   configDefaults: () => fetchJSON<ConfigDefaultsResponse>(`${BASE}/config/defaults`),
 
+  browsePaths: (path?: string) => {
+    const qs = path ? `?path=${encodeURIComponent(path)}` : '';
+    return fetchJSON<BrowseResponse>(`${BASE}/browse/paths${qs}`);
+  },
+
+  browseStorages: () => fetchJSON<{ storages: string[] }>(`${BASE}/browse/storages`),
+
+  browseMounts: () => fetchJSON<{ mounts: MountInfo[] }>(`${BASE}/browse/mounts`),
+
+  browseMkdir: (path: string) =>
+    fetchJSON<{ path: string; created: boolean }>(`${BASE}/browse/mkdir`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path }),
+    }),
+
   installs: () => fetchJSON<InstallsResponse>(`${BASE}/installs`),
 
-  uninstall: (id: string) =>
-    fetchJSON<Job>(`${BASE}/installs/${id}/uninstall`, { method: 'POST' }),
+  installDetail: (id: string) => fetchJSON<InstallDetail>(`${BASE}/installs/${id}`),
+
+  uninstall: (id: string, keepVolumes?: boolean) =>
+    fetchJSON<Job>(`${BASE}/installs/${id}/uninstall`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ keep_volumes: keepVolumes }),
+    }),
+
+  reinstall: (id: string, overrides?: { cores?: number; memory_mb?: number; disk_gb?: number; storage?: string; bridge?: string; inputs?: Record<string, string> }) =>
+    fetchJSON<Job>(`${BASE}/installs/${id}/reinstall`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(overrides || {}),
+    }),
+
+  configExport: () => fetchJSON<ExportResponse>(`${BASE}/config/export`),
+
+  configExportDownload: () => {
+    window.open(`${BASE}/config/export/download`, '_blank')
+  },
+
+  configApply: (recipes: InstallRequest[]) =>
+    fetchJSON<ApplyResponse>(`${BASE}/config/apply`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ recipes }),
+    }),
 
   authCheck: () => fetchJSON<{ authenticated: boolean; auth_required: boolean }>(`${BASE}/auth/check`),
 
@@ -67,4 +114,12 @@ export const api = {
 
   logout: () =>
     fetchJSON<{ status: string }>(`${BASE}/auth/logout`, { method: 'POST' }),
+
+  terminalToken: () =>
+    fetchJSON<{ token: string }>(`${BASE}/auth/terminal-token`, { method: 'POST' }),
+
+  terminalUrl: (id: string, token: string) => {
+    const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    return `${proto}//${window.location.host}${BASE}/installs/${id}/terminal?token=${encodeURIComponent(token)}`;
+  },
 };

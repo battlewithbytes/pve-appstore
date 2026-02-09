@@ -21,16 +21,33 @@ license: GPL-2.0
 maintainers:
   - PVE App Store
 
+official: true
 lxc:
   ostemplate: debian-12
   defaults:
     unprivileged: true
     cores: 2
     memory_mb: 4096
-    disk_gb: 20
+    disk_gb: 4
     features:
       - nesting
     onboot: true
+
+volumes:
+  - name: config-data
+    type: volume
+    mount_path: /var/lib/jellyfin
+    size_gb: 2
+    label: Jellyfin Data
+    required: true
+    description: Application config and database
+  - name: media
+    type: bind
+    mount_path: /mnt/media
+    label: Media Library
+    default_host_path: /mnt/storage/media
+    required: false
+    description: Map your media library folder (movies, TV, music)
 
 inputs:
   - key: media_path

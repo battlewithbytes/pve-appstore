@@ -7,6 +7,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/battlewithbytes/pve-appstore/internal/engine"
 )
 
 const defaultTaskTimeout = 5 * time.Minute
@@ -26,6 +28,8 @@ type ContainerCreateOptions struct {
 	Features     []string
 	OnBoot       bool
 	Tags         string
+	MountPoints  []engine.MountPointOption
+	Devices      []engine.DevicePassthrough
 }
 
 // Create creates a new LXC container via the Proxmox API.
@@ -59,6 +63,40 @@ func (c *Client) Create(ctx context.Context, opts ContainerCreateOptions) error 
 	}
 	if opts.Tags != "" {
 		params.Set("tags", opts.Tags)
+	}
+
+	// Mount points
+	for _, mp := range opts.MountPoints {
+		key := fmt.Sprintf("mp%d", mp.Index)
+		var val string
+		switch {
+		case mp.Type == "bind":
+			// Bind mount: mp0=/host/path,mp=/container/path[,ro=1]
+			val = fmt.Sprintf("%s,mp=%s", mp.HostPath, mp.MountPath)
+			if mp.ReadOnly {
+				val += ",ro=1"
+			}
+		case mp.VolumeID != "":
+			// Reattach existing managed volume
+			val = fmt.Sprintf("%s,mp=%s", mp.VolumeID, mp.MountPath)
+		default:
+			// New managed volume
+			val = fmt.Sprintf("%s:%d,mp=%s", mp.Storage, mp.SizeGB, mp.MountPath)
+		}
+		params.Set(key, val)
+	}
+
+	// Device passthrough (e.g. GPU)
+	for i, dev := range opts.Devices {
+		key := fmt.Sprintf("dev%d", i)
+		val := dev.Path
+		if dev.GID > 0 {
+			val += fmt.Sprintf(",gid=%d", dev.GID)
+		}
+		if dev.Mode != "" {
+			val += fmt.Sprintf(",mode=%s", dev.Mode)
+		}
+		params.Set(key, val)
 	}
 
 	path := fmt.Sprintf("/nodes/%s/lxc", c.node)
@@ -145,4 +183,49 @@ func (c *Client) Status(ctx context.Context, ctid int) (string, error) {
 		return "", fmt.Errorf("getting status of container %d: %w", ctid, err)
 	}
 	return cs.Status, nil
+}
+
+// containerStatusDetail holds the full response from /status/current.
+type containerStatusDetail struct {
+	Status  string  `json:"status"`
+	Uptime  int64   `json:"uptime"`
+	CPU     float64 `json:"cpu"`
+	CPUs    int     `json:"cpus"`
+	Mem     int64   `json:"mem"`
+	MaxMem  int64   `json:"maxmem"`
+	Disk    int64   `json:"disk"`
+	MaxDisk int64   `json:"maxdisk"`
+	NetIn   int64   `json:"netin"`
+	NetOut  int64   `json:"netout"`
+}
+
+// StatusDetail returns detailed runtime stats for a container.
+func (c *Client) StatusDetail(ctx context.Context, ctid int) (*containerStatusDetail, error) {
+	path := fmt.Sprintf("/nodes/%s/lxc/%d/status/current", c.node, ctid)
+	var cs containerStatusDetail
+	if err := c.doRequest(ctx, "GET", path, nil, &cs); err != nil {
+		return nil, fmt.Errorf("getting status detail of container %d: %w", ctid, err)
+	}
+	return &cs, nil
+}
+
+// GetConfig returns the full config of a container as a key-value map.
+func (c *Client) GetConfig(ctx context.Context, ctid int) (map[string]interface{}, error) {
+	path := fmt.Sprintf("/nodes/%s/lxc/%d/config", c.node, ctid)
+	var config map[string]interface{}
+	if err := c.doRequest(ctx, "GET", path, nil, &config); err != nil {
+		return nil, fmt.Errorf("getting config of container %d: %w", ctid, err)
+	}
+	return config, nil
+}
+
+// DetachMountPoints removes mount point entries from container config without destroying volumes.
+func (c *Client) DetachMountPoints(ctx context.Context, ctid int, indexes []int) error {
+	path := fmt.Sprintf("/nodes/%s/lxc/%d/config", c.node, ctid)
+	deleteKeys := make([]string, len(indexes))
+	for i, idx := range indexes {
+		deleteKeys[i] = fmt.Sprintf("mp%d", idx)
+	}
+	params := url.Values{"delete": {strings.Join(deleteKeys, ",")}}
+	return c.doRequest(ctx, "PUT", path, params, nil)
 }

@@ -85,30 +85,95 @@ func (s *Store) migrate() error {
 			created_at TEXT NOT NULL
 		);
 	`)
-	return err
+	if err != nil {
+		return err
+	}
+
+	// Idempotent migrations for enriched install fields
+	alterStmts := []string{
+		"ALTER TABLE installs ADD COLUMN app_version TEXT NOT NULL DEFAULT ''",
+		"ALTER TABLE installs ADD COLUMN storage TEXT NOT NULL DEFAULT ''",
+		"ALTER TABLE installs ADD COLUMN bridge TEXT NOT NULL DEFAULT ''",
+		"ALTER TABLE installs ADD COLUMN cores INTEGER NOT NULL DEFAULT 0",
+		"ALTER TABLE installs ADD COLUMN memory_mb INTEGER NOT NULL DEFAULT 0",
+		"ALTER TABLE installs ADD COLUMN disk_gb INTEGER NOT NULL DEFAULT 0",
+		"ALTER TABLE installs ADD COLUMN outputs_json TEXT NOT NULL DEFAULT '{}'",
+		"ALTER TABLE installs ADD COLUMN mounts_json TEXT NOT NULL DEFAULT '[]'",
+		"ALTER TABLE jobs ADD COLUMN mounts_json TEXT NOT NULL DEFAULT '[]'",
+		"ALTER TABLE jobs ADD COLUMN hostname TEXT NOT NULL DEFAULT ''",
+		"ALTER TABLE jobs ADD COLUMN onboot INTEGER NOT NULL DEFAULT 1",
+		"ALTER TABLE jobs ADD COLUMN unprivileged INTEGER NOT NULL DEFAULT 1",
+		// M3: persist install details for export/apply
+		"ALTER TABLE installs ADD COLUMN hostname TEXT NOT NULL DEFAULT ''",
+		"ALTER TABLE installs ADD COLUMN onboot INTEGER NOT NULL DEFAULT 1",
+		"ALTER TABLE installs ADD COLUMN unprivileged INTEGER NOT NULL DEFAULT 1",
+		"ALTER TABLE installs ADD COLUMN inputs_json TEXT NOT NULL DEFAULT '{}'",
+		"ALTER TABLE installs ADD COLUMN devices_json TEXT NOT NULL DEFAULT '[]'",
+		"ALTER TABLE installs ADD COLUMN env_vars_json TEXT NOT NULL DEFAULT '{}'",
+		"ALTER TABLE jobs ADD COLUMN devices_json TEXT NOT NULL DEFAULT '[]'",
+		"ALTER TABLE jobs ADD COLUMN env_vars_json TEXT NOT NULL DEFAULT '{}'",
+	}
+	for _, stmt := range alterStmts {
+		s.db.Exec(stmt) // ignore "duplicate column" errors
+	}
+
+	return nil
 }
 
 // CreateJob inserts a new job.
 func (s *Store) CreateJob(job *Job) error {
 	inputsJSON, _ := json.Marshal(job.Inputs)
 	outputsJSON, _ := json.Marshal(job.Outputs)
+	mountsJSON, _ := json.Marshal(job.MountPoints)
+	if job.MountPoints == nil {
+		mountsJSON = []byte("[]")
+	}
+	devicesJSON, _ := json.Marshal(job.Devices)
+	if job.Devices == nil {
+		devicesJSON = []byte("[]")
+	}
+	envVarsJSON, _ := json.Marshal(job.EnvVars)
+	if job.EnvVars == nil {
+		envVarsJSON = []byte("{}")
+	}
 
 	_, err := s.db.Exec(`
-		INSERT INTO jobs (id, type, state, app_id, app_name, ctid, node, pool, storage, bridge, cores, memory_mb, disk_gb, inputs_json, outputs_json, error, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		INSERT INTO jobs (id, type, state, app_id, app_name, ctid, node, pool, storage, bridge, cores, memory_mb, disk_gb, hostname, onboot, unprivileged, inputs_json, outputs_json, mounts_json, devices_json, env_vars_json, error, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		job.ID, job.Type, job.State, job.AppID, job.AppName, job.CTID,
 		job.Node, job.Pool, job.Storage, job.Bridge,
 		job.Cores, job.MemoryMB, job.DiskGB,
-		string(inputsJSON), string(outputsJSON), job.Error,
+		job.Hostname, boolToInt(job.OnBoot), boolToInt(job.Unprivileged),
+		string(inputsJSON), string(outputsJSON), string(mountsJSON),
+		string(devicesJSON), string(envVarsJSON), job.Error,
 		job.CreatedAt.Format(time.RFC3339), job.UpdatedAt.Format(time.RFC3339),
 	)
 	return err
+}
+
+func boolToInt(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
 }
 
 // UpdateJob updates a job's mutable fields.
 func (s *Store) UpdateJob(job *Job) error {
 	inputsJSON, _ := json.Marshal(job.Inputs)
 	outputsJSON, _ := json.Marshal(job.Outputs)
+	mountsJSON, _ := json.Marshal(job.MountPoints)
+	if job.MountPoints == nil {
+		mountsJSON = []byte("[]")
+	}
+	devicesJSON, _ := json.Marshal(job.Devices)
+	if job.Devices == nil {
+		devicesJSON = []byte("[]")
+	}
+	envVarsJSON, _ := json.Marshal(job.EnvVars)
+	if job.EnvVars == nil {
+		envVarsJSON = []byte("{}")
+	}
 
 	completedAt := ""
 	if job.CompletedAt != nil {
@@ -116,10 +181,12 @@ func (s *Store) UpdateJob(job *Job) error {
 	}
 
 	_, err := s.db.Exec(`
-		UPDATE jobs SET state=?, ctid=?, inputs_json=?, outputs_json=?, error=?, updated_at=?, completed_at=?
+		UPDATE jobs SET state=?, ctid=?, hostname=?, onboot=?, unprivileged=?, inputs_json=?, outputs_json=?, mounts_json=?, devices_json=?, env_vars_json=?, error=?, updated_at=?, completed_at=?
 		WHERE id=?`,
 		job.State, job.CTID,
-		string(inputsJSON), string(outputsJSON), job.Error,
+		job.Hostname, boolToInt(job.OnBoot), boolToInt(job.Unprivileged),
+		string(inputsJSON), string(outputsJSON), string(mountsJSON),
+		string(devicesJSON), string(envVarsJSON), job.Error,
 		job.UpdatedAt.Format(time.RFC3339), completedAt,
 		job.ID,
 	)
@@ -128,13 +195,13 @@ func (s *Store) UpdateJob(job *Job) error {
 
 // GetJob retrieves a job by ID.
 func (s *Store) GetJob(id string) (*Job, error) {
-	row := s.db.QueryRow(`SELECT id, type, state, app_id, app_name, ctid, node, pool, storage, bridge, cores, memory_mb, disk_gb, inputs_json, outputs_json, error, created_at, updated_at, completed_at FROM jobs WHERE id=?`, id)
+	row := s.db.QueryRow(`SELECT id, type, state, app_id, app_name, ctid, node, pool, storage, bridge, cores, memory_mb, disk_gb, hostname, onboot, unprivileged, inputs_json, outputs_json, mounts_json, devices_json, env_vars_json, error, created_at, updated_at, completed_at FROM jobs WHERE id=?`, id)
 	return scanJob(row)
 }
 
 // ListJobs returns all jobs, most recent first.
 func (s *Store) ListJobs() ([]*Job, error) {
-	rows, err := s.db.Query(`SELECT id, type, state, app_id, app_name, ctid, node, pool, storage, bridge, cores, memory_mb, disk_gb, inputs_json, outputs_json, error, created_at, updated_at, completed_at FROM jobs ORDER BY created_at DESC`)
+	rows, err := s.db.Query(`SELECT id, type, state, app_id, app_name, ctid, node, pool, storage, bridge, cores, memory_mb, disk_gb, hostname, onboot, unprivileged, inputs_json, outputs_json, mounts_json, devices_json, env_vars_json, error, created_at, updated_at, completed_at FROM jobs ORDER BY created_at DESC`)
 	if err != nil {
 		return nil, err
 	}
@@ -206,16 +273,72 @@ func (s *Store) GetLogsSince(jobID string, afterID int) ([]*LogEntry, int, error
 
 // CreateInstall records a completed installation.
 func (s *Store) CreateInstall(inst *Install) error {
-	_, err := s.db.Exec(`INSERT INTO installs (id, app_id, app_name, ctid, node, pool, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		inst.ID, inst.AppID, inst.AppName, inst.CTID, inst.Node, inst.Pool, inst.Status,
+	outputsJSON, _ := json.Marshal(inst.Outputs)
+	mountsJSON, _ := json.Marshal(inst.MountPoints)
+	if inst.MountPoints == nil {
+		mountsJSON = []byte("[]")
+	}
+	inputsJSON, _ := json.Marshal(inst.Inputs)
+	if inst.Inputs == nil {
+		inputsJSON = []byte("{}")
+	}
+	devicesJSON, _ := json.Marshal(inst.Devices)
+	if inst.Devices == nil {
+		devicesJSON = []byte("[]")
+	}
+	envVarsJSON, _ := json.Marshal(inst.EnvVars)
+	if inst.EnvVars == nil {
+		envVarsJSON = []byte("{}")
+	}
+	_, err := s.db.Exec(`INSERT INTO installs (id, app_id, app_name, app_version, ctid, node, pool, storage, bridge, cores, memory_mb, disk_gb, hostname, onboot, unprivileged, inputs_json, outputs_json, mounts_json, devices_json, env_vars_json, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		inst.ID, inst.AppID, inst.AppName, inst.AppVersion, inst.CTID, inst.Node, inst.Pool,
+		inst.Storage, inst.Bridge, inst.Cores, inst.MemoryMB, inst.DiskGB,
+		inst.Hostname, boolToInt(inst.OnBoot), boolToInt(inst.Unprivileged),
+		string(inputsJSON), string(outputsJSON), string(mountsJSON),
+		string(devicesJSON), string(envVarsJSON), inst.Status,
 		inst.CreatedAt.Format(time.RFC3339),
 	)
 	return err
 }
 
+// UpdateInstall updates an install record (used for volume preservation and reinstall).
+func (s *Store) UpdateInstall(inst *Install) error {
+	outputsJSON, _ := json.Marshal(inst.Outputs)
+	mountsJSON, _ := json.Marshal(inst.MountPoints)
+	if inst.MountPoints == nil {
+		mountsJSON = []byte("[]")
+	}
+	inputsJSON, _ := json.Marshal(inst.Inputs)
+	if inst.Inputs == nil {
+		inputsJSON = []byte("{}")
+	}
+	devicesJSON, _ := json.Marshal(inst.Devices)
+	if inst.Devices == nil {
+		devicesJSON = []byte("[]")
+	}
+	envVarsJSON, _ := json.Marshal(inst.EnvVars)
+	if inst.EnvVars == nil {
+		envVarsJSON = []byte("{}")
+	}
+	_, err := s.db.Exec(`UPDATE installs SET ctid=?, status=?, mounts_json=?, outputs_json=?, storage=?, bridge=?, cores=?, memory_mb=?, disk_gb=?, hostname=?, onboot=?, unprivileged=?, inputs_json=?, devices_json=?, env_vars_json=? WHERE id=?`,
+		inst.CTID, inst.Status, string(mountsJSON), string(outputsJSON),
+		inst.Storage, inst.Bridge, inst.Cores, inst.MemoryMB, inst.DiskGB,
+		inst.Hostname, boolToInt(inst.OnBoot), boolToInt(inst.Unprivileged),
+		string(inputsJSON), string(devicesJSON), string(envVarsJSON),
+		inst.ID,
+	)
+	return err
+}
+
+// GetInstall retrieves a single install by ID.
+func (s *Store) GetInstall(id string) (*Install, error) {
+	row := s.db.QueryRow(`SELECT id, app_id, app_name, app_version, ctid, node, pool, storage, bridge, cores, memory_mb, disk_gb, hostname, onboot, unprivileged, inputs_json, outputs_json, mounts_json, devices_json, env_vars_json, status, created_at FROM installs WHERE id=?`, id)
+	return scanInstallRow(row)
+}
+
 // ListInstalls returns all installations.
 func (s *Store) ListInstalls() ([]*Install, error) {
-	rows, err := s.db.Query(`SELECT id, app_id, app_name, ctid, node, pool, status, created_at FROM installs ORDER BY created_at DESC`)
+	rows, err := s.db.Query(`SELECT id, app_id, app_name, app_version, ctid, node, pool, storage, bridge, cores, memory_mb, disk_gb, hostname, onboot, unprivileged, inputs_json, outputs_json, mounts_json, devices_json, env_vars_json, status, created_at FROM installs ORDER BY created_at DESC`)
 	if err != nil {
 		return nil, err
 	}
@@ -223,34 +346,89 @@ func (s *Store) ListInstalls() ([]*Install, error) {
 
 	var installs []*Install
 	for rows.Next() {
-		var inst Install
-		var createdAt string
-		if err := rows.Scan(&inst.ID, &inst.AppID, &inst.AppName, &inst.CTID, &inst.Node, &inst.Pool, &inst.Status, &createdAt); err != nil {
+		inst, err := scanInstallRows(rows)
+		if err != nil {
 			return nil, err
 		}
-		inst.CreatedAt, _ = time.Parse(time.RFC3339, createdAt)
-		installs = append(installs, &inst)
+		installs = append(installs, inst)
 	}
 	return installs, rows.Err()
+}
+
+func scanInstallRow(row *sql.Row) (*Install, error) {
+	var inst Install
+	var createdAt, inputsJSON, outputsJSON, mountsJSON, devicesJSON, envVarsJSON string
+	var onboot, unprivileged int
+	err := row.Scan(&inst.ID, &inst.AppID, &inst.AppName, &inst.AppVersion,
+		&inst.CTID, &inst.Node, &inst.Pool,
+		&inst.Storage, &inst.Bridge, &inst.Cores, &inst.MemoryMB, &inst.DiskGB,
+		&inst.Hostname, &onboot, &unprivileged,
+		&inputsJSON, &outputsJSON, &mountsJSON, &devicesJSON, &envVarsJSON,
+		&inst.Status, &createdAt,
+	)
+	if err != nil {
+		return nil, err
+	}
+	inst.OnBoot = onboot != 0
+	inst.Unprivileged = unprivileged != 0
+	json.Unmarshal([]byte(inputsJSON), &inst.Inputs)
+	json.Unmarshal([]byte(outputsJSON), &inst.Outputs)
+	json.Unmarshal([]byte(mountsJSON), &inst.MountPoints)
+	json.Unmarshal([]byte(devicesJSON), &inst.Devices)
+	json.Unmarshal([]byte(envVarsJSON), &inst.EnvVars)
+	inst.CreatedAt, _ = time.Parse(time.RFC3339, createdAt)
+	return &inst, nil
+}
+
+func scanInstallRows(rows *sql.Rows) (*Install, error) {
+	var inst Install
+	var createdAt, inputsJSON, outputsJSON, mountsJSON, devicesJSON, envVarsJSON string
+	var onboot, unprivileged int
+	err := rows.Scan(&inst.ID, &inst.AppID, &inst.AppName, &inst.AppVersion,
+		&inst.CTID, &inst.Node, &inst.Pool,
+		&inst.Storage, &inst.Bridge, &inst.Cores, &inst.MemoryMB, &inst.DiskGB,
+		&inst.Hostname, &onboot, &unprivileged,
+		&inputsJSON, &outputsJSON, &mountsJSON, &devicesJSON, &envVarsJSON,
+		&inst.Status, &createdAt,
+	)
+	if err != nil {
+		return nil, err
+	}
+	inst.OnBoot = onboot != 0
+	inst.Unprivileged = unprivileged != 0
+	json.Unmarshal([]byte(inputsJSON), &inst.Inputs)
+	json.Unmarshal([]byte(outputsJSON), &inst.Outputs)
+	json.Unmarshal([]byte(mountsJSON), &inst.MountPoints)
+	json.Unmarshal([]byte(devicesJSON), &inst.Devices)
+	json.Unmarshal([]byte(envVarsJSON), &inst.EnvVars)
+	inst.CreatedAt, _ = time.Parse(time.RFC3339, createdAt)
+	return &inst, nil
 }
 
 // scanJob scans a single job from a QueryRow result.
 func scanJob(row *sql.Row) (*Job, error) {
 	var job Job
-	var inputsJSON, outputsJSON, createdAt, updatedAt, completedAt string
+	var inputsJSON, outputsJSON, mountsJSON, devicesJSON, envVarsJSON, createdAt, updatedAt, completedAt string
+	var onboot, unprivileged int
 
 	err := row.Scan(&job.ID, &job.Type, &job.State, &job.AppID, &job.AppName,
 		&job.CTID, &job.Node, &job.Pool, &job.Storage, &job.Bridge,
 		&job.Cores, &job.MemoryMB, &job.DiskGB,
-		&inputsJSON, &outputsJSON, &job.Error,
-		&createdAt, &updatedAt, &completedAt,
+		&job.Hostname, &onboot, &unprivileged,
+		&inputsJSON, &outputsJSON, &mountsJSON, &devicesJSON, &envVarsJSON,
+		&job.Error, &createdAt, &updatedAt, &completedAt,
 	)
 	if err != nil {
 		return nil, err
 	}
 
+	job.OnBoot = onboot != 0
+	job.Unprivileged = unprivileged != 0
 	json.Unmarshal([]byte(inputsJSON), &job.Inputs)
 	json.Unmarshal([]byte(outputsJSON), &job.Outputs)
+	json.Unmarshal([]byte(mountsJSON), &job.MountPoints)
+	json.Unmarshal([]byte(devicesJSON), &job.Devices)
+	json.Unmarshal([]byte(envVarsJSON), &job.EnvVars)
 	job.CreatedAt, _ = time.Parse(time.RFC3339, createdAt)
 	job.UpdatedAt, _ = time.Parse(time.RFC3339, updatedAt)
 	if completedAt != "" {
@@ -261,23 +439,93 @@ func scanJob(row *sql.Row) (*Job, error) {
 	return &job, nil
 }
 
+// HasActiveJobForApp returns a non-terminal install job for the given app, if any.
+func (s *Store) HasActiveJobForApp(appID string) (*Job, bool) {
+	row := s.db.QueryRow(`SELECT id, type, state, app_id, app_name, ctid, node, pool, storage, bridge, cores, memory_mb, disk_gb, hostname, onboot, unprivileged, inputs_json, outputs_json, mounts_json, devices_json, env_vars_json, error, created_at, updated_at, completed_at FROM jobs WHERE app_id=? AND type='install' AND state NOT IN ('completed','failed','cancelled') ORDER BY created_at DESC LIMIT 1`, appID)
+	job, err := scanJob(row)
+	if err != nil {
+		return nil, false
+	}
+	return job, true
+}
+
+// HasActiveInstallForApp returns a non-uninstalled install for the given app, if any.
+func (s *Store) HasActiveInstallForApp(appID string) (*Install, bool) {
+	row := s.db.QueryRow(`SELECT id, app_id, app_name, app_version, ctid, node, pool, storage, bridge, cores, memory_mb, disk_gb, hostname, onboot, unprivileged, inputs_json, outputs_json, mounts_json, devices_json, env_vars_json, status, created_at FROM installs WHERE app_id=? AND status!='uninstalled' ORDER BY created_at DESC LIMIT 1`, appID)
+	inst, err := scanInstallRow(row)
+	if err != nil {
+		return nil, false
+	}
+	return inst, true
+}
+
+// RecoverOrphanedJobs marks all non-terminal jobs as failed on startup.
+// Returns the number of jobs recovered.
+func (s *Store) RecoverOrphanedJobs() (int, error) {
+	now := time.Now().Format(time.RFC3339)
+
+	// Find orphaned job IDs first (for log entries)
+	rows, err := s.db.Query(`SELECT id FROM jobs WHERE state NOT IN ('completed','failed','cancelled')`)
+	if err != nil {
+		return 0, err
+	}
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err == nil {
+			ids = append(ids, id)
+		}
+	}
+	rows.Close()
+
+	if len(ids) == 0 {
+		return 0, nil
+	}
+
+	// Mark all as failed
+	result, err := s.db.Exec(`UPDATE jobs SET state='failed', error='interrupted by service restart', completed_at=?, updated_at=? WHERE state NOT IN ('completed','failed','cancelled')`, now, now)
+	if err != nil {
+		return 0, err
+	}
+
+	// Append a log entry for each recovered job
+	for _, id := range ids {
+		s.AppendLog(&LogEntry{
+			JobID:     id,
+			Timestamp: time.Now(),
+			Level:     "warn",
+			Message:   "Job interrupted — service was restarted while this job was running",
+		})
+	}
+
+	affected, _ := result.RowsAffected()
+	return int(affected), nil
+}
+
 // scanJobRow scans a single job from a Rows iterator.
 func scanJobRow(rows *sql.Rows) (*Job, error) {
 	var job Job
-	var inputsJSON, outputsJSON, createdAt, updatedAt, completedAt string
+	var inputsJSON, outputsJSON, mountsJSON, devicesJSON, envVarsJSON, createdAt, updatedAt, completedAt string
+	var onboot, unprivileged int
 
 	err := rows.Scan(&job.ID, &job.Type, &job.State, &job.AppID, &job.AppName,
 		&job.CTID, &job.Node, &job.Pool, &job.Storage, &job.Bridge,
 		&job.Cores, &job.MemoryMB, &job.DiskGB,
-		&inputsJSON, &outputsJSON, &job.Error,
-		&createdAt, &updatedAt, &completedAt,
+		&job.Hostname, &onboot, &unprivileged,
+		&inputsJSON, &outputsJSON, &mountsJSON, &devicesJSON, &envVarsJSON,
+		&job.Error, &createdAt, &updatedAt, &completedAt,
 	)
 	if err != nil {
 		return nil, err
 	}
 
+	job.OnBoot = onboot != 0
+	job.Unprivileged = unprivileged != 0
 	json.Unmarshal([]byte(inputsJSON), &job.Inputs)
 	json.Unmarshal([]byte(outputsJSON), &job.Outputs)
+	json.Unmarshal([]byte(mountsJSON), &job.MountPoints)
+	json.Unmarshal([]byte(devicesJSON), &job.Devices)
+	json.Unmarshal([]byte(envVarsJSON), &job.EnvVars)
 	job.CreatedAt, _ = time.Parse(time.RFC3339, createdAt)
 	job.UpdatedAt, _ = time.Parse(time.RFC3339, updatedAt)
 	if completedAt != "" {

@@ -23,13 +23,14 @@ license: Apache-2.0
 maintainers:
   - PVE App Store
 
+official: true
 lxc:
   ostemplate: debian-12
   defaults:
     unprivileged: true
     cores: 2
     memory_mb: 2048
-    disk_gb: 10
+    disk_gb: 4
     features:
       - nesting
     onboot: true

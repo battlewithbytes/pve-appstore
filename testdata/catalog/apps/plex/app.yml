@@ -21,16 +21,33 @@ license: Proprietary
 maintainers:
   - PVE App Store
 
+official: true
 lxc:
   ostemplate: debian-12
   defaults:
     unprivileged: true
     cores: 2
     memory_mb: 4096
-    disk_gb: 20
+    disk_gb: 4
     features:
       - nesting
     onboot: true
+
+volumes:
+  - name: plex-data
+    type: volume
+    mount_path: /var/lib/plexmediaserver
+    size_gb: 5
+    label: Plex Data
+    required: true
+    description: Plex configuration, metadata, and database
+  - name: media
+    type: bind
+    mount_path: /mnt/media
+    label: Media Library
+    default_host_path: /mnt/storage/media
+    required: false
+    description: Map your media library folder (movies, TV, music)
 
 inputs:
   - key: claim_token

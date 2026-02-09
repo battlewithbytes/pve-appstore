@@ -13,6 +13,17 @@ from appstore.inputs import AppInputs
 from appstore.permissions import AppPermissions, PermissionDeniedError
 
 
+def mock_popen_factory(returncode=0):
+    """Create a mock subprocess.Popen that simulates line-by-line streaming."""
+    def make_popen(*args, **kwargs):
+        mock_proc = MagicMock()
+        mock_proc.stdout = iter([])  # no output lines
+        mock_proc.returncode = returncode
+        mock_proc.wait.return_value = None
+        return mock_proc
+    return make_popen
+
+
 class DummyApp(BaseApp):
     """Concrete subclass for testing."""
 
@@ -38,15 +49,15 @@ def make_app(packages=None, pip=None, urls=None, paths=None, services=None,
 
 
 class TestAptInstall:
-    @patch("appstore.base.subprocess.run")
-    def test_installs_allowed_packages(self, mock_run):
-        mock_run.return_value = MagicMock(returncode=0, stdout="")
+    @patch("appstore.base.subprocess.Popen")
+    def test_installs_allowed_packages(self, mock_popen):
+        mock_popen.side_effect = mock_popen_factory()
         app = make_app(packages=["nginx", "curl"])
         app.apt_install("nginx", "curl")
 
         # Should call apt-get update then apt-get install
-        assert mock_run.call_count == 2
-        install_call = mock_run.call_args_list[1]
+        assert mock_popen.call_count == 2
+        install_call = mock_popen.call_args_list[1]
         assert install_call[0][0] == ["apt-get", "install", "-y", "nginx", "curl"]
 
     def test_rejects_disallowed_packages(self):
@@ -79,13 +90,13 @@ class TestWriteConfig:
 
 
 class TestEnableService:
-    @patch("appstore.base.subprocess.run")
-    def test_enables_allowed_service(self, mock_run):
-        mock_run.return_value = MagicMock(returncode=0, stdout="")
+    @patch("appstore.base.subprocess.Popen")
+    def test_enables_allowed_service(self, mock_popen):
+        mock_popen.side_effect = mock_popen_factory()
         app = make_app(services=["nginx"])
         app.enable_service("nginx")
 
-        cmds = [c[0][0] for c in mock_run.call_args_list]
+        cmds = [c[0][0] for c in mock_popen.call_args_list]
         assert ["systemctl", "daemon-reload"] in cmds
         assert ["systemctl", "enable", "nginx"] in cmds
         assert ["systemctl", "start", "nginx"] in cmds
@@ -100,8 +111,8 @@ class TestCreateDir:
     def test_creates_directory(self, tmp_path):
         target = str(tmp_path / "subdir" / "nested")
         app = make_app(paths=[str(tmp_path)])
-        with patch("appstore.base.subprocess.run") as mock_run:
-            mock_run.return_value = MagicMock(returncode=0, stdout="")
+        with patch("appstore.base.subprocess.Popen") as mock_popen:
+            mock_popen.side_effect = mock_popen_factory()
             app.create_dir(target, mode="0755")
         assert os.path.isdir(target)
 
@@ -112,15 +123,15 @@ class TestCreateDir:
 
 
 class TestDownload:
-    @patch("appstore.base.subprocess.run")
-    def test_downloads_allowed_url(self, mock_run):
-        mock_run.return_value = MagicMock(returncode=0, stdout="")
+    @patch("appstore.base.subprocess.Popen")
+    def test_downloads_allowed_url(self, mock_popen):
+        mock_popen.side_effect = mock_popen_factory()
         app = make_app(
             urls=["https://example.com/*"],
             paths=["/tmp/"],
         )
         app.download("https://example.com/file.tar.gz", "/tmp/file.tar.gz")
-        curl_call = mock_run.call_args_list[-1]
+        curl_call = mock_popen.call_args_list[-1]
         assert "curl" in curl_call[0][0]
 
     def test_rejects_disallowed_url(self):
@@ -130,13 +141,13 @@ class TestDownload:
 
 
 class TestRunCommand:
-    @patch("appstore.base.subprocess.run")
-    def test_runs_allowed_command(self, mock_run):
-        mock_run.return_value = MagicMock(returncode=0, stdout="")
+    @patch("appstore.base.subprocess.Popen")
+    def test_runs_allowed_command(self, mock_popen):
+        mock_popen.side_effect = mock_popen_factory()
         app = make_app(commands=["openssl"])
         app.run_command(["openssl", "req", "-x509"])
-        assert mock_run.called
-        assert mock_run.call_args[0][0][0] == "openssl"
+        assert mock_popen.called
+        assert mock_popen.call_args[0][0][0] == "openssl"
 
     def test_rejects_disallowed_command(self):
         app = make_app(commands=["openssl"])
@@ -150,14 +161,14 @@ class TestRunCommand:
 
 
 class TestRunInstallerScript:
-    @patch("appstore.base.subprocess.run")
+    @patch("appstore.base.subprocess.Popen")
     @patch("appstore.base.os.chmod")
     @patch("appstore.base.os.unlink")
-    def test_runs_allowed_script(self, mock_unlink, mock_chmod, mock_run):
-        mock_run.return_value = MagicMock(returncode=0, stdout="")
+    def test_runs_allowed_script(self, mock_unlink, mock_chmod, mock_popen):
+        mock_popen.side_effect = mock_popen_factory()
         app = make_app(installer_scripts=["https://ollama.ai/install.sh"])
         app.run_installer_script("https://ollama.ai/install.sh")
-        assert mock_run.call_count == 2  # curl + bash
+        assert mock_popen.call_count == 2  # curl + bash
 
     def test_rejects_disallowed_script(self):
         app = make_app(installer_scripts=["https://ollama.ai/install.sh"])
@@ -166,12 +177,12 @@ class TestRunInstallerScript:
 
 
 class TestPipInstall:
-    @patch("appstore.base.subprocess.run")
-    def test_installs_allowed_pip(self, mock_run):
-        mock_run.return_value = MagicMock(returncode=0, stdout="")
+    @patch("appstore.base.subprocess.Popen")
+    def test_installs_allowed_pip(self, mock_popen):
+        mock_popen.side_effect = mock_popen_factory()
         app = make_app(pip=["crawl4ai"])
         app.pip_install("crawl4ai", venv="/opt/app/venv")
-        install_call = mock_run.call_args_list[-1]
+        install_call = mock_popen.call_args_list[-1]
         assert install_call[0][0] == ["/opt/app/venv/bin/pip", "install", "crawl4ai"]
 
     def test_rejects_disallowed_pip(self):

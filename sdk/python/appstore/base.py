@@ -206,21 +206,38 @@ class BaseApp(ABC):
 
     # --- Internal ---
 
+    @staticmethod
+    def _is_progress_line(line: str) -> bool:
+        """Detect progress bar lines (pip, curl, wget, etc.) that spam logs."""
+        s = line.strip()
+        # pip/wget progress bars: |████████████| 90% of 167.3 MiB
+        if s.startswith("|") and ("%" in s or "\u2588" in s or "\u25a0" in s):
+            return True
+        # Percentage-only lines: 70%, 80%, etc.
+        if s.endswith("%") and s[:-1].replace(".", "").isdigit():
+            return True
+        return False
+
     def _run(self, cmd: list, check: bool = True) -> subprocess.CompletedProcess:
-        """Run a subprocess with explicit argv (never shell=True)."""
-        result = subprocess.run(
+        """Run a subprocess, streaming output line-by-line for real-time logging."""
+        proc = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
+            bufsize=1,  # line-buffered
         )
-        # Log non-empty output
-        if result.stdout and result.stdout.strip():
-            for line in result.stdout.strip().split("\n"):
-                if line.strip():
-                    self.log.info(line.strip())
+        lines = []
+        for line in proc.stdout:
+            stripped = line.rstrip("\n")
+            lines.append(stripped)
+            if stripped.strip() and not self._is_progress_line(stripped):
+                self.log.info(stripped.strip())
+        proc.wait()
+        stdout = "\n".join(lines)
+        result = subprocess.CompletedProcess(cmd, proc.returncode, stdout=stdout, stderr="")
         if check and result.returncode != 0:
             raise RuntimeError(
-                f"Command failed (exit {result.returncode}): {' '.join(cmd)}\n{result.stdout}"
+                f"Command failed (exit {result.returncode}): {' '.join(cmd)}\n{stdout}"
             )
         return result
