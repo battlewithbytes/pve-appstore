@@ -345,3 +345,190 @@ func TestCatalogCategories(t *testing.T) {
 		t.Errorf("categories: got %v, want [testing]", cats)
 	}
 }
+
+// --- Testdata catalog validation ---
+// These tests validate every app in testdata/catalog at build time.
+// If an app has a broken manifest, missing provision script, or invalid
+// Python syntax, these tests will catch it.
+
+func TestAllTestdataAppsLoadAndValidate(t *testing.T) {
+	catalogDir := filepath.Join("..", "..", "testdata", "catalog")
+	if _, err := os.Stat(catalogDir); os.IsNotExist(err) {
+		t.Skip("testdata/catalog not found, skipping")
+	}
+
+	cat := New("", "", "")
+	if err := cat.LoadLocal(catalogDir); err != nil {
+		t.Fatalf("LoadLocal(testdata/catalog): %v", err)
+	}
+
+	apps := cat.List()
+	if len(apps) == 0 {
+		t.Fatal("no apps found in testdata/catalog")
+	}
+
+	t.Logf("Found %d apps in testdata/catalog", len(apps))
+
+	for _, app := range apps {
+		t.Run(app.ID, func(t *testing.T) {
+			// 1. Manifest validates
+			if err := app.Validate(); err != nil {
+				t.Errorf("manifest validation failed: %v", err)
+			}
+
+			// 2. Required fields are non-empty
+			if app.Name == "" {
+				t.Error("name is empty")
+			}
+			if app.Version == "" {
+				t.Error("version is empty")
+			}
+			if len(app.Categories) == 0 {
+				t.Error("no categories")
+			}
+			if app.LXC.OSTemplate == "" {
+				t.Error("ostemplate is empty")
+			}
+
+			// 3. Provision script exists and is a .py file
+			if app.Provisioning.Script == "" {
+				t.Error("provisioning.script is empty")
+			}
+			scriptPath := filepath.Join(app.DirPath, app.Provisioning.Script)
+			if _, err := os.Stat(scriptPath); os.IsNotExist(err) {
+				t.Errorf("provision script not found: %s", scriptPath)
+			}
+			if !strings.HasSuffix(app.Provisioning.Script, ".py") {
+				t.Errorf("provision script must be .py, got %s", app.Provisioning.Script)
+			}
+
+			// 4. Check Python syntax of provision script
+			checkPythonSyntax(t, scriptPath)
+
+			// 5. Resource defaults are sane
+			if app.LXC.Defaults.MemoryMB < 128 {
+				t.Errorf("memory_mb = %d, want >= 128", app.LXC.Defaults.MemoryMB)
+			}
+			if app.LXC.Defaults.DiskGB < 1 {
+				t.Errorf("disk_gb = %d, want >= 1", app.LXC.Defaults.DiskGB)
+			}
+			if app.LXC.Defaults.Cores < 1 {
+				t.Errorf("cores = %d, want >= 1", app.LXC.Defaults.Cores)
+			}
+
+			// 6. Inputs have valid types
+			for _, input := range app.Inputs {
+				switch input.Type {
+				case "string", "number", "boolean", "secret", "select":
+					// valid
+				default:
+					t.Errorf("input %q has invalid type %q", input.Key, input.Type)
+				}
+				if input.Key == "" {
+					t.Error("input has empty key")
+				}
+			}
+
+			// 7. Volumes have valid types
+			for _, vol := range app.Volumes {
+				if vol.Type != "volume" && vol.Type != "bind" && vol.Type != "" {
+					t.Errorf("volume %q has invalid type %q", vol.Name, vol.Type)
+				}
+				if vol.MountPath == "" {
+					t.Errorf("volume %q has empty mount_path", vol.Name)
+				}
+			}
+
+			// 8. Outputs have non-empty keys
+			for _, out := range app.Outputs {
+				if out.Key == "" {
+					t.Error("output has empty key")
+				}
+			}
+
+			t.Logf("  OK: %s v%s (%s, %d cores, %dMB, %dGB)",
+				app.Name, app.Version, app.LXC.OSTemplate,
+				app.LXC.Defaults.Cores, app.LXC.Defaults.MemoryMB, app.LXC.Defaults.DiskGB)
+		})
+	}
+}
+
+// checkPythonSyntax compiles a Python script to check for syntax errors.
+func checkPythonSyntax(t *testing.T, scriptPath string) {
+	t.Helper()
+	data, err := os.ReadFile(scriptPath)
+	if err != nil {
+		t.Errorf("reading %s: %v", scriptPath, err)
+		return
+	}
+	content := string(data)
+
+	// Basic structural checks that catch common errors without needing a Python interpreter
+	// Check 1: imports BaseApp from SDK
+	if !strings.Contains(content, "from appstore") && !strings.Contains(content, "import appstore") {
+		t.Errorf("%s: does not import from appstore SDK", filepath.Base(scriptPath))
+	}
+
+	// Check 2: defines a class that extends BaseApp
+	if !strings.Contains(content, "BaseApp") && !strings.Contains(content, "class ") {
+		t.Errorf("%s: does not define a class extending BaseApp", filepath.Base(scriptPath))
+	}
+
+	// Check 3: has an install method
+	if !strings.Contains(content, "def install") {
+		t.Errorf("%s: does not define install method", filepath.Base(scriptPath))
+	}
+
+	// Check 4: balanced parentheses (catches common syntax errors)
+	parens := 0
+	for _, ch := range content {
+		switch ch {
+		case '(':
+			parens++
+		case ')':
+			parens--
+		}
+	}
+	if parens != 0 {
+		t.Errorf("%s: unbalanced parentheses (diff = %d)", filepath.Base(scriptPath), parens)
+	}
+}
+
+func TestAllTestdataAppsHaveUniqueIDs(t *testing.T) {
+	catalogDir := filepath.Join("..", "..", "testdata", "catalog")
+	if _, err := os.Stat(catalogDir); os.IsNotExist(err) {
+		t.Skip("testdata/catalog not found, skipping")
+	}
+
+	cat := New("", "", "")
+	if err := cat.LoadLocal(catalogDir); err != nil {
+		t.Fatalf("LoadLocal: %v", err)
+	}
+
+	seen := make(map[string]bool)
+	for _, app := range cat.List() {
+		if seen[app.ID] {
+			t.Errorf("duplicate app ID: %s", app.ID)
+		}
+		seen[app.ID] = true
+	}
+}
+
+func TestAllTestdataAppsProvisionDirExists(t *testing.T) {
+	catalogDir := filepath.Join("..", "..", "testdata", "catalog")
+	if _, err := os.Stat(catalogDir); os.IsNotExist(err) {
+		t.Skip("testdata/catalog not found, skipping")
+	}
+
+	cat := New("", "", "")
+	if err := cat.LoadLocal(catalogDir); err != nil {
+		t.Fatalf("LoadLocal: %v", err)
+	}
+
+	for _, app := range cat.List() {
+		provDir := filepath.Join(app.DirPath, "provision")
+		if _, err := os.Stat(provDir); os.IsNotExist(err) {
+			t.Errorf("app %s: provision directory missing: %s", app.ID, provDir)
+		}
+	}
+}

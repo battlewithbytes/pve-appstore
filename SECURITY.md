@@ -12,10 +12,13 @@ Container lifecycle operations (create, start, stop, shutdown, destroy, status) 
 
 ### Shell operations (fallback)
 
-Two operations have no REST API equivalent and require `sudo` via a strict sudoers allowlist:
+Three operations have no REST API equivalent (or are restricted to `root@pam` in the API) and require `sudo` via a strict sudoers allowlist:
 
 - `pct exec` — run commands inside a container
 - `pct push` — copy files from the host into a container
+- `pct set` — configure device passthrough (GPU) on a container
+
+The Proxmox API restricts `dev*` parameters (device passthrough) to `root@pam` only — API tokens cannot set them. To work around this, containers are created via the API without device params, and `pct set` is used post-creation to apply device passthrough on the host.
 
 These are the **only** commands permitted via `/etc/sudoers.d/pve-appstore`.
 
@@ -30,17 +33,18 @@ The `pve-appstore.service` unit applies systemd sandboxing:
 | `ProtectHome=yes` | `/home`, `/root`, `/run/user` are inaccessible |
 | `PrivateTmp=yes` | Service gets an isolated `/tmp` |
 | `ReadWritePaths=` | Only `/var/lib/pve-appstore` and `/var/log/pve-appstore` are writable |
-| `NoNewPrivileges=no` | Required to allow `sudo` for `pct exec`/`pct push` child processes |
+| `NoNewPrivileges=no` | Required to allow `sudo` for `pct exec`/`pct push`/`pct set` child processes |
 
 All web server, API handler, catalog parsing, and general application code runs within this sandbox.
 
 ### Sudoers allowlist
 
-Only two commands are permitted via `/etc/sudoers.d/pve-appstore`:
+Only three commands are permitted via `/etc/sudoers.d/pve-appstore`:
 
 ```
 appstore ALL=(root) NOPASSWD: /usr/bin/nsenter --mount=/proc/1/ns/mnt -- /usr/sbin/pct exec *
 appstore ALL=(root) NOPASSWD: /usr/bin/nsenter --mount=/proc/1/ns/mnt -- /usr/sbin/pct push *
+appstore ALL=(root) NOPASSWD: /usr/bin/nsenter --mount=/proc/1/ns/mnt -- /usr/sbin/pct set *
 ```
 
 No other commands can be run as root by the `appstore` user.
@@ -62,7 +66,7 @@ sudo /usr/bin/nsenter --mount=/proc/1/ns/mnt -- /usr/sbin/pct exec 104 -- ...
 This means:
 
 - The **main service process stays fully sandboxed** — web server, API handlers, catalog parser, etc. all run under `ProtectSystem=strict`
-- Only `pct exec` and `pct push` child processes escape to the host mount namespace
+- Only `pct exec`, `pct push`, and `pct set` child processes escape to the host mount namespace
 - Only the mount namespace is affected — PID, network, user, and other namespaces remain unchanged
 
 ### Why not ProtectSystem=full?
@@ -84,9 +88,10 @@ Downgrading to `ProtectSystem=full` would weaken security for the **entire servi
 | Template listing | `sudo pveam list` | REST API `GET /nodes/{node}/storage/{storage}/content` |
 | Container exec | `sudo pct exec` | `sudo pct exec` (no API equivalent) |
 | File push | `sudo pct push` | `sudo pct push` (no API equivalent) |
+| Device passthrough | `sudo pct set` | `sudo pct set` (API restricted to root@pam) |
 
 The API approach:
-- **Reduces sudoers entries from 11 to 2**
+- **Reduces sudoers entries from 11 to 3**
 - **Eliminates `sudo` privilege escalation** for most operations
 - **Uses the API token** with scoped permissions (pool-limited, role-limited)
 - **Removes dependency** on `pvesh` and `pveam` binaries
@@ -95,13 +100,57 @@ The API approach:
 
 Even if the service process is compromised:
 
-- **Run arbitrary commands as root**: Sudoers only allows `nsenter --mount=/proc/1/ns/mnt -- /usr/sbin/pct exec *` and `pct push *`. Substituting a different binary (e.g., `nsenter -- /bin/bash`) is rejected.
+- **Run arbitrary commands as root**: Sudoers only allows `nsenter --mount=/proc/1/ns/mnt -- /usr/sbin/pct exec *`, `pct push *`, and `pct set *`. Substituting a different binary (e.g., `nsenter -- /bin/bash`) is rejected.
 - **Escape other namespaces**: Only `--mount` is specified. PID, network, and user namespaces are unaffected.
 - **Run nsenter without sudo**: `/proc/1/ns/mnt` is owned by root and inaccessible to the `appstore` user directly.
 - **Modify the sudoers file**: `/etc/sudoers.d/` is protected by `ProtectSystem=strict` (read-only for the service).
 - **Write to system binaries or config**: `/usr`, `/etc`, `/boot` are all read-only.
 - **Access home directories**: `ProtectHome=yes` blocks `/home`, `/root`, `/run/user`.
 - **Manage containers outside the pool**: API token permissions are scoped to the configured pool.
+
+## GPU Passthrough
+
+### Device passthrough
+
+GPU-enabled apps declare profiles in their manifest (e.g. `nvidia-basic`, `dri-render`). At install time, the engine:
+
+1. **Validates device nodes exist** on the host (e.g. `/dev/nvidia0`) before adding them to the job
+2. If `gpu.required: false` and no GPU hardware is found, the install proceeds in CPU-only mode — no devices are passed through
+3. If `gpu.required: true` and devices are missing, the install fails early with a clear error
+4. Device passthrough is applied via `pct set` (see Shell operations above), not the Proxmox API
+
+### NVIDIA library bind-mount
+
+LXC containers share the host's kernel, so the host's NVIDIA kernel module is always in use. The userspace libraries (libcuda, libnvidia-ml, etc.) **must match the kernel module version exactly** — installing a different driver version inside the container will fail with version mismatch errors.
+
+To solve this, the engine automatically bind-mounts the host's NVIDIA libraries into GPU containers:
+
+1. Resolves the host library path — prefers the curated `/usr/lib/x86_64-linux-gnu/nvidia/current/` directory (Debian NVIDIA packages), falls back to auto-discovering libraries by glob
+2. Adds a **read-only bind mount** via `pct set -mpN <host-path>,mp=/usr/lib/nvidia,ro=1`
+3. After container start, creates `/etc/ld.so.conf.d/nvidia.conf` inside the container and runs `ldconfig` so applications can find the libraries
+
+This approach:
+
+| | Install driver in container | Bind-mount from host |
+|---|---|---|
+| Version match | Must manually match host kernel module | Always matches automatically |
+| Disk usage | Full driver per container (~100 MB+) | Zero — shared from host |
+| Host driver upgrade | Every container breaks until updated | All containers pick up new version on restart |
+| Write access | Container can modify its own libs | Read-only — container cannot tamper with host libs |
+| App author effort | Must handle driver installation | Transparent — engine handles it |
+
+### What containers see
+
+- `/dev/nvidia0`, `/dev/nvidiactl`, `/dev/nvidia-uvm` — device nodes (via `pct set -devN`)
+- `/usr/lib/nvidia/` — read-only bind mount of host NVIDIA libraries
+- `ldconfig` configured to search `/usr/lib/nvidia`
+- Applications can use CUDA, NVML, and other NVIDIA APIs without any driver installation
+
+### What containers cannot do
+
+- **Modify host NVIDIA libraries**: The bind mount is read-only (`ro=1`)
+- **Load a different driver version**: The kernel module is the host's; userspace must match
+- **Access GPU devices not passed through**: Only explicitly configured devices are visible
 
 ## Pool and Tag Boundaries
 

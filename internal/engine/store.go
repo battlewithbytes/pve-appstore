@@ -142,6 +142,9 @@ func (s *Store) migrate() error {
 		"ALTER TABLE jobs ADD COLUMN devices_json TEXT NOT NULL DEFAULT '[]'",
 		"ALTER TABLE jobs ADD COLUMN env_vars_json TEXT NOT NULL DEFAULT '{}'",
 		"ALTER TABLE jobs ADD COLUMN stack_id TEXT NOT NULL DEFAULT ''",
+		"ALTER TABLE jobs ADD COLUMN ip_address TEXT NOT NULL DEFAULT ''",
+		"ALTER TABLE installs ADD COLUMN ip_address TEXT NOT NULL DEFAULT ''",
+		"ALTER TABLE stacks ADD COLUMN ip_address TEXT NOT NULL DEFAULT ''",
 	}
 	for _, stmt := range alterStmts {
 		s.db.Exec(stmt) // ignore "duplicate column" errors
@@ -168,12 +171,12 @@ func (s *Store) CreateJob(job *Job) error {
 	}
 
 	_, err := s.db.Exec(`
-		INSERT INTO jobs (id, type, state, app_id, app_name, ctid, node, pool, storage, bridge, cores, memory_mb, disk_gb, hostname, onboot, unprivileged, inputs_json, outputs_json, mounts_json, devices_json, env_vars_json, stack_id, error, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		INSERT INTO jobs (id, type, state, app_id, app_name, ctid, node, pool, storage, bridge, cores, memory_mb, disk_gb, hostname, ip_address, onboot, unprivileged, inputs_json, outputs_json, mounts_json, devices_json, env_vars_json, stack_id, error, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		job.ID, job.Type, job.State, job.AppID, job.AppName, job.CTID,
 		job.Node, job.Pool, job.Storage, job.Bridge,
 		job.Cores, job.MemoryMB, job.DiskGB,
-		job.Hostname, boolToInt(job.OnBoot), boolToInt(job.Unprivileged),
+		job.Hostname, job.IPAddress, boolToInt(job.OnBoot), boolToInt(job.Unprivileged),
 		string(inputsJSON), string(outputsJSON), string(mountsJSON),
 		string(devicesJSON), string(envVarsJSON), job.StackID, job.Error,
 		job.CreatedAt.Format(time.RFC3339), job.UpdatedAt.Format(time.RFC3339),
@@ -211,10 +214,10 @@ func (s *Store) UpdateJob(job *Job) error {
 	}
 
 	_, err := s.db.Exec(`
-		UPDATE jobs SET state=?, ctid=?, hostname=?, onboot=?, unprivileged=?, inputs_json=?, outputs_json=?, mounts_json=?, devices_json=?, env_vars_json=?, error=?, updated_at=?, completed_at=?
+		UPDATE jobs SET state=?, ctid=?, hostname=?, ip_address=?, onboot=?, unprivileged=?, inputs_json=?, outputs_json=?, mounts_json=?, devices_json=?, env_vars_json=?, error=?, updated_at=?, completed_at=?
 		WHERE id=?`,
 		job.State, job.CTID,
-		job.Hostname, boolToInt(job.OnBoot), boolToInt(job.Unprivileged),
+		job.Hostname, job.IPAddress, boolToInt(job.OnBoot), boolToInt(job.Unprivileged),
 		string(inputsJSON), string(outputsJSON), string(mountsJSON),
 		string(devicesJSON), string(envVarsJSON), job.Error,
 		job.UpdatedAt.Format(time.RFC3339), completedAt,
@@ -225,13 +228,13 @@ func (s *Store) UpdateJob(job *Job) error {
 
 // GetJob retrieves a job by ID.
 func (s *Store) GetJob(id string) (*Job, error) {
-	row := s.db.QueryRow(`SELECT id, type, state, app_id, app_name, ctid, node, pool, storage, bridge, cores, memory_mb, disk_gb, hostname, onboot, unprivileged, inputs_json, outputs_json, mounts_json, devices_json, env_vars_json, stack_id, error, created_at, updated_at, completed_at FROM jobs WHERE id=?`, id)
+	row := s.db.QueryRow(`SELECT id, type, state, app_id, app_name, ctid, node, pool, storage, bridge, cores, memory_mb, disk_gb, hostname, ip_address, onboot, unprivileged, inputs_json, outputs_json, mounts_json, devices_json, env_vars_json, stack_id, error, created_at, updated_at, completed_at FROM jobs WHERE id=?`, id)
 	return scanJob(row)
 }
 
 // ListJobs returns all jobs, most recent first.
 func (s *Store) ListJobs() ([]*Job, error) {
-	rows, err := s.db.Query(`SELECT id, type, state, app_id, app_name, ctid, node, pool, storage, bridge, cores, memory_mb, disk_gb, hostname, onboot, unprivileged, inputs_json, outputs_json, mounts_json, devices_json, env_vars_json, stack_id, error, created_at, updated_at, completed_at FROM jobs ORDER BY created_at DESC`)
+	rows, err := s.db.Query(`SELECT id, type, state, app_id, app_name, ctid, node, pool, storage, bridge, cores, memory_mb, disk_gb, hostname, ip_address, onboot, unprivileged, inputs_json, outputs_json, mounts_json, devices_json, env_vars_json, stack_id, error, created_at, updated_at, completed_at FROM jobs ORDER BY created_at DESC`)
 	if err != nil {
 		return nil, err
 	}
@@ -320,10 +323,10 @@ func (s *Store) CreateInstall(inst *Install) error {
 	if inst.EnvVars == nil {
 		envVarsJSON = []byte("{}")
 	}
-	_, err := s.db.Exec(`INSERT INTO installs (id, app_id, app_name, app_version, ctid, node, pool, storage, bridge, cores, memory_mb, disk_gb, hostname, onboot, unprivileged, inputs_json, outputs_json, mounts_json, devices_json, env_vars_json, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+	_, err := s.db.Exec(`INSERT INTO installs (id, app_id, app_name, app_version, ctid, node, pool, storage, bridge, cores, memory_mb, disk_gb, hostname, ip_address, onboot, unprivileged, inputs_json, outputs_json, mounts_json, devices_json, env_vars_json, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		inst.ID, inst.AppID, inst.AppName, inst.AppVersion, inst.CTID, inst.Node, inst.Pool,
 		inst.Storage, inst.Bridge, inst.Cores, inst.MemoryMB, inst.DiskGB,
-		inst.Hostname, boolToInt(inst.OnBoot), boolToInt(inst.Unprivileged),
+		inst.Hostname, inst.IPAddress, boolToInt(inst.OnBoot), boolToInt(inst.Unprivileged),
 		string(inputsJSON), string(outputsJSON), string(mountsJSON),
 		string(devicesJSON), string(envVarsJSON), inst.Status,
 		inst.CreatedAt.Format(time.RFC3339),
@@ -350,10 +353,10 @@ func (s *Store) UpdateInstall(inst *Install) error {
 	if inst.EnvVars == nil {
 		envVarsJSON = []byte("{}")
 	}
-	_, err := s.db.Exec(`UPDATE installs SET ctid=?, status=?, mounts_json=?, outputs_json=?, storage=?, bridge=?, cores=?, memory_mb=?, disk_gb=?, hostname=?, onboot=?, unprivileged=?, inputs_json=?, devices_json=?, env_vars_json=? WHERE id=?`,
+	_, err := s.db.Exec(`UPDATE installs SET ctid=?, status=?, mounts_json=?, outputs_json=?, storage=?, bridge=?, cores=?, memory_mb=?, disk_gb=?, hostname=?, ip_address=?, onboot=?, unprivileged=?, inputs_json=?, devices_json=?, env_vars_json=? WHERE id=?`,
 		inst.CTID, inst.Status, string(mountsJSON), string(outputsJSON),
 		inst.Storage, inst.Bridge, inst.Cores, inst.MemoryMB, inst.DiskGB,
-		inst.Hostname, boolToInt(inst.OnBoot), boolToInt(inst.Unprivileged),
+		inst.Hostname, inst.IPAddress, boolToInt(inst.OnBoot), boolToInt(inst.Unprivileged),
 		string(inputsJSON), string(devicesJSON), string(envVarsJSON),
 		inst.ID,
 	)
@@ -362,13 +365,13 @@ func (s *Store) UpdateInstall(inst *Install) error {
 
 // GetInstall retrieves a single install by ID.
 func (s *Store) GetInstall(id string) (*Install, error) {
-	row := s.db.QueryRow(`SELECT id, app_id, app_name, app_version, ctid, node, pool, storage, bridge, cores, memory_mb, disk_gb, hostname, onboot, unprivileged, inputs_json, outputs_json, mounts_json, devices_json, env_vars_json, status, created_at FROM installs WHERE id=?`, id)
+	row := s.db.QueryRow(`SELECT id, app_id, app_name, app_version, ctid, node, pool, storage, bridge, cores, memory_mb, disk_gb, hostname, ip_address, onboot, unprivileged, inputs_json, outputs_json, mounts_json, devices_json, env_vars_json, status, created_at FROM installs WHERE id=?`, id)
 	return scanInstallRow(row)
 }
 
 // ListInstalls returns all installations.
 func (s *Store) ListInstalls() ([]*Install, error) {
-	rows, err := s.db.Query(`SELECT id, app_id, app_name, app_version, ctid, node, pool, storage, bridge, cores, memory_mb, disk_gb, hostname, onboot, unprivileged, inputs_json, outputs_json, mounts_json, devices_json, env_vars_json, status, created_at FROM installs ORDER BY created_at DESC`)
+	rows, err := s.db.Query(`SELECT id, app_id, app_name, app_version, ctid, node, pool, storage, bridge, cores, memory_mb, disk_gb, hostname, ip_address, onboot, unprivileged, inputs_json, outputs_json, mounts_json, devices_json, env_vars_json, status, created_at FROM installs ORDER BY created_at DESC`)
 	if err != nil {
 		return nil, err
 	}
@@ -392,7 +395,7 @@ func scanInstallRow(row *sql.Row) (*Install, error) {
 	err := row.Scan(&inst.ID, &inst.AppID, &inst.AppName, &inst.AppVersion,
 		&inst.CTID, &inst.Node, &inst.Pool,
 		&inst.Storage, &inst.Bridge, &inst.Cores, &inst.MemoryMB, &inst.DiskGB,
-		&inst.Hostname, &onboot, &unprivileged,
+		&inst.Hostname, &inst.IPAddress, &onboot, &unprivileged,
 		&inputsJSON, &outputsJSON, &mountsJSON, &devicesJSON, &envVarsJSON,
 		&inst.Status, &createdAt,
 	)
@@ -417,7 +420,7 @@ func scanInstallRows(rows *sql.Rows) (*Install, error) {
 	err := rows.Scan(&inst.ID, &inst.AppID, &inst.AppName, &inst.AppVersion,
 		&inst.CTID, &inst.Node, &inst.Pool,
 		&inst.Storage, &inst.Bridge, &inst.Cores, &inst.MemoryMB, &inst.DiskGB,
-		&inst.Hostname, &onboot, &unprivileged,
+		&inst.Hostname, &inst.IPAddress, &onboot, &unprivileged,
 		&inputsJSON, &outputsJSON, &mountsJSON, &devicesJSON, &envVarsJSON,
 		&inst.Status, &createdAt,
 	)
@@ -444,7 +447,7 @@ func scanJob(row *sql.Row) (*Job, error) {
 	err := row.Scan(&job.ID, &job.Type, &job.State, &job.AppID, &job.AppName,
 		&job.CTID, &job.Node, &job.Pool, &job.Storage, &job.Bridge,
 		&job.Cores, &job.MemoryMB, &job.DiskGB,
-		&job.Hostname, &onboot, &unprivileged,
+		&job.Hostname, &job.IPAddress, &onboot, &unprivileged,
 		&inputsJSON, &outputsJSON, &mountsJSON, &devicesJSON, &envVarsJSON,
 		&job.StackID, &job.Error, &createdAt, &updatedAt, &completedAt,
 	)
@@ -471,7 +474,7 @@ func scanJob(row *sql.Row) (*Job, error) {
 
 // HasActiveJobForApp returns a non-terminal install job for the given app, if any.
 func (s *Store) HasActiveJobForApp(appID string) (*Job, bool) {
-	row := s.db.QueryRow(`SELECT id, type, state, app_id, app_name, ctid, node, pool, storage, bridge, cores, memory_mb, disk_gb, hostname, onboot, unprivileged, inputs_json, outputs_json, mounts_json, devices_json, env_vars_json, stack_id, error, created_at, updated_at, completed_at FROM jobs WHERE app_id=? AND type='install' AND state NOT IN ('completed','failed','cancelled') ORDER BY created_at DESC LIMIT 1`, appID)
+	row := s.db.QueryRow(`SELECT id, type, state, app_id, app_name, ctid, node, pool, storage, bridge, cores, memory_mb, disk_gb, hostname, ip_address, onboot, unprivileged, inputs_json, outputs_json, mounts_json, devices_json, env_vars_json, stack_id, error, created_at, updated_at, completed_at FROM jobs WHERE app_id=? AND type='install' AND state NOT IN ('completed','failed','cancelled') ORDER BY created_at DESC LIMIT 1`, appID)
 	job, err := scanJob(row)
 	if err != nil {
 		return nil, false
@@ -481,7 +484,7 @@ func (s *Store) HasActiveJobForApp(appID string) (*Job, bool) {
 
 // HasActiveInstallForApp returns a non-uninstalled install for the given app, if any.
 func (s *Store) HasActiveInstallForApp(appID string) (*Install, bool) {
-	row := s.db.QueryRow(`SELECT id, app_id, app_name, app_version, ctid, node, pool, storage, bridge, cores, memory_mb, disk_gb, hostname, onboot, unprivileged, inputs_json, outputs_json, mounts_json, devices_json, env_vars_json, status, created_at FROM installs WHERE app_id=? AND status!='uninstalled' ORDER BY created_at DESC LIMIT 1`, appID)
+	row := s.db.QueryRow(`SELECT id, app_id, app_name, app_version, ctid, node, pool, storage, bridge, cores, memory_mb, disk_gb, hostname, ip_address, onboot, unprivileged, inputs_json, outputs_json, mounts_json, devices_json, env_vars_json, status, created_at FROM installs WHERE app_id=? AND status!='uninstalled' ORDER BY created_at DESC LIMIT 1`, appID)
 	inst, err := scanInstallRow(row)
 	if err != nil {
 		return nil, false
@@ -541,7 +544,7 @@ func scanJobRow(rows *sql.Rows) (*Job, error) {
 	err := rows.Scan(&job.ID, &job.Type, &job.State, &job.AppID, &job.AppName,
 		&job.CTID, &job.Node, &job.Pool, &job.Storage, &job.Bridge,
 		&job.Cores, &job.MemoryMB, &job.DiskGB,
-		&job.Hostname, &onboot, &unprivileged,
+		&job.Hostname, &job.IPAddress, &onboot, &unprivileged,
 		&inputsJSON, &outputsJSON, &mountsJSON, &devicesJSON, &envVarsJSON,
 		&job.StackID, &job.Error, &createdAt, &updatedAt, &completedAt,
 	)
@@ -584,10 +587,10 @@ func (s *Store) CreateStack(stack *Stack) error {
 		envVarsJSON = []byte("{}")
 	}
 
-	_, err := s.db.Exec(`INSERT INTO stacks (id, name, ctid, node, pool, storage, bridge, cores, memory_mb, disk_gb, hostname, onboot, unprivileged, ostemplate, apps_json, mounts_json, devices_json, env_vars_json, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+	_, err := s.db.Exec(`INSERT INTO stacks (id, name, ctid, node, pool, storage, bridge, cores, memory_mb, disk_gb, hostname, ip_address, onboot, unprivileged, ostemplate, apps_json, mounts_json, devices_json, env_vars_json, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		stack.ID, stack.Name, stack.CTID, stack.Node, stack.Pool,
 		stack.Storage, stack.Bridge, stack.Cores, stack.MemoryMB, stack.DiskGB,
-		stack.Hostname, boolToInt(stack.OnBoot), boolToInt(stack.Unprivileged),
+		stack.Hostname, stack.IPAddress, boolToInt(stack.OnBoot), boolToInt(stack.Unprivileged),
 		stack.OSTemplate, string(appsJSON), string(mountsJSON),
 		string(devicesJSON), string(envVarsJSON), stack.Status,
 		stack.CreatedAt.Format(time.RFC3339),
@@ -620,13 +623,13 @@ func (s *Store) UpdateStack(stack *Stack) error {
 
 // GetStack retrieves a single stack by ID.
 func (s *Store) GetStack(id string) (*Stack, error) {
-	row := s.db.QueryRow(`SELECT id, name, ctid, node, pool, storage, bridge, cores, memory_mb, disk_gb, hostname, onboot, unprivileged, ostemplate, apps_json, mounts_json, devices_json, env_vars_json, status, created_at FROM stacks WHERE id=?`, id)
+	row := s.db.QueryRow(`SELECT id, name, ctid, node, pool, storage, bridge, cores, memory_mb, disk_gb, hostname, ip_address, onboot, unprivileged, ostemplate, apps_json, mounts_json, devices_json, env_vars_json, status, created_at FROM stacks WHERE id=?`, id)
 	return scanStackRow(row)
 }
 
 // ListStacks returns all stacks, most recent first.
 func (s *Store) ListStacks() ([]*Stack, error) {
-	rows, err := s.db.Query(`SELECT id, name, ctid, node, pool, storage, bridge, cores, memory_mb, disk_gb, hostname, onboot, unprivileged, ostemplate, apps_json, mounts_json, devices_json, env_vars_json, status, created_at FROM stacks ORDER BY created_at DESC`)
+	rows, err := s.db.Query(`SELECT id, name, ctid, node, pool, storage, bridge, cores, memory_mb, disk_gb, hostname, ip_address, onboot, unprivileged, ostemplate, apps_json, mounts_json, devices_json, env_vars_json, status, created_at FROM stacks ORDER BY created_at DESC`)
 	if err != nil {
 		return nil, err
 	}
@@ -655,7 +658,7 @@ func scanStackRow(row *sql.Row) (*Stack, error) {
 	var onboot, unprivileged int
 	err := row.Scan(&stack.ID, &stack.Name, &stack.CTID, &stack.Node, &stack.Pool,
 		&stack.Storage, &stack.Bridge, &stack.Cores, &stack.MemoryMB, &stack.DiskGB,
-		&stack.Hostname, &onboot, &unprivileged, &stack.OSTemplate,
+		&stack.Hostname, &stack.IPAddress, &onboot, &unprivileged, &stack.OSTemplate,
 		&appsJSON, &mountsJSON, &devicesJSON, &envVarsJSON,
 		&stack.Status, &createdAt,
 	)
@@ -678,7 +681,7 @@ func scanStackRows(rows *sql.Rows) (*Stack, error) {
 	var onboot, unprivileged int
 	err := rows.Scan(&stack.ID, &stack.Name, &stack.CTID, &stack.Node, &stack.Pool,
 		&stack.Storage, &stack.Bridge, &stack.Cores, &stack.MemoryMB, &stack.DiskGB,
-		&stack.Hostname, &onboot, &unprivileged, &stack.OSTemplate,
+		&stack.Hostname, &stack.IPAddress, &onboot, &unprivileged, &stack.OSTemplate,
 		&appsJSON, &mountsJSON, &devicesJSON, &envVarsJSON,
 		&stack.Status, &createdAt,
 	)

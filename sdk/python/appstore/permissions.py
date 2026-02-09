@@ -114,9 +114,21 @@ class AppPermissions:
             )
 
     def check_apt_repo(self, repo_line: str) -> None:
-        """Verify an APT repository line is in the allowlist."""
+        """Verify an APT repository line is in the allowlist.
+
+        First tries exact match (with whitespace normalization), then falls
+        back to fnmatch for wildcard patterns. This two-pass approach handles
+        literal square brackets in apt repo lines (e.g. [signed-by=...]) which
+        fnmatch would otherwise interpret as glob character classes.
+        """
+        normalized = " ".join(repo_line.split())
         for allowed in self.apt_repos:
-            if fnmatch.fnmatch(repo_line, allowed):
+            norm_allowed = " ".join(allowed.split())
+            # Exact match handles lines with literal brackets
+            if normalized == norm_allowed:
+                return
+            # fnmatch handles wildcard patterns (*, ?)
+            if fnmatch.fnmatch(normalized, norm_allowed):
                 return
         raise PermissionDeniedError(
             f"APT repo '{repo_line}' is not in the allowed apt repos: {self.apt_repos}"

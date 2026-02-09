@@ -361,6 +361,7 @@ function InstallWizard({ app, onClose }: { app: AppDetail; onClose: () => void }
   const [storage, setStorage] = useState('')
   const [bridge, setBridge] = useState('')
   const [hostname, setHostname] = useState('')
+  const [ipAddress, setIpAddress] = useState('')
   const [onboot, setOnboot] = useState(app.lxc.defaults.onboot ?? true)
   const [unprivileged, setUnprivileged] = useState(app.lxc.defaults.unprivileged ?? true)
   const [installing, setInstalling] = useState(false)
@@ -432,6 +433,7 @@ function InstallWizard({ app, onClose }: { app: AppDetail; onClose: () => void }
         storage: storage || undefined,
         bridge: bridge || undefined,
         hostname: hostname || undefined,
+        ip_address: ipAddress || undefined,
         onboot,
         unprivileged,
         inputs: allInputs,
@@ -834,6 +836,9 @@ function InstallWizard({ app, onClose }: { app: AppDetail; onClose: () => void }
               <FormRow label="Hostname" description="Container hostname on the network" help={`Defaults to: ${app.id}`}>
                 <FormInput value={hostname} onChange={setHostname} placeholder={app.id} />
               </FormRow>
+              <FormRow label="Static IP" description="Fixed IP address for this container" help="Leave blank for DHCP">
+                <FormInput value={ipAddress} onChange={setIpAddress} placeholder="e.g. 192.168.1.100" />
+              </FormRow>
               <FormRow label="Start on Boot">
                 <label className="flex items-center gap-2 cursor-pointer">
                   <input type="checkbox" checked={onboot} onChange={e => setOnboot(e.target.checked)} className="w-4 h-4 accent-primary" />
@@ -981,6 +986,8 @@ function InstallDetailView({ id, requireAuth }: { id: string; requireAuth: (cb: 
   const [reinstalling, setReinstalling] = useState(false)
   const [showTerminal, setShowTerminal] = useState(false)
   const [showUninstallDialog, setShowUninstallDialog] = useState(false)
+  const [showUpdateDialog, setShowUpdateDialog] = useState(false)
+  const [updating, setUpdating] = useState(false)
 
   const fetchDetail = useCallback(() => {
     api.installDetail(id).then(d => {
@@ -1022,6 +1029,21 @@ function InstallDetailView({ id, requireAuth }: { id: string; requireAuth: (cb: 
       } catch (e: unknown) {
         alert(e instanceof Error ? e.message : 'Reinstall failed')
         setReinstalling(false)
+      }
+    })
+  }
+
+  const handleUpdate = () => {
+    requireAuth(async () => {
+      if (!detail) return
+      setUpdating(true)
+      setShowUpdateDialog(false)
+      try {
+        const j = await api.update(detail.id)
+        window.location.hash = `#/job/${j.id}`
+      } catch (e: unknown) {
+        alert(e instanceof Error ? e.message : 'Update failed')
+        setUpdating(false)
       }
     })
   }
@@ -1069,6 +1091,11 @@ function InstallDetailView({ id, requireAuth }: { id: string; requireAuth: (cb: 
           </div>
         </div>
         <div className="flex gap-2">
+          {detail.update_available && !isUninstalled && (
+            <button onClick={() => setShowUpdateDialog(true)} disabled={updating} className="px-4 py-2 text-sm font-mono border-none rounded-lg cursor-pointer text-bg-primary bg-primary hover:shadow-[0_0_20px_rgba(0,255,157,0.3)] transition-all disabled:opacity-50 font-semibold">
+              {updating ? 'Updating...' : 'Update'}
+            </button>
+          )}
           {isUninstalled && hasVolumes && (
             <button onClick={handleReinstall} disabled={reinstalling} className="px-4 py-2 text-sm font-mono border-none rounded-lg cursor-pointer text-bg-primary bg-primary hover:shadow-[0_0_20px_rgba(0,255,157,0.3)] transition-all disabled:opacity-50 font-semibold">
               {reinstalling ? 'Reinstalling...' : 'Reinstall'}
@@ -1098,10 +1125,28 @@ function InstallDetailView({ id, requireAuth }: { id: string; requireAuth: (cb: 
         />
       )}
 
+      {/* Update confirmation dialog */}
+      {showUpdateDialog && detail && (
+        <UpdateDialog
+          appName={detail.app_name}
+          ctid={detail.ctid}
+          currentVersion={detail.app_version}
+          newVersion={detail.catalog_version || ''}
+          isRunning={isRunning}
+          onConfirm={handleUpdate}
+          onCancel={() => setShowUpdateDialog(false)}
+        />
+      )}
+
       {/* Update available banner */}
       {detail.update_available && (
-        <div className="mt-4 p-3 bg-status-warning/10 border border-status-warning/30 rounded-lg flex items-center gap-3">
+        <div className="mt-4 p-3 bg-status-warning/10 border border-status-warning/30 rounded-lg flex items-center justify-between">
           <span className="text-status-warning text-sm font-mono">Update available: v{detail.app_version} &rarr; v{detail.catalog_version}</span>
+          {!isUninstalled && (
+            <button onClick={() => setShowUpdateDialog(true)} disabled={updating} className="px-4 py-2 text-sm font-mono border-none rounded-lg cursor-pointer text-bg-primary bg-primary hover:shadow-[0_0_20px_rgba(0,255,157,0.3)] transition-all disabled:opacity-50 font-semibold">
+              {updating ? 'Updating...' : 'Update'}
+            </button>
+          )}
         </div>
       )}
 
@@ -1168,6 +1213,7 @@ function InstallDetailView({ id, requireAuth }: { id: string; requireAuth: (cb: 
         <InfoCard title="Container Config">
           <InfoRow label="CTID" value={detail.ctid > 0 ? String(detail.ctid) : '-'} />
           <InfoRow label="Node" value={detail.node} />
+          <InfoRow label="IP Address" value={detail.ip || (detail.ip_address ? `${detail.ip_address} (static)` : 'DHCP')} />
           <InfoRow label="Pool" value={detail.pool || '-'} />
           <InfoRow label="Storage" value={detail.storage || '-'} />
           <InfoRow label="Bridge" value={detail.bridge || '-'} />
@@ -1238,20 +1284,58 @@ function UninstallDialog({ appName, ctid, mountPoints, onConfirm, onCancel }: {
   )
 }
 
+function UpdateDialog({ appName, ctid, currentVersion, newVersion, isRunning, onConfirm, onCancel }: {
+  appName: string; ctid: number; currentVersion: string; newVersion: string; isRunning: boolean;
+  onConfirm: () => void; onCancel: () => void;
+}) {
+  return (
+    <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-[100]">
+      <div className="bg-bg-card border border-border rounded-xl p-8 w-full max-w-[480px]">
+        <h2 className="text-lg font-bold text-text-primary mb-2 font-mono">Update {appName}</h2>
+        <p className="text-sm text-text-secondary mb-4">
+          Update from <span className="font-mono text-text-primary">v{currentVersion}</span> to <span className="font-mono text-primary">v{newVersion}</span>
+        </p>
+
+        {isRunning && (
+          <div className="mb-4 p-2.5 bg-status-warning/10 border border-status-warning/30 rounded text-status-warning text-xs font-mono">
+            Warning: Container CT {ctid} is currently running. It will be stopped and recreated during the update.
+          </div>
+        )}
+
+        <p className="text-xs text-text-muted mb-4 font-mono">
+          This will destroy the current container and create a new one with the latest version. Data volumes (if any) will be preserved and reattached.
+        </p>
+
+        <div className="flex gap-3 justify-end">
+          <button onClick={onCancel} className="px-5 py-2.5 text-sm font-semibold border border-border rounded-lg cursor-pointer text-text-secondary bg-transparent hover:border-text-secondary transition-colors font-mono">Cancel</button>
+          <button onClick={onConfirm} className="px-5 py-2.5 text-sm font-semibold border-none rounded-lg cursor-pointer bg-primary text-bg-primary hover:shadow-[0_0_20px_rgba(0,255,157,0.3)] transition-all font-mono">
+            Update
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // --- Installs List ---
 
 function InstallsList({ requireAuth }: { requireAuth: (cb: () => void) => void }) {
   const [installs, setInstalls] = useState<InstallListItem[]>([])
+  const [stacks, setStacks] = useState<StackListItem[]>([])
   const [loading, setLoading] = useState(true)
   const [contextMenu, setContextMenu] = useState<{ install: InstallListItem; x: number; y: number } | null>(null)
+  const [stackMenu, setStackMenu] = useState<{ stack: StackListItem; x: number; y: number } | null>(null)
   const [showTerminal, setShowTerminal] = useState<string | null>(null)
+  const [showStackTerminal, setShowStackTerminal] = useState<string | null>(null)
   const [showLogs, setShowLogs] = useState<string | null>(null)
+  const [showStackLogs, setShowStackLogs] = useState<string | null>(null)
   const [actionLoading, setActionLoading] = useState<string | null>(null)
 
   const fetchInstalls = useCallback(async () => {
     try {
-      const d = await api.installs()
-      setInstalls(d.installs || [])
+      const [instData, stackData] = await Promise.all([api.installs(), api.stacks()])
+      setInstalls(instData.installs || [])
+      setStacks(stackData.stacks || [])
     } catch { /* ignore */ }
     setLoading(false)
   }, [])
@@ -1283,6 +1367,27 @@ function InstallsList({ requireAuth }: { requireAuth: (cb: () => void) => void }
     setActionLoading(null)
   }
 
+  const handleStackAction = async (action: string, stackId: string) => {
+    setActionLoading(`stack-${stackId}`)
+    try {
+      switch (action) {
+        case 'start': await api.startStack(stackId); break
+        case 'stop': await api.stopStack(stackId); break
+        case 'restart': await api.restartStack(stackId); break
+        case 'uninstall': {
+          const job = await api.uninstallStack(stackId)
+          window.location.hash = `#/job/${job.id}`
+          return
+        }
+      }
+      setTimeout(fetchInstalls, 1000)
+      setTimeout(fetchInstalls, 4000)
+    } catch (e) {
+      alert(e instanceof Error ? e.message : `${action} failed`)
+    }
+    setActionLoading(null)
+  }
+
   const resolveUrl = (inst: InstallListItem, url: string) =>
     inst.ip ? url.replace(/\{\{ip\}\}/g, inst.ip) : url
 
@@ -1293,10 +1398,19 @@ function InstallsList({ requireAuth }: { requireAuth: (cb: () => void) => void }
 
   const gridCols = 'grid-cols-[40px_1.5fr_90px_160px_110px_50px_70px_90px_36px]'
 
+  const getStackAppUrls = (stack: StackListItem, app: StackApp) => {
+    if (!app.outputs) return []
+    return Object.entries(app.outputs)
+      .filter(([, v]) => v.startsWith('http'))
+      .map(([k, v]) => ({ key: k, url: stack.ip ? v.replace(/\{\{ip\}\}/g, stack.ip) : v }))
+  }
+
+  const isEmpty = installs.length === 0 && stacks.length === 0
+
   return (
     <div>
       <h2 className="text-xl font-bold text-text-primary mb-5 font-mono">Installed Apps</h2>
-      {loading ? <Center>Loading...</Center> : installs.length === 0 ? <Center>No apps installed</Center> : (
+      {loading ? <Center>Loading...</Center> : isEmpty ? <Center>No apps installed</Center> : (
         <div className="bg-bg-card border border-border rounded-lg overflow-x-auto">
           {/* Table header */}
           <div className={`grid ${gridCols} gap-2 px-4 py-2 bg-bg-secondary text-[10px] text-text-muted font-mono uppercase tracking-wider border-b border-border items-center`}>
@@ -1310,7 +1424,7 @@ function InstallsList({ requireAuth }: { requireAuth: (cb: () => void) => void }
             <span>Created</span>
             <span></span>
           </div>
-          {/* Rows */}
+          {/* Install rows */}
           {installs.map(inst => {
             const isRunning = inst.status === 'running'
             const isUninstalled = inst.status === 'uninstalled'
@@ -1329,6 +1443,9 @@ function InstallsList({ requireAuth }: { requireAuth: (cb: () => void) => void }
                   <div className="flex items-center gap-1.5 flex-wrap">
                     <span className="text-sm font-semibold text-text-primary truncate">{inst.app_name}</span>
                     {inst.app_version && <span className="text-[10px] text-text-muted font-mono">v{inst.app_version}</span>}
+                    {inst.update_available && (
+                      <span className="text-[9px] bg-status-warning/20 text-status-warning px-1.5 py-0.5 rounded font-mono">update</span>
+                    )}
                   </div>
                   {inst.ctid > 0 && <div className="text-[10px] text-text-muted font-mono">CT {inst.ctid}</div>}
                 </div>
@@ -1373,10 +1490,98 @@ function InstallsList({ requireAuth }: { requireAuth: (cb: () => void) => void }
               </div>
             )
           })}
+          {/* Stack rows */}
+          {stacks.map(stack => {
+            const isRunning = stack.status === 'running'
+            const isStackLoading = actionLoading === `stack-${stack.id}`
+            return (
+              <div key={`stack-${stack.id}`}>
+                {/* Stack header row */}
+                <div
+                  className={`grid ${gridCols} gap-2 px-4 py-3 border-b border-border items-center hover:bg-bg-secondary/50 cursor-pointer transition-colors bg-bg-secondary/30 ${isStackLoading ? 'opacity-50 pointer-events-none' : ''}`}
+                  onClick={() => window.location.hash = `#/stack/${stack.id}`}>
+                  {/* Icon */}
+                  <div className="w-8 h-8 rounded bg-primary/10 flex items-center justify-center flex-shrink-0">
+                    <span className="text-primary text-sm font-mono font-bold">S</span>
+                  </div>
+                  {/* Name */}
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <span className="text-sm font-semibold text-text-primary truncate">{stack.name}</span>
+                      <span className="text-[9px] bg-primary/15 text-primary px-1.5 py-0.5 rounded font-mono">stack</span>
+                      <span className="text-[10px] text-text-muted font-mono">{stack.apps.length} app{stack.apps.length !== 1 ? 's' : ''}</span>
+                    </div>
+                    {stack.ctid > 0 && <div className="text-[10px] text-text-muted font-mono">CT {stack.ctid}</div>}
+                  </div>
+                  {/* Status */}
+                  <div className="flex items-center gap-1.5">
+                    <StatusDot running={isRunning} />
+                    <span className={`text-xs font-mono ${isRunning ? 'text-status-running' : 'text-status-stopped'}`}>{stack.status}</span>
+                  </div>
+                  {/* Network */}
+                  <div className="min-w-0 text-xs font-mono text-text-secondary">
+                    {stack.ip && <div className="truncate">{stack.ip}</div>}
+                  </div>
+                  {/* Resources */}
+                  <span className="text-xs font-mono text-text-muted">{stack.cores}c / {stack.memory_mb}MB / {stack.disk_gb}GB</span>
+                  {/* Boot */}
+                  <span className="text-xs font-mono text-text-muted">{stack.onboot ? 'On' : 'Off'}</span>
+                  {/* Uptime */}
+                  <span className="text-xs font-mono text-text-muted">
+                    {isRunning && stack.uptime ? formatUptime(stack.uptime) : '-'}
+                  </span>
+                  {/* Created */}
+                  <span className="text-[10px] font-mono text-text-muted">
+                    {new Date(stack.created_at).toLocaleDateString()}
+                  </span>
+                  {/* Actions button */}
+                  <button
+                    onClick={e => { e.stopPropagation(); setStackMenu({ stack, x: e.clientX, y: e.clientY }) }}
+                    className="text-text-muted hover:text-primary bg-transparent border-none cursor-pointer text-base font-mono p-0 leading-none"
+                    title="Actions">&#x22EE;</button>
+                </div>
+                {/* Indented app rows within stack */}
+                {stack.apps.map(app => {
+                  const appUrls = getStackAppUrls(stack, app)
+                  const appDisplayStatus = app.status === 'completed' ? 'installed' : app.status
+                  return (
+                    <div key={`stack-${stack.id}-${app.app_id}`}
+                      className="grid grid-cols-[40px_1.5fr_90px_160px_1fr] gap-2 px-4 py-2 border-b border-border/50 items-center pl-12 bg-bg-primary/50 cursor-pointer hover:bg-bg-secondary/30 transition-colors"
+                      onClick={() => window.location.hash = `#/app/${app.app_id}`}>
+                      {/* Icon */}
+                      <div className="w-6 h-6 rounded bg-bg-secondary overflow-hidden flex items-center justify-center flex-shrink-0">
+                        <img src={`/api/apps/${app.app_id}/icon`} alt="" className="w-5 h-5 rounded" onError={e => { (e.target as HTMLImageElement).style.display = 'none' }} />
+                      </div>
+                      {/* Name */}
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-xs text-text-secondary truncate">{app.app_name}</span>
+                          {app.app_version && <span className="text-[9px] text-text-muted font-mono">v{app.app_version}</span>}
+                        </div>
+                      </div>
+                      {/* Status */}
+                      <span className={`text-[10px] font-mono ${app.status === 'completed' ? 'text-status-running' : app.status === 'failed' ? 'text-status-stopped' : 'text-text-muted'}`}>
+                        {appDisplayStatus}
+                      </span>
+                      {/* URLs */}
+                      <div className="min-w-0 text-xs font-mono">
+                        {appUrls.slice(0, 2).map(u => (
+                          <a key={u.key} href={u.url} target="_blank" rel="noreferrer"
+                            onClick={e => e.stopPropagation()}
+                            className="text-primary hover:underline block truncate text-[10px]">{u.url.replace(/^https?:\/\//, '')}</a>
+                        ))}
+                      </div>
+                      <span></span>
+                    </div>
+                  )
+                })}
+              </div>
+            )
+          })}
         </div>
       )}
 
-      {/* Context Menu */}
+      {/* Context Menu — Installs */}
       {contextMenu && (
         <InstallContextMenu
           install={contextMenu.install}
@@ -1390,8 +1595,23 @@ function InstallsList({ requireAuth }: { requireAuth: (cb: () => void) => void }
         />
       )}
 
+      {/* Context Menu — Stacks */}
+      {stackMenu && (
+        <StackContextMenu
+          stack={stackMenu.stack}
+          x={stackMenu.x}
+          y={stackMenu.y}
+          onClose={() => setStackMenu(null)}
+          onAction={(action, id) => { setStackMenu(null); requireAuth(() => handleStackAction(action, id)) }}
+          onShell={id => { setStackMenu(null); requireAuth(() => setShowStackTerminal(id)) }}
+          onLogs={id => { setStackMenu(null); setShowStackLogs(id) }}
+        />
+      )}
+
       {showTerminal && <TerminalModal installId={showTerminal} onClose={() => setShowTerminal(null)} />}
+      {showStackTerminal && <StackTerminalModal stackId={showStackTerminal} onClose={() => setShowStackTerminal(null)} />}
       {showLogs && <LogViewerModal installId={showLogs} onClose={() => setShowLogs(null)} />}
+      {showStackLogs && <StackLogViewerModal stackId={showStackLogs} onClose={() => setShowStackLogs(null)} />}
     </div>
   )
 }
@@ -2618,6 +2838,7 @@ function StackCreateWizard({ requireAuth }: { requireAuth: (cb: () => void) => v
   const [diskGB, setDiskGB] = useState(16)
   const [storage, setStorage] = useState('')
   const [bridge, setBridge] = useState('')
+  const [ipAddress, setIpAddress] = useState('')
   const [defaults, setDefaults] = useState<{ storages: string[]; bridges: string[]; defaults: { cores: number; memory_mb: number; disk_gb: number } } | null>(null)
   const [validating, setValidating] = useState(false)
   const [validation, setValidation] = useState<StackValidateResponse | null>(null)
@@ -2694,6 +2915,7 @@ function StackCreateWizard({ requireAuth }: { requireAuth: (cb: () => void) => v
           cores,
           memory_mb: memoryMB,
           disk_gb: diskGB,
+          ip_address: ipAddress || undefined,
         }
         const job = await api.createStack(req)
         window.location.hash = `#/job/${job.id}`
@@ -2827,6 +3049,11 @@ function StackCreateWizard({ requireAuth }: { requireAuth: (cb: () => void) => v
                 className="w-full px-3 py-2 bg-bg-secondary border border-border rounded-md text-text-primary text-sm outline-none focus:border-primary font-mono">
                 {defaults?.bridges.map(b => <option key={b} value={b}>{b}</option>)}
               </select>
+            </FormField>
+          </div>
+          <div className="mb-4">
+            <FormField label="Static IP (optional)">
+              <FormInput value={ipAddress} onChange={setIpAddress} placeholder="e.g. 192.168.1.100 (blank = DHCP)" />
             </FormField>
           </div>
 

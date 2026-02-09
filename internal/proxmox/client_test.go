@@ -424,3 +424,156 @@ func TestNewClientValidation(t *testing.T) {
 		t.Fatal("client should not be nil")
 	}
 }
+
+// --- Static IP tests ---
+
+func TestFormatIPConfigBareIP(t *testing.T) {
+	got := formatIPConfig("192.168.1.100")
+	want := "192.168.1.100/24,gw=192.168.1.1"
+	if got != want {
+		t.Errorf("formatIPConfig(%q) = %q, want %q", "192.168.1.100", got, want)
+	}
+}
+
+func TestFormatIPConfigCIDR(t *testing.T) {
+	got := formatIPConfig("10.0.0.50/16")
+	want := "10.0.0.50/16,gw=10.0.0.1"
+	if got != want {
+		t.Errorf("formatIPConfig(%q) = %q, want %q", "10.0.0.50/16", got, want)
+	}
+}
+
+func TestFormatIPConfigCIDRWithGateway(t *testing.T) {
+	input := "10.0.0.50/16,gw=10.0.0.254"
+	got := formatIPConfig(input)
+	if got != input {
+		t.Errorf("formatIPConfig(%q) = %q, want passthrough", input, got)
+	}
+}
+
+func TestDeriveGateway(t *testing.T) {
+	tests := []struct {
+		ip, want string
+	}{
+		{"192.168.1.100", "192.168.1.1"},
+		{"10.0.0.50", "10.0.0.1"},
+		{"172.16.255.200", "172.16.255.1"},
+	}
+	for _, tt := range tests {
+		got := deriveGateway(tt.ip)
+		if got != tt.want {
+			t.Errorf("deriveGateway(%q) = %q, want %q", tt.ip, got, tt.want)
+		}
+	}
+}
+
+func TestCreateContainerWithStaticIP(t *testing.T) {
+	var gotBody string
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api2/json/nodes/pve/lxc", func(w http.ResponseWriter, r *http.Request) {
+		r.ParseForm()
+		gotBody = r.PostForm.Encode()
+		json.NewEncoder(w).Encode(map[string]interface{}{"data": "UPID:pve:00001:00000:00000:create:100:user@pam:"})
+	})
+	mux.HandleFunc("/api2/json/nodes/pve/tasks/", func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"data": map[string]interface{}{"status": "stopped", "exitstatus": "OK"},
+		})
+	})
+
+	_, client := newTestServer(t, mux)
+	err := client.Create(context.Background(), ContainerCreateOptions{
+		CTID:       100,
+		OSTemplate: "local:vztmpl/debian-12.tar.zst",
+		Storage:    "local-lvm",
+		RootFSSize: 8,
+		Cores:      2,
+		MemoryMB:   1024,
+		Bridge:     "vmbr0",
+		Hostname:   "test-ct",
+		IPAddress:  "192.168.1.100",
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	// Verify net0 contains the static IP config
+	if !strings.Contains(gotBody, "ip%3D192.168.1.100") && !strings.Contains(gotBody, "ip=192.168.1.100") {
+		t.Errorf("body should contain static IP in net0: %s", gotBody)
+	}
+	if !strings.Contains(gotBody, "gw") {
+		t.Errorf("body should contain gateway in net0: %s", gotBody)
+	}
+}
+
+func TestCreateContainerDHCP(t *testing.T) {
+	var gotBody string
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api2/json/nodes/pve/lxc", func(w http.ResponseWriter, r *http.Request) {
+		r.ParseForm()
+		gotBody = r.PostForm.Encode()
+		json.NewEncoder(w).Encode(map[string]interface{}{"data": "UPID:pve:00001:00000:00000:create:100:user@pam:"})
+	})
+	mux.HandleFunc("/api2/json/nodes/pve/tasks/", func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"data": map[string]interface{}{"status": "stopped", "exitstatus": "OK"},
+		})
+	})
+
+	_, client := newTestServer(t, mux)
+	err := client.Create(context.Background(), ContainerCreateOptions{
+		CTID:       101,
+		OSTemplate: "local:vztmpl/debian-12.tar.zst",
+		Storage:    "local-lvm",
+		RootFSSize: 8,
+		Cores:      2,
+		MemoryMB:   1024,
+		Bridge:     "vmbr0",
+		Hostname:   "test-dhcp",
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	if !strings.Contains(gotBody, "dhcp") {
+		t.Errorf("body should contain ip=dhcp for empty IPAddress: %s", gotBody)
+	}
+}
+
+// TestCreateContainerNoDeviceParams verifies that Create does NOT send dev* params
+// in the API call. Device passthrough must be applied post-creation via pct set,
+// because the Proxmox API restricts dev* to root@pam only.
+func TestCreateContainerNoDeviceParams(t *testing.T) {
+	var gotBody string
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api2/json/nodes/pve/lxc", func(w http.ResponseWriter, r *http.Request) {
+		r.ParseForm()
+		gotBody = r.PostForm.Encode()
+		json.NewEncoder(w).Encode(map[string]interface{}{"data": "UPID:pve:00001:00000:00000:create:100:user@pam:"})
+	})
+	mux.HandleFunc("/api2/json/nodes/pve/tasks/", func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"data": map[string]interface{}{"status": "stopped", "exitstatus": "OK"},
+		})
+	})
+
+	_, client := newTestServer(t, mux)
+	err := client.Create(context.Background(), ContainerCreateOptions{
+		CTID:       100,
+		OSTemplate: "local:vztmpl/debian-12.tar.zst",
+		Storage:    "local-lvm",
+		RootFSSize: 8,
+		Cores:      2,
+		MemoryMB:   1024,
+		Bridge:     "vmbr0",
+		Hostname:   "gpu-test",
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	// Verify no dev* params were sent — they should be applied via pct set instead
+	if strings.Contains(gotBody, "dev0") || strings.Contains(gotBody, "dev1") {
+		t.Errorf("API create body should NOT contain dev* params (applied via pct set instead): %s", gotBody)
+	}
+}

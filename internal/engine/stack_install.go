@@ -188,6 +188,7 @@ func (e *Engine) StartStack(req StackCreateRequest) (*Job, error) {
 		MemoryMB:     memoryMB,
 		DiskGB:       diskGB,
 		Hostname:     hostname,
+		IPAddress:    req.IPAddress,
 		OnBoot:       onboot,
 		Unprivileged: unprivileged,
 		Inputs:       make(map[string]string),
@@ -371,12 +372,12 @@ func (e *Engine) runStackInstall(bgCtx context.Context, job *Job, stackID, osTem
 		MemoryMB:     job.MemoryMB,
 		Bridge:       job.Bridge,
 		Hostname:     job.Hostname,
+		IPAddress:    job.IPAddress,
 		Unprivileged: job.Unprivileged,
 		Pool:         job.Pool,
 		Features:     features,
 		OnBoot:       job.OnBoot,
-		Tags:         "appstore;stack;managed",
-		Devices:      job.Devices,
+		Tags:         buildTags("appstore;stack;managed", job.ExtraTags),
 	}
 
 	// Add mount points
@@ -404,6 +405,29 @@ func (e *Engine) runStackInstall(bgCtx context.Context, job *Job, stackID, osTem
 	}
 	ctx.info("Container %d created", ctid)
 
+	// Configure device passthrough via pct set (bypasses API root@pam restriction)
+	if len(job.Devices) > 0 {
+		ctx.info("Configuring %d device passthrough(s)...", len(job.Devices))
+		if err := e.cm.ConfigureDevices(ctid, job.Devices); err != nil {
+			ctx.failJob("configure_devices: %v", err)
+			return
+		}
+
+		// Bind-mount NVIDIA libraries if NVIDIA devices are present
+		if hasNvidiaDevices(job.Devices) {
+			libPath, err := resolveNvidiaLibPath()
+			if err != nil {
+				ctx.warn("Could not resolve NVIDIA libraries: %v", err)
+			} else if libPath != "" {
+				nextMP := len(job.MountPoints)
+				ctx.info("Bind-mounting NVIDIA libraries from %s (mp%d)", libPath, nextMP)
+				if err := e.cm.MountHostPath(ctid, nextMP, libPath, nvidiaContainerLibPath, true); err != nil {
+					ctx.warn("Failed to mount NVIDIA libraries: %v", err)
+				}
+			}
+		}
+	}
+
 	// Step 4: Start container
 	ctx.transition(StateStartContainer)
 	if err := e.cm.Start(bgCtx, ctid); err != nil {
@@ -422,6 +446,31 @@ func (e *Engine) runStackInstall(bgCtx context.Context, job *Job, stackID, osTem
 			break
 		}
 		time.Sleep(2 * time.Second)
+	}
+
+	// Step 5.5: Setup GPU runtime if NVIDIA devices are present
+	if hasNvidiaDevices(job.Devices) {
+		ctx.info("Setting up NVIDIA runtime inside container...")
+		ldconfContent := nvidiaContainerLibPath + "\n"
+		for _, cmd := range [][]string{
+			{"mkdir", "-p", "/etc/ld.so.conf.d"},
+			{"sh", "-c", fmt.Sprintf("echo '%s' > %s", ldconfContent, nvidiaLdconfPath)},
+			{"ldconfig"},
+		} {
+			if result, err := e.cm.Exec(ctid, cmd); err != nil {
+				ctx.warn("GPU setup command failed: %v", err)
+			} else if result.ExitCode != 0 {
+				ctx.warn("GPU setup command %v exited %d", cmd, result.ExitCode)
+			}
+		}
+		ctx.info("NVIDIA runtime configured")
+	}
+
+	// Step 5.6: Install base packages
+	ctx.transition(StateInstallBasePkgs)
+	if err := stepInstallBasePackages(ctx); err != nil {
+		ctx.failJob("install_base_packages: %v", err)
+		return
 	}
 
 	// Step 6: Push SDK once
@@ -610,6 +659,7 @@ func (e *Engine) runStackInstall(bgCtx context.Context, job *Job, stackID, osTem
 		MemoryMB:     job.MemoryMB,
 		DiskGB:       job.DiskGB,
 		Hostname:     job.Hostname,
+		IPAddress:    job.IPAddress,
 		OnBoot:       job.OnBoot,
 		Unprivileged: job.Unprivileged,
 		OSTemplate:   osTemplate,

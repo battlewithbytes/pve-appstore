@@ -50,6 +50,10 @@ func (m *mockCM) GetConfig(ctx context.Context, ctid int) (map[string]interface{
 	return map[string]interface{}{}, nil
 }
 func (m *mockCM) DetachMountPoints(ctx context.Context, ctid int, indexes []int) error { return nil }
+func (m *mockCM) ConfigureDevices(ctid int, devices []engine.DevicePassthrough) error { return nil }
+func (m *mockCM) MountHostPath(ctid int, mpIndex int, hostPath, containerPath string, readOnly bool) error {
+	return nil
+}
 func (m *mockCM) GetStorageInfo(ctx context.Context, storageID string) (*engine.StorageInfo, error) {
 	return &engine.StorageInfo{
 		ID:        storageID,
@@ -473,6 +477,34 @@ func TestInstallAppBadBody(t *testing.T) {
 
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want %d", w.Code, http.StatusBadRequest)
+	}
+}
+
+func TestInstallAppWithStaticIP(t *testing.T) {
+	srv := testServer(t)
+	reqBody := `{"cores": 1, "memory_mb": 512, "disk_gb": 4, "ip_address": "192.168.1.100"}`
+	w := doRequest(t, srv, "POST", "/api/apps/nginx/install", reqBody)
+
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want %d (body: %s)", w.Code, http.StatusAccepted, w.Body.String())
+	}
+
+	var job map[string]interface{}
+	json.NewDecoder(w.Body).Decode(&job)
+
+	if job["app_id"] != "nginx" {
+		t.Errorf("app_id = %v, want %q", job["app_id"], "nginx")
+	}
+
+	// Wait for async job to complete
+	time.Sleep(200 * time.Millisecond)
+
+	// Fetch the job and verify IP was stored
+	jobID := job["id"].(string)
+	w2 := doRequest(t, srv, "GET", "/api/jobs/"+jobID, "")
+	body := decodeJSON(t, w2)
+	if ipAddr, ok := body["ip_address"].(string); !ok || ipAddr != "192.168.1.100" {
+		t.Errorf("ip_address = %v, want %q", body["ip_address"], "192.168.1.100")
 	}
 }
 

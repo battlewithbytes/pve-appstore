@@ -49,7 +49,11 @@ func (c *Catalog) Refresh() error {
 func (c *Catalog) LoadLocal(dir string) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.localDir = dir
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		return fmt.Errorf("resolving catalog path: %w", err)
+	}
+	c.localDir = abs
 	return c.indexApps()
 }
 

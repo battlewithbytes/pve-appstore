@@ -506,3 +506,115 @@ func TestStoreMultipleLogJobs(t *testing.T) {
 		t.Errorf("job 2 logs: got %d, want 1", len(logs2))
 	}
 }
+
+// --- Static IP persistence tests ---
+
+func TestJobIPAddressPersistence(t *testing.T) {
+	s := newTestStore(t)
+	job := makeJob("ip-job-1", "nginx")
+	job.IPAddress = "192.168.1.100"
+	job.Hostname = "nginx-static"
+
+	if err := s.CreateJob(job); err != nil {
+		t.Fatalf("CreateJob: %v", err)
+	}
+
+	got, err := s.GetJob("ip-job-1")
+	if err != nil {
+		t.Fatalf("GetJob: %v", err)
+	}
+	if got.IPAddress != "192.168.1.100" {
+		t.Errorf("IPAddress = %q, want %q", got.IPAddress, "192.168.1.100")
+	}
+	if got.Hostname != "nginx-static" {
+		t.Errorf("Hostname = %q, want %q", got.Hostname, "nginx-static")
+	}
+}
+
+func TestJobIPAddressEmptyDefault(t *testing.T) {
+	s := newTestStore(t)
+	job := makeJob("ip-job-2", "nginx")
+	// Don't set IPAddress — should default to ""
+
+	if err := s.CreateJob(job); err != nil {
+		t.Fatalf("CreateJob: %v", err)
+	}
+
+	got, err := s.GetJob("ip-job-2")
+	if err != nil {
+		t.Fatalf("GetJob: %v", err)
+	}
+	if got.IPAddress != "" {
+		t.Errorf("IPAddress = %q, want empty string", got.IPAddress)
+	}
+}
+
+func TestInstallIPAddressPersistence(t *testing.T) {
+	s := newTestStore(t)
+	now := time.Now().Truncate(time.Second)
+	inst := &Install{
+		ID:        "inst-ip-1",
+		AppID:     "nginx",
+		AppName:   "Nginx",
+		CTID:      101,
+		Node:      "node1",
+		Pool:      "pool1",
+		Storage:   "local-lvm",
+		Bridge:    "vmbr0",
+		Cores:     2,
+		MemoryMB:  1024,
+		DiskGB:    8,
+		Hostname:  "nginx-1",
+		IPAddress: "10.0.0.50",
+		Outputs:   map[string]string{"url": "http://10.0.0.50:80"},
+		Status:    "running",
+		CreatedAt: now,
+	}
+
+	if err := s.CreateInstall(inst); err != nil {
+		t.Fatalf("CreateInstall: %v", err)
+	}
+
+	got, err := s.GetInstall("inst-ip-1")
+	if err != nil {
+		t.Fatalf("GetInstall: %v", err)
+	}
+	if got.IPAddress != "10.0.0.50" {
+		t.Errorf("IPAddress = %q, want %q", got.IPAddress, "10.0.0.50")
+	}
+}
+
+func TestStackIPAddressPersistence(t *testing.T) {
+	s := newTestStore(t)
+	now := time.Now().Truncate(time.Second)
+	stack := &Stack{
+		ID:         "stack-ip-1",
+		Name:       "Test Stack",
+		CTID:       200,
+		Node:       "node1",
+		Pool:       "pool1",
+		Storage:    "local-lvm",
+		Bridge:     "vmbr0",
+		Cores:      4,
+		MemoryMB:   4096,
+		DiskGB:     32,
+		Hostname:   "test-stack",
+		IPAddress:  "172.16.0.10",
+		OSTemplate: "debian-12",
+		Apps:       []StackApp{{AppID: "nginx", AppName: "Nginx", AppVersion: "1.27.0", Order: 0, Status: "completed"}},
+		Status:     "running",
+		CreatedAt:  now,
+	}
+
+	if err := s.CreateStack(stack); err != nil {
+		t.Fatalf("CreateStack: %v", err)
+	}
+
+	got, err := s.GetStack("stack-ip-1")
+	if err != nil {
+		t.Fatalf("GetStack: %v", err)
+	}
+	if got.IPAddress != "172.16.0.10" {
+		t.Errorf("IPAddress = %q, want %q", got.IPAddress, "172.16.0.10")
+	}
+}

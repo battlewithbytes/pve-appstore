@@ -16,6 +16,9 @@ import (
 // StateReadVolumeIDs is the state for reading volume IDs after container creation.
 const StateReadVolumeIDs = "read_volume_ids"
 
+// StateSetupGPURuntime is the state for configuring GPU libraries inside the container.
+const StateSetupGPURuntime = "setup_gpu_runtime"
+
 var installSteps = []struct {
 	state string
 	fn    func(ctx *installContext) error
@@ -29,6 +32,8 @@ var installSteps = []struct {
 	{StateConfigureContainer, stepConfigureContainer},
 	{StateStartContainer, stepStartContainer},
 	{StateWaitForNetwork, stepWaitForNetwork},
+	{StateSetupGPURuntime, stepSetupGPURuntime},
+	{StateInstallBasePkgs, stepInstallBasePackages},
 	{StatePushAssets, stepPushAssets},
 	{StateProvision, stepProvision},
 	{StateHealthcheck, stepHealthcheck},
@@ -141,6 +146,7 @@ func (e *Engine) runInstall(bgCtx context.Context, job *Job) {
 		MemoryMB:     ctx.job.MemoryMB,
 		DiskGB:       ctx.job.DiskGB,
 		Hostname:     ctx.job.Hostname,
+		IPAddress:    ctx.job.IPAddress,
 		OnBoot:       ctx.job.OnBoot,
 		Unprivileged: ctx.job.Unprivileged,
 		Inputs:       ctx.job.Inputs,
@@ -213,11 +219,12 @@ func stepCreateContainer(ctx *installContext) error {
 		MemoryMB:     ctx.job.MemoryMB,
 		Bridge:       ctx.job.Bridge,
 		Hostname:     ctx.job.Hostname,
+		IPAddress:    ctx.job.IPAddress,
 		Unprivileged: ctx.job.Unprivileged,
 		Pool:         ctx.job.Pool,
 		Features:     ctx.manifest.LXC.Defaults.Features,
 		OnBoot:       ctx.job.OnBoot,
-		Tags:         "appstore;managed",
+		Tags:         buildTags("appstore;managed", ctx.job.ExtraTags),
 	}
 
 	// Mount points are pre-built on the job (by StartInstall or Reinstall)
@@ -238,14 +245,8 @@ func stepCreateContainer(ctx *installContext) error {
 		}
 		opts.MountPoints = append(opts.MountPoints, opt)
 	}
-	// Device passthrough
-	opts.Devices = ctx.job.Devices
-
 	if len(ctx.job.MountPoints) > 0 {
 		ctx.info("Configuring %d mount(s)", len(ctx.job.MountPoints))
-	}
-	if len(ctx.job.Devices) > 0 {
-		ctx.info("Passing through %d device(s)", len(ctx.job.Devices))
 	}
 
 	ctx.info("Creating container %d (template=%s, %d cores, %d MB, %d GB)",
@@ -304,8 +305,75 @@ func stepReadVolumeIDs(ctx *installContext) error {
 }
 
 func stepConfigureContainer(ctx *installContext) error {
-	// Container is configured during creation. Additional config could be done here.
+	// Apply device passthrough via pct set (bypasses Proxmox API root@pam restriction)
+	if len(ctx.job.Devices) > 0 {
+		ctx.info("Configuring %d device passthrough(s) via pct set...", len(ctx.job.Devices))
+		if err := ctx.engine.cm.ConfigureDevices(ctx.job.CTID, ctx.job.Devices); err != nil {
+			return fmt.Errorf("configuring devices: %w", err)
+		}
+
+		// If NVIDIA devices are present, bind-mount host NVIDIA libraries into the container
+		if hasNvidiaDevices(ctx.job.Devices) {
+			libPath, err := resolveNvidiaLibPath()
+			if err != nil {
+				ctx.warn("Could not resolve NVIDIA libraries: %v — GPU may not work inside container", err)
+			} else if libPath != "" {
+				// Find next free mount point index (after job's mount points)
+				nextMP := len(ctx.job.MountPoints)
+				ctx.info("Bind-mounting NVIDIA libraries from %s to %s (mp%d)", libPath, nvidiaContainerLibPath, nextMP)
+				if err := ctx.engine.cm.MountHostPath(ctx.job.CTID, nextMP, libPath, nvidiaContainerLibPath, true); err != nil {
+					ctx.warn("Failed to mount NVIDIA libraries: %v — GPU may not work inside container", err)
+				}
+			}
+		}
+	}
 	ctx.info("Container %d configured", ctx.job.CTID)
+	return nil
+}
+
+// stepSetupGPURuntime configures the GPU runtime inside the container after it starts.
+// For NVIDIA: creates an ldconfig entry so the container can find the mounted libraries.
+func stepSetupGPURuntime(ctx *installContext) error {
+	if !hasNvidiaDevices(ctx.job.Devices) {
+		return nil // no NVIDIA devices, nothing to do
+	}
+
+	ctx.info("Setting up NVIDIA runtime inside container...")
+
+	// Create ldconfig entry for the mounted library path
+	ldconfContent := nvidiaContainerLibPath + "\n"
+	cmds := [][]string{
+		{"mkdir", "-p", "/etc/ld.so.conf.d"},
+		{"sh", "-c", fmt.Sprintf("echo '%s' > %s", ldconfContent, nvidiaLdconfPath)},
+		{"ldconfig"},
+	}
+
+	for _, cmd := range cmds {
+		result, err := ctx.engine.cm.Exec(ctx.job.CTID, cmd)
+		if err != nil {
+			ctx.warn("GPU runtime setup command failed: %v", err)
+			return nil // non-fatal
+		}
+		if result.ExitCode != 0 {
+			ctx.warn("GPU runtime command %v exited %d: %s", cmd, result.ExitCode, result.Output)
+		}
+	}
+
+	// Verify NVIDIA is accessible
+	result, err := ctx.engine.cm.Exec(ctx.job.CTID, []string{"nvidia-smi", "--query-gpu=name", "--format=csv,noheader"})
+	if err == nil && result.ExitCode == 0 {
+		gpuName := strings.TrimSpace(result.Output)
+		ctx.info("NVIDIA GPU accessible inside container: %s", gpuName)
+	} else {
+		// nvidia-smi may not be in the mounted libs; try via library check
+		result2, err2 := ctx.engine.cm.Exec(ctx.job.CTID, []string{"ldconfig", "-p"})
+		if err2 == nil && strings.Contains(result2.Output, "libcuda") {
+			ctx.info("NVIDIA CUDA libraries available (ldconfig confirms libcuda)")
+		} else {
+			ctx.warn("NVIDIA GPU libraries may not be fully available inside container")
+		}
+	}
+
 	return nil
 }
 
@@ -578,4 +646,12 @@ func (e *Engine) cleanupCancelledJob(ctx *installContext) {
 	}
 
 	ctx.info("Job cancelled and cleaned up")
+}
+
+// buildTags appends extra semicolon-separated tags to a base tag string.
+func buildTags(base, extra string) string {
+	if extra == "" {
+		return base
+	}
+	return base + ";" + extra
 }

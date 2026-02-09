@@ -15,6 +15,7 @@ const (
 	StateAttachGPU          = "attach_gpu"
 	StateStartContainer     = "start_container"
 	StateWaitForNetwork     = "wait_for_network"
+	StateInstallBasePkgs    = "install_base_packages"
 	StatePushAssets          = "push_assets"
 	StateProvision          = "provision"
 	StateHealthcheck        = "healthcheck"
@@ -29,6 +30,7 @@ const (
 	JobTypeInstall   = "install"
 	JobTypeUninstall = "uninstall"
 	JobTypeReinstall = "reinstall"
+	JobTypeUpdate    = "update"
 	JobTypeStack     = "stack"
 )
 
@@ -68,6 +70,7 @@ type Job struct {
 	MemoryMB     int               `json:"memory_mb"`
 	DiskGB       int               `json:"disk_gb"`
 	Hostname     string            `json:"hostname,omitempty"`
+	IPAddress    string            `json:"ip_address,omitempty"`
 	OnBoot       bool              `json:"onboot"`
 	Unprivileged bool              `json:"unprivileged"`
 	Inputs       map[string]string `json:"inputs,omitempty"`
@@ -75,6 +78,7 @@ type Job struct {
 	MountPoints  []MountPoint       `json:"mount_points,omitempty"`
 	Devices      []DevicePassthrough `json:"devices,omitempty"`
 	EnvVars      map[string]string  `json:"env_vars,omitempty"`
+	ExtraTags    string             `json:"extra_tags,omitempty"`
 	StackID      string             `json:"stack_id,omitempty"`
 	Error        string             `json:"error,omitempty"`
 	CreatedAt    time.Time          `json:"created_at"`
@@ -105,6 +109,7 @@ type Install struct {
 	MemoryMB     int                 `json:"memory_mb"`
 	DiskGB       int                 `json:"disk_gb"`
 	Hostname     string              `json:"hostname,omitempty"`
+	IPAddress    string              `json:"ip_address,omitempty"`
 	OnBoot       bool                `json:"onboot"`
 	Unprivileged bool                `json:"unprivileged"`
 	Inputs       map[string]string   `json:"inputs,omitempty"`
@@ -125,6 +130,7 @@ type InstallRequest struct {
 	MemoryMB       int                  `json:"memory_mb,omitempty"`
 	DiskGB         int                  `json:"disk_gb,omitempty"`
 	Hostname       string               `json:"hostname,omitempty"`
+	IPAddress      string               `json:"ip_address,omitempty"`
 	OnBoot         *bool                `json:"onboot,omitempty"`
 	Unprivileged   *bool                `json:"unprivileged,omitempty"`
 	Inputs         map[string]string    `json:"inputs,omitempty"`
@@ -133,6 +139,7 @@ type InstallRequest struct {
 	VolumeStorages map[string]string    `json:"volume_storages,omitempty"`  // vol-name -> storage
 	Devices        []DevicePassthrough  `json:"devices,omitempty"`
 	EnvVars        map[string]string    `json:"env_vars,omitempty"`
+	ExtraTags      string               `json:"extra_tags,omitempty"`
 }
 
 // ExtraMountRequest is a user-defined bind mount added at install time.
@@ -177,6 +184,7 @@ type Stack struct {
 	MemoryMB     int                 `json:"memory_mb"`
 	DiskGB       int                 `json:"disk_gb"`
 	Hostname     string              `json:"hostname,omitempty"`
+	IPAddress    string              `json:"ip_address,omitempty"`
 	OnBoot       bool                `json:"onboot"`
 	Unprivileged bool                `json:"unprivileged"`
 	OSTemplate   string              `json:"ostemplate"`
@@ -198,6 +206,7 @@ type StackCreateRequest struct {
 	MemoryMB     int                  `json:"memory_mb,omitempty"`
 	DiskGB       int                  `json:"disk_gb,omitempty"`
 	Hostname     string               `json:"hostname,omitempty"`
+	IPAddress    string               `json:"ip_address,omitempty"`
 	OnBoot       *bool                `json:"onboot,omitempty"`
 	Unprivileged *bool                `json:"unprivileged,omitempty"`
 	BindMounts   map[string]string    `json:"bind_mounts,omitempty"`

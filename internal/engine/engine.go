@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -58,6 +59,8 @@ type ContainerManager interface {
 	GetConfig(ctx context.Context, ctid int) (map[string]interface{}, error)
 	DetachMountPoints(ctx context.Context, ctid int, indexes []int) error
 	GetStorageInfo(ctx context.Context, storageID string) (*StorageInfo, error)
+	ConfigureDevices(ctid int, devices []DevicePassthrough) error
+	MountHostPath(ctid int, mpIndex int, hostPath, containerPath string, readOnly bool) error
 }
 
 // MountPointOption defines a mount point for container creation.
@@ -82,13 +85,13 @@ type CreateOptions struct {
 	MemoryMB     int
 	Bridge       string
 	Hostname     string
+	IPAddress    string
 	Unprivileged bool
 	Pool         string
 	Features     []string
 	OnBoot       bool
 	Tags         string
 	MountPoints  []MountPointOption
-	Devices      []DevicePassthrough
 }
 
 // gpuProfiles maps GPU profile names to device passthrough configurations.
@@ -309,8 +312,10 @@ func (e *Engine) StartInstall(req InstallRequest) (*Job, error) {
 		MemoryMB:     memoryMB,
 		DiskGB:       diskGB,
 		Hostname:     hostname,
+		IPAddress:    req.IPAddress,
 		OnBoot:       onboot,
 		Unprivileged: unprivileged,
+		ExtraTags:    req.ExtraTags,
 		Inputs:       req.Inputs,
 		Outputs:      make(map[string]string),
 		Devices:      req.Devices,
@@ -319,13 +324,29 @@ func (e *Engine) StartInstall(req InstallRequest) (*Job, error) {
 		UpdatedAt:    now,
 	}
 
-	// Auto-add GPU devices from manifest profiles if none specified
+	// Auto-add GPU devices from manifest profiles if none specified.
+	// Validate that device nodes actually exist on the host before adding.
 	if len(job.Devices) == 0 && len(app.GPU.Profiles) > 0 && e.cfg.GPU.Policy != config.GPUPolicyNone {
 		for _, profile := range app.GPU.Profiles {
 			if devs, ok := gpuProfiles[profile]; ok {
-				job.Devices = append(job.Devices, devs...)
+				available, missing := validateGPUDevices(devs)
+				if len(missing) > 0 && app.GPU.Required {
+					return nil, fmt.Errorf("GPU required but device(s) not found on host: %s", strings.Join(missing, ", "))
+				}
+				job.Devices = available
 				break // use first matching profile
 			}
+		}
+	}
+	// Validate explicitly-requested devices too
+	if len(job.Devices) > 0 {
+		available, missing := validateGPUDevices(job.Devices)
+		if len(missing) > 0 {
+			if app.GPU.Required {
+				return nil, fmt.Errorf("GPU required but device(s) not found on host: %s", strings.Join(missing, ", "))
+			}
+			// Non-required: silently use only available devices
+			job.Devices = available
 		}
 	}
 
@@ -368,9 +389,11 @@ func (e *Engine) StartInstall(req InstallRequest) (*Job, error) {
 			}
 		}
 		if volType == "bind" {
-			// Get host path from request, fall back to default
-			if hp, ok := req.BindMounts[vol.Name]; ok && hp != "" {
-				mp.HostPath = hp
+			// Get host path from request, fall back to default.
+			// An explicit empty string in BindMounts ("media": "") clears the
+			// default, allowing optional bind mounts to be skipped at request time.
+			if hp, ok := req.BindMounts[vol.Name]; ok {
+				mp.HostPath = hp // may be empty to clear default
 			} else if vol.DefaultHostPath != "" {
 				mp.HostPath = vol.DefaultHostPath
 			}
@@ -629,7 +652,7 @@ func (e *Engine) GetInstallDetail(id string) (*InstallDetail, error) {
 	// Check catalog version
 	if app, ok := e.catalog.Get(inst.AppID); ok {
 		detail.CatalogVersion = app.Version
-		if inst.AppVersion != "" && app.Version != inst.AppVersion {
+		if inst.AppVersion != "" && isNewerVersion(app.Version, inst.AppVersion) {
 			detail.UpdateAvailable = true
 		}
 	}
@@ -645,8 +668,10 @@ func (e *Engine) ListInstalls() ([]*Install, error) {
 // InstallListItem extends Install with lightweight live data for the list view.
 type InstallListItem struct {
 	Install
-	IP     string `json:"ip,omitempty"`
-	Uptime int64  `json:"uptime"`
+	IP              string `json:"ip,omitempty"`
+	Uptime          int64  `json:"uptime"`
+	CatalogVersion  string `json:"catalog_version,omitempty"`
+	UpdateAvailable bool   `json:"update_available,omitempty"`
 }
 
 // ListInstallsLive returns all installations with live status refreshed from Proxmox.
@@ -690,6 +715,12 @@ func (e *Engine) ListInstallsEnriched() ([]*InstallListItem, error) {
 		}
 		if ip, err := e.cm.GetIP(inst.CTID); err == nil && ip != "" {
 			item.IP = ip
+		}
+		if app, ok := e.catalog.Get(inst.AppID); ok {
+			item.CatalogVersion = app.Version
+			if inst.AppVersion != "" && isNewerVersion(app.Version, inst.AppVersion) {
+				item.UpdateAvailable = true
+			}
 		}
 		items = append(items, item)
 	}
@@ -833,6 +864,210 @@ func (e *Engine) runReinstall(job *Job, inst *Install) {
 	e.store.UpdateInstall(inst)
 
 	ctx.info("Reinstall complete! Container %d is running with reattached volumes.", ctx.job.CTID)
+}
+
+// Update creates a new container for an active install using the latest catalog version.
+// Unlike Reinstall (which requires uninstalled status and preserved volumes), Update works
+// on running/stopped installs and destroys the old container before re-provisioning.
+func (e *Engine) Update(installID string, req ReinstallRequest) (*Job, error) {
+	inst, err := e.store.GetInstall(installID)
+	if err != nil {
+		return nil, fmt.Errorf("install %q not found", installID)
+	}
+	if inst.Status == "uninstalled" {
+		return nil, fmt.Errorf("install %q is uninstalled — use reinstall instead", installID)
+	}
+
+	// Look up the app and verify there's actually a newer version
+	app, ok := e.catalog.Get(inst.AppID)
+	if !ok {
+		return nil, fmt.Errorf("app %q not found in catalog", inst.AppID)
+	}
+	if !isNewerVersion(app.Version, inst.AppVersion) {
+		return nil, fmt.Errorf("no update available: catalog version %s is not newer than installed %s", app.Version, inst.AppVersion)
+	}
+
+	// Use existing values with optional overrides
+	storage := inst.Storage
+	if req.Storage != "" {
+		storage = req.Storage
+	}
+	bridge := inst.Bridge
+	if req.Bridge != "" {
+		bridge = req.Bridge
+	}
+	cores := inst.Cores
+	if req.Cores > 0 {
+		cores = req.Cores
+	}
+	memoryMB := inst.MemoryMB
+	if req.MemoryMB > 0 {
+		memoryMB = req.MemoryMB
+	}
+	diskGB := inst.DiskGB
+	if req.DiskGB > 0 {
+		diskGB = req.DiskGB
+	}
+
+	now := time.Now()
+	job := &Job{
+		ID:          generateID(),
+		Type:        JobTypeUpdate,
+		State:       StateQueued,
+		AppID:       inst.AppID,
+		AppName:     inst.AppName,
+		Node:        e.cfg.NodeName,
+		Pool:        inst.Pool,
+		Storage:     storage,
+		Bridge:      bridge,
+		Cores:       cores,
+		MemoryMB:    memoryMB,
+		DiskGB:      diskGB,
+		Inputs:      req.Inputs,
+		Outputs:     make(map[string]string),
+		MountPoints: inst.MountPoints, // Carry mount points forward
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	}
+
+	if job.Inputs == nil {
+		job.Inputs = make(map[string]string)
+	}
+	for _, input := range app.Inputs {
+		if _, exists := job.Inputs[input.Key]; !exists && input.Default != nil {
+			job.Inputs[input.Key] = fmt.Sprintf("%v", input.Default)
+		}
+	}
+
+	if err := e.store.CreateJob(job); err != nil {
+		return nil, fmt.Errorf("creating update job: %w", err)
+	}
+
+	go e.runUpdate(job, inst)
+
+	return job, nil
+}
+
+func (e *Engine) runUpdate(job *Job, inst *Install) {
+	app, ok := e.catalog.Get(job.AppID)
+	if !ok {
+		job.State = StateFailed
+		job.Error = fmt.Sprintf("app %q not found in catalog", job.AppID)
+		now := time.Now()
+		job.UpdatedAt = now
+		job.CompletedAt = &now
+		e.store.UpdateJob(job)
+		return
+	}
+
+	ctx := &installContext{
+		engine:   e,
+		job:      job,
+		manifest: app,
+	}
+
+	ctx.info("Starting update of %s from v%s to v%s", app.Name, inst.AppVersion, app.Version)
+
+	// Destroy old container first
+	if inst.CTID > 0 {
+		bgCtx := context.Background()
+
+		// Detach managed volumes before destroy if present
+		if len(inst.MountPoints) > 0 {
+			var managedIndexes []int
+			for _, mp := range inst.MountPoints {
+				if mp.Type == "volume" {
+					managedIndexes = append(managedIndexes, mp.Index)
+				}
+			}
+			if len(managedIndexes) > 0 {
+				ctx.info("Detaching %d volume(s) before destroy...", len(managedIndexes))
+				if config, err := e.cm.GetConfig(bgCtx, inst.CTID); err == nil {
+					for i := range inst.MountPoints {
+						if inst.MountPoints[i].Type != "volume" {
+							continue
+						}
+						key := fmt.Sprintf("mp%d", inst.MountPoints[i].Index)
+						if val, ok := config[key]; ok {
+							if valStr, ok := val.(string); ok {
+								parts := strings.SplitN(valStr, ",", 2)
+								if len(parts) > 0 {
+									inst.MountPoints[i].VolumeID = parts[0]
+								}
+							}
+						}
+					}
+				}
+				if err := e.cm.DetachMountPoints(bgCtx, inst.CTID, managedIndexes); err != nil {
+					ctx.warn("Failed to detach mount points: %v — volumes may be destroyed", err)
+				}
+				// Update job's mount points with fresh volume IDs
+				job.MountPoints = inst.MountPoints
+			}
+		}
+
+		ctx.info("Stopping and destroying old container CT %d...", inst.CTID)
+		if err := e.cm.Shutdown(bgCtx, inst.CTID, 30); err != nil {
+			_ = e.cm.Stop(bgCtx, inst.CTID)
+		}
+		var destroyErr error
+		for attempt := 0; attempt < 5; attempt++ {
+			if attempt > 0 {
+				time.Sleep(5 * time.Second)
+			}
+			destroyErr = e.cm.Destroy(bgCtx, inst.CTID)
+			if destroyErr == nil {
+				break
+			}
+			ctx.warn("Destroy attempt %d failed: %v", attempt+1, destroyErr)
+		}
+		if destroyErr != nil {
+			ctx.log("error", "Failed to destroy old container: %v", destroyErr)
+			job.State = StateFailed
+			job.Error = fmt.Sprintf("destroy old container: %v", destroyErr)
+			now := time.Now()
+			job.UpdatedAt = now
+			job.CompletedAt = &now
+			e.store.UpdateJob(job)
+			return
+		}
+		ctx.info("Old container destroyed successfully")
+	}
+
+	// Run full install pipeline
+	for _, step := range installSteps {
+		ctx.transition(step.state)
+		if err := step.fn(ctx); err != nil {
+			ctx.log("error", "Failed at %s: %v", step.state, err)
+			ctx.job.State = StateFailed
+			ctx.job.Error = fmt.Sprintf("%s: %v", step.state, err)
+			now := time.Now()
+			ctx.job.UpdatedAt = now
+			ctx.job.CompletedAt = &now
+			e.store.UpdateJob(ctx.job)
+			return
+		}
+	}
+
+	// Success — update the existing install record
+	ctx.transition(StateCompleted)
+	now := time.Now()
+	ctx.job.CompletedAt = &now
+	e.store.UpdateJob(ctx.job)
+
+	inst.CTID = ctx.job.CTID
+	inst.Status = "running"
+	inst.Storage = ctx.job.Storage
+	inst.Bridge = ctx.job.Bridge
+	inst.Cores = ctx.job.Cores
+	inst.MemoryMB = ctx.job.MemoryMB
+	inst.DiskGB = ctx.job.DiskGB
+	inst.Outputs = ctx.job.Outputs
+	inst.MountPoints = ctx.job.MountPoints
+	inst.AppVersion = app.Version
+	e.store.UpdateInstall(inst)
+
+	ctx.info("Update complete! %s is now v%s (CT %d).", app.Name, app.Version, ctx.job.CTID)
 }
 
 // --- Stack operations ---
@@ -1021,6 +1256,41 @@ func (e *Engine) runStackUninstall(job *Job, stack *Stack) {
 // GetStorageInfo returns resolved storage information for a Proxmox storage ID.
 func (e *Engine) GetStorageInfo(ctx context.Context, storageID string) (*StorageInfo, error) {
 	return e.cm.GetStorageInfo(ctx, storageID)
+}
+
+// isNewerVersion returns true if catalog version is strictly greater than installed version.
+// Parses "major.minor.patch" semver (strips leading "v"). Falls back to string inequality on parse failure.
+func isNewerVersion(catalog, installed string) bool {
+	parse := func(s string) (int, int, int, bool) {
+		s = strings.TrimPrefix(s, "v")
+		parts := strings.SplitN(s, ".", 3)
+		if len(parts) != 3 {
+			return 0, 0, 0, false
+		}
+		major, e1 := strconv.Atoi(parts[0])
+		minor, e2 := strconv.Atoi(parts[1])
+		// Strip pre-release suffix (e.g. "1-beta")
+		patchStr := strings.SplitN(parts[2], "-", 2)[0]
+		patch, e3 := strconv.Atoi(patchStr)
+		if e1 != nil || e2 != nil || e3 != nil {
+			return 0, 0, 0, false
+		}
+		return major, minor, patch, true
+	}
+
+	cMaj, cMin, cPatch, cOK := parse(catalog)
+	iMaj, iMin, iPatch, iOK := parse(installed)
+	if !cOK || !iOK {
+		return catalog != installed
+	}
+
+	if cMaj != iMaj {
+		return cMaj > iMaj
+	}
+	if cMin != iMin {
+		return cMin > iMin
+	}
+	return cPatch > iPatch
 }
 
 func generateID() string {

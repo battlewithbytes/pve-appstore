@@ -193,6 +193,35 @@ func TestPushNoPerms(t *testing.T) {
 	assertNotContains(t, m.lastArgs, "--perms")
 }
 
+// --- Set (device passthrough) ---
+
+func TestSetSuccess(t *testing.T) {
+	m := withMockPctRun(t, "", nil)
+	err := Set(100, "-dev0", "/dev/dri/renderD128,gid=44,mode=0666")
+	if err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+	if m.lastArgs[0] != "set" {
+		t.Errorf("args[0] = %q, want %q", m.lastArgs[0], "set")
+	}
+	if m.lastArgs[1] != "100" {
+		t.Errorf("args[1] = %q, want %q", m.lastArgs[1], "100")
+	}
+	assertContains(t, m.lastArgs, "-dev0")
+	assertContains(t, m.lastArgs, "/dev/dri/renderD128,gid=44,mode=0666")
+}
+
+func TestSetError(t *testing.T) {
+	withMockPctRun(t, "error: permission denied", fmt.Errorf("exit status 1"))
+	err := Set(100, "-dev0", "/dev/nvidia0")
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "pct set") {
+		t.Errorf("error = %v, want 'pct set' in message", err)
+	}
+}
+
 // --- helpers ---
 
 func assertContains(t *testing.T, args []string, want string) {

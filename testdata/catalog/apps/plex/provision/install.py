@@ -16,9 +16,8 @@ class PlexApp(BaseApp):
         friendly_name = self.inputs.string("friendly_name", "Proxmox Plex")
         claim_token = self.inputs.string("claim_token", "")
 
-        self.apt_install("curl")
-
         # Add Plex APT key and repository
+        # (curl is pre-installed by the engine's base packages step)
         self.add_apt_key(
             "https://downloads.plex.tv/plex-keys/PlexSign.key",
             "/usr/share/keyrings/plex-archive-keyring.gpg",

@@ -28,19 +28,55 @@ const (
 	hostTmpDir = "/var/lib/pve-appstore/tmp"
 )
 
+// basePackages are common utilities installed in every container before
+// provisioning runs. This prevents individual apps from needing to install
+// these basics themselves and avoids "command not found" failures for tools
+// that many install scripts assume are present.
+var basePackages = []string{
+	"curl",
+	"wget",
+	"gnupg",
+	"ca-certificates",
+	"zstd",
+}
+
+// stepInstallBasePackages runs apt-get update and installs the common base
+// utilities that nearly every app needs. This runs once per container, before
+// the SDK and provision scripts are pushed.
+func stepInstallBasePackages(ctx *installContext) error {
+	ctx.info("Updating package lists...")
+	result, err := ctx.engine.cm.Exec(ctx.job.CTID, []string{"apt-get", "update", "-qq"})
+	if err != nil {
+		return fmt.Errorf("apt-get update: %w", err)
+	}
+	if result.ExitCode != 0 {
+		ctx.warn("apt-get update exited %d (continuing): %s", result.ExitCode, result.Output)
+	}
+
+	cmd := append([]string{"apt-get", "install", "-y", "--no-install-recommends"}, basePackages...)
+	ctx.info("Installing base packages: %s", strings.Join(basePackages, ", "))
+	result, err = ctx.engine.cm.Exec(ctx.job.CTID, cmd)
+	if err != nil {
+		return fmt.Errorf("installing base packages: %w", err)
+	}
+	if result.ExitCode != 0 {
+		return fmt.Errorf("apt-get install base packages exited with %d: %s", result.ExitCode, result.Output)
+	}
+
+	ctx.info("Base packages installed")
+	return nil
+}
+
 // ensurePython verifies python3 is available in the container.
 // If missing (e.g., non-Debian base image), it attempts to install it.
+// Note: apt-get update has already been run by stepInstallBasePackages.
 func ensurePython(ctid int, cm ContainerManager) error {
 	result, err := cm.Exec(ctid, []string{"which", "python3"})
 	if err == nil && result.ExitCode == 0 {
 		return nil // python3 already available
 	}
 
-	// Try to install python3
-	result, err = cm.Exec(ctid, []string{"apt-get", "update"})
-	if err != nil {
-		return fmt.Errorf("apt-get update for python3 install: %w", err)
-	}
+	// apt-get update already ran in stepInstallBasePackages, just install
 	result, err = cm.Exec(ctid, []string{"apt-get", "install", "-y", "python3"})
 	if err != nil {
 		return fmt.Errorf("installing python3: %w", err)

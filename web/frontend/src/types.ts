@@ -170,6 +170,7 @@ export interface Job {
   memory_mb: number;
   disk_gb: number;
   hostname?: string;
+  ip_address?: string;
   onboot: boolean;
   unprivileged: boolean;
   inputs?: Record<string, string>;
@@ -202,6 +203,7 @@ export interface Install {
   memory_mb: number;
   disk_gb: number;
   hostname?: string;
+  ip_address?: string;
   onboot?: boolean;
   unprivileged?: boolean;
   inputs?: Record<string, string>;
@@ -246,6 +248,8 @@ export interface LogsResponse {
 export interface InstallListItem extends Install {
   ip?: string;
   uptime?: number;
+  catalog_version?: string;
+  update_available?: boolean;
 }
 
 export interface InstallsResponse {
@@ -261,6 +265,7 @@ export interface InstallRequest {
   memory_mb?: number;
   disk_gb?: number;
   hostname?: string;
+  ip_address?: string;
   onboot?: boolean;
   unprivileged?: boolean;
   inputs?: Record<string, string>;
@@ -336,6 +341,7 @@ export interface Stack {
   memory_mb: number;
   disk_gb: number;
   hostname?: string;
+  ip_address?: string;
   onboot: boolean;
   unprivileged: boolean;
   ostemplate: string;
@@ -371,6 +377,7 @@ export interface StackCreateRequest {
   memory_mb?: number;
   disk_gb?: number;
   hostname?: string;
+  ip_address?: string;
   onboot?: boolean;
   unprivileged?: boolean;
   bind_mounts?: Record<string, string>;

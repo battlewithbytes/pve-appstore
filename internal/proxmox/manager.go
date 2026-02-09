@@ -2,6 +2,7 @@ package proxmox
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/battlewithbytes/pve-appstore/internal/engine"
 	"github.com/battlewithbytes/pve-appstore/internal/pct"
@@ -36,13 +37,13 @@ func (m *Manager) Create(ctx context.Context, opts engine.CreateOptions) error {
 		MemoryMB:     opts.MemoryMB,
 		Bridge:       opts.Bridge,
 		Hostname:     opts.Hostname,
+		IPAddress:    opts.IPAddress,
 		Unprivileged: opts.Unprivileged,
 		Pool:         opts.Pool,
 		Features:     opts.Features,
 		OnBoot:       opts.OnBoot,
 		Tags:         opts.Tags,
 		MountPoints:  opts.MountPoints,
-		Devices:      opts.Devices,
 	})
 }
 
@@ -117,6 +118,30 @@ func (m *Manager) GetConfig(ctx context.Context, ctid int) (map[string]interface
 
 func (m *Manager) DetachMountPoints(ctx context.Context, ctid int, indexes []int) error {
 	return m.client.DetachMountPoints(ctx, ctid, indexes)
+}
+
+func (m *Manager) ConfigureDevices(ctid int, devices []engine.DevicePassthrough) error {
+	for i, dev := range devices {
+		val := dev.Path
+		if dev.GID > 0 {
+			val += fmt.Sprintf(",gid=%d", dev.GID)
+		}
+		if dev.Mode != "" {
+			val += fmt.Sprintf(",mode=%s", dev.Mode)
+		}
+		if err := pct.Set(ctid, fmt.Sprintf("-dev%d", i), val); err != nil {
+			return fmt.Errorf("configuring device %d (%s): %w", i, dev.Path, err)
+		}
+	}
+	return nil
+}
+
+func (m *Manager) MountHostPath(ctid int, mpIndex int, hostPath, containerPath string, readOnly bool) error {
+	val := fmt.Sprintf("%s,mp=%s", hostPath, containerPath)
+	if readOnly {
+		val += ",ro=1"
+	}
+	return pct.Set(ctid, fmt.Sprintf("-mp%d", mpIndex), val)
 }
 
 func (m *Manager) GetStorageInfo(ctx context.Context, storageID string) (*engine.StorageInfo, error) {

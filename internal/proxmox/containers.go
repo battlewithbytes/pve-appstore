@@ -23,13 +23,13 @@ type ContainerCreateOptions struct {
 	MemoryMB     int
 	Bridge       string
 	Hostname     string
+	IPAddress    string
 	Unprivileged bool
 	Pool         string
 	Features     []string
 	OnBoot       bool
 	Tags         string
 	MountPoints  []engine.MountPointOption
-	Devices      []engine.DevicePassthrough
 }
 
 // Create creates a new LXC container via the Proxmox API.
@@ -42,7 +42,13 @@ func (c *Client) Create(ctx context.Context, opts ContainerCreateOptions) error 
 	params.Set("cores", strconv.Itoa(opts.Cores))
 	params.Set("memory", strconv.Itoa(opts.MemoryMB))
 	params.Set("hostname", opts.Hostname)
-	params.Set("net0", fmt.Sprintf("name=eth0,bridge=%s,ip=dhcp", opts.Bridge))
+	netCfg := fmt.Sprintf("name=eth0,bridge=%s", opts.Bridge)
+	if opts.IPAddress != "" {
+		netCfg += ",ip=" + formatIPConfig(opts.IPAddress)
+	} else {
+		netCfg += ",ip=dhcp"
+	}
+	params.Set("net0", netCfg)
 	params.Set("start", "0")
 
 	if opts.Unprivileged {
@@ -86,18 +92,9 @@ func (c *Client) Create(ctx context.Context, opts ContainerCreateOptions) error 
 		params.Set(key, val)
 	}
 
-	// Device passthrough (e.g. GPU)
-	for i, dev := range opts.Devices {
-		key := fmt.Sprintf("dev%d", i)
-		val := dev.Path
-		if dev.GID > 0 {
-			val += fmt.Sprintf(",gid=%d", dev.GID)
-		}
-		if dev.Mode != "" {
-			val += fmt.Sprintf(",mode=%s", dev.Mode)
-		}
-		params.Set(key, val)
-	}
+	// NOTE: Device passthrough (dev*) is NOT included here because the Proxmox
+	// API restricts it to root@pam only. Devices are applied post-creation via
+	// pct set in the configure_container step.
 
 	path := fmt.Sprintf("/nodes/%s/lxc", c.node)
 	var upid string
@@ -228,4 +225,29 @@ func (c *Client) DetachMountPoints(ctx context.Context, ctid int, indexes []int)
 	}
 	params := url.Values{"delete": {strings.Join(deleteKeys, ",")}}
 	return c.doRequest(ctx, "PUT", path, params, nil)
+}
+
+// formatIPConfig formats an IP address for Proxmox net0 configuration.
+// If the input already contains "/" (CIDR notation), it's passed through as-is.
+// Otherwise, /24 is appended and a gateway is derived by replacing the last octet with .1.
+func formatIPConfig(ip string) string {
+	if strings.Contains(ip, "/") {
+		// Already has CIDR; check if gateway is included
+		if strings.Contains(ip, ",gw=") {
+			return ip
+		}
+		// Has CIDR but no gateway — derive gateway from the IP portion
+		ipPart := ip[:strings.Index(ip, "/")]
+		return ip + ",gw=" + deriveGateway(ipPart)
+	}
+	return ip + "/24,gw=" + deriveGateway(ip)
+}
+
+// deriveGateway replaces the last octet of an IPv4 address with .1.
+func deriveGateway(ip string) string {
+	lastDot := strings.LastIndex(ip, ".")
+	if lastDot < 0 {
+		return ip
+	}
+	return ip[:lastDot] + ".1"
 }

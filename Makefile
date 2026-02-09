@@ -7,7 +7,7 @@ LDFLAGS   := -X $(MODULE)/internal/version.Version=$(VERSION) \
              -X $(MODULE)/internal/version.Commit=$(COMMIT) \
              -X $(MODULE)/internal/version.Date=$(DATE)
 
-.PHONY: build test vet fmt lint install run-install run-serve clean deps tidy release frontend
+.PHONY: build test test-apps vet fmt lint install run-install run-serve clean deps tidy release frontend
 
 build:
 	go build -ldflags "$(LDFLAGS)" -o $(BINARY) ./cmd/pve-appstore/
@@ -32,6 +32,9 @@ install: build
 
 run-install: build
 	./$(BINARY) install
+
+test-apps: build
+	./$(BINARY) test-apps --catalog-dir testdata/catalog --verbose
 
 run-serve: build
 	./$(BINARY) serve --config dev-config.yml --catalog-dir testdata/catalog

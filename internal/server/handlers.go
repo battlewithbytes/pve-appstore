@@ -732,6 +732,31 @@ func (s *Server) handleReinstall(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusAccepted, job)
 }
 
+func (s *Server) handleUpdate(w http.ResponseWriter, r *http.Request) {
+	installID := r.PathValue("id")
+
+	if s.engine == nil {
+		writeError(w, http.StatusServiceUnavailable, "engine not available")
+		return
+	}
+
+	var req engine.ReinstallRequest
+	if r.Body != nil && r.ContentLength > 0 {
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid request body")
+			return
+		}
+	}
+
+	job, err := s.engine.Update(installID, req)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusAccepted, job)
+}
+
 func (s *Server) handleBrowseStorages(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"storages": s.cfg.Storages,

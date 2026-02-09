@@ -99,6 +99,13 @@ export const api = {
       body: JSON.stringify(overrides || {}),
     }),
 
+  update: (id: string, overrides?: { cores?: number; memory_mb?: number; disk_gb?: number; storage?: string; bridge?: string; inputs?: Record<string, string> }) =>
+    fetchJSON<Job>(`${BASE}/installs/${id}/update`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(overrides || {}),
+    }),
+
   configExport: () => fetchJSON<ExportResponse>(`${BASE}/config/export`),
 
   configExportDownload: () => {

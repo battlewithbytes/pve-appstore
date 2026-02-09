@@ -67,6 +67,16 @@ var (
 	}
 )
 
+// Set runs `pct set <ctid> <args...>` to modify container configuration.
+func Set(ctid int, args ...string) error {
+	cmdArgs := append([]string{"set", strconv.Itoa(ctid)}, args...)
+	out, err := pctRun(cmdArgs...)
+	if err != nil {
+		return fmt.Errorf("pct set %d %v: %s: %w", ctid, args, out, err)
+	}
+	return nil
+}
+
 // ExecResult holds the output of a pct exec command.
 type ExecResult struct {
 	Output   string
@@ -157,6 +167,10 @@ func Push(ctid int, src, dst string, perms string) error {
 	out, err := pctRun(args...)
 	if err != nil {
 		return fmt.Errorf("pct push %d %s %s: %s: %w", ctid, src, dst, out, err)
+	}
+	// pct push can return exit 0 but print an error to stdout (e.g., "failed to open")
+	if strings.Contains(out, "failed to") {
+		return fmt.Errorf("pct push %d %s %s: %s", ctid, src, dst, out)
 	}
 	return nil
 }

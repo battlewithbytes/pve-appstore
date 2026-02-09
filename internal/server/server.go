@@ -107,6 +107,7 @@ func New(cfg *config.Config, cat *catalog.Catalog, eng *engine.Engine, spaFS fs.
 	mux.HandleFunc("POST /api/installs/{id}/restart", s.withAuth(s.handleRestartContainer))
 	mux.HandleFunc("POST /api/installs/{id}/uninstall", s.withAuth(s.handleUninstall))
 	mux.HandleFunc("POST /api/installs/{id}/reinstall", s.withAuth(s.handleReinstall))
+	mux.HandleFunc("POST /api/installs/{id}/update", s.withAuth(s.handleUpdate))
 
 	// API routes — stacks
 	mux.HandleFunc("POST /api/stacks", s.withAuth(s.handleCreateStack))

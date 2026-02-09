@@ -27,7 +27,7 @@ lxc:
   defaults:
     unprivileged: true
     cores: 1
-    memory_mb: 128
+    memory_mb: 256
     disk_gb: 1
     features:
       - nesting
