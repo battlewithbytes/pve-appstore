@@ -4,7 +4,7 @@ import { FitAddon } from '@xterm/addon-fit'
 import { WebLinksAddon } from '@xterm/addon-web-links'
 import '@xterm/xterm/css/xterm.css'
 import { api } from './api'
-import type { AppSummary, AppDetail, AppInput, HealthResponse, Job, LogEntry, InstallDetail, InstallListItem, ConfigDefaultsResponse, MountPoint, MountInfo, BrowseEntry, ExportResponse, ExportRecipe, InstallRequest, DevicePassthrough, AppStatusResponse } from './types'
+import type { AppSummary, AppDetail, AppInput, HealthResponse, Job, LogEntry, InstallDetail, InstallListItem, ConfigDefaultsResponse, MountPoint, MountInfo, BrowseEntry, ExportResponse, ExportRecipe, InstallRequest, DevicePassthrough, AppStatusResponse, StackListItem, StackDetail, StackCreateRequest, StackValidateResponse, StackApp } from './types'
 
 function useHash() {
   const [hash, setHash] = useState(window.location.hash)
@@ -52,15 +52,21 @@ function App() {
   const appMatch = hash.match(/^#\/app\/(.+)$/)
   const jobMatch = hash.match(/^#\/job\/(.+)$/)
   const installMatch = hash.match(/^#\/install\/(.+)$/)
+  const stackMatch = hash.match(/^#\/stack\/(.+)$/)
   const isInstalls = hash === '#/installs'
+  const isStacks = hash === '#/stacks'
+  const isCreateStack = hash === '#/create-stack'
   const isJobs = hash === '#/jobs'
   const isConfig = hash === '#/config'
 
   let content
   if (jobMatch) content = <JobView id={jobMatch[1]} />
   else if (installMatch) content = <InstallDetailView id={installMatch[1]} requireAuth={requireAuth} />
+  else if (stackMatch) content = <StackDetailView id={stackMatch[1]} requireAuth={requireAuth} />
   else if (appMatch) content = <AppDetailView id={appMatch[1]} requireAuth={requireAuth} />
   else if (isInstalls) content = <InstallsList requireAuth={requireAuth} />
+  else if (isStacks) content = <StacksList requireAuth={requireAuth} />
+  else if (isCreateStack) content = <StackCreateWizard requireAuth={requireAuth} />
   else if (isJobs) content = <JobsList />
   else if (isConfig) content = <ConfigView requireAuth={requireAuth} />
   else content = <AppList />
@@ -88,6 +94,7 @@ function Header({ health, authed, authRequired, onLogout, onLogin }: { health: H
         <nav className="flex gap-4">
           <a href="#/" className="text-text-secondary hover:text-primary no-underline text-sm font-mono uppercase tracking-wider transition-colors">Apps</a>
           <a href="#/installs" className="text-text-secondary hover:text-primary no-underline text-sm font-mono uppercase tracking-wider transition-colors">Installed</a>
+          <a href="#/stacks" className="text-text-secondary hover:text-primary no-underline text-sm font-mono uppercase tracking-wider transition-colors">Stacks</a>
           <a href="#/jobs" className="text-text-secondary hover:text-primary no-underline text-sm font-mono uppercase tracking-wider transition-colors">Jobs</a>
           <a href="#/config" className="text-text-secondary hover:text-primary no-underline text-sm font-mono uppercase tracking-wider transition-colors">Config</a>
         </nav>
@@ -2106,6 +2113,819 @@ function FormRow({ label, help, description, children }: { label: string; help?:
 
 function FormInput({ value, onChange, type = 'text', placeholder }: { value: string; onChange: (v: string) => void; type?: string; placeholder?: string }) {
   return <input type={type} value={value} onChange={e => onChange(e.target.value)} placeholder={placeholder} className="w-full px-3 py-2 bg-bg-secondary border border-border rounded-md text-text-primary text-sm outline-none focus:border-primary focus:ring-1 focus:ring-primary transition-colors font-mono placeholder:text-text-muted" />
+}
+
+function FormField({ label, description, help, children }: { label: string; description?: string; help?: string; children: React.ReactNode }) {
+  return (
+    <div className="mb-3">
+      <label className="text-xs text-text-muted font-mono mb-1 block">{label}</label>
+      {description && <div className="text-[10px] text-text-muted mb-1">{description}</div>}
+      {children}
+      {help && <div className="text-[10px] text-text-muted mt-1">{help}</div>}
+    </div>
+  )
+}
+
+// --- Stacks ---
+
+function StacksList({ requireAuth }: { requireAuth: (cb: () => void) => void }) {
+  const [stacks, setStacks] = useState<StackListItem[]>([])
+  const [loading, setLoading] = useState(true)
+  const [contextMenu, setContextMenu] = useState<{ stack: StackListItem; x: number; y: number } | null>(null)
+  const [showTerminal, setShowTerminal] = useState<string | null>(null)
+  const [showLogs, setShowLogs] = useState<string | null>(null)
+  const [actionLoading, setActionLoading] = useState<string | null>(null)
+
+  const fetchStacks = useCallback(async () => {
+    try {
+      const d = await api.stacks()
+      setStacks(d.stacks || [])
+    } catch { /* ignore */ }
+    setLoading(false)
+  }, [])
+
+  useEffect(() => { fetchStacks() }, [fetchStacks])
+  useEffect(() => {
+    const interval = setInterval(fetchStacks, 10000)
+    return () => clearInterval(interval)
+  }, [fetchStacks])
+
+  const handleAction = async (action: string, stackId: string) => {
+    setActionLoading(stackId)
+    try {
+      switch (action) {
+        case 'start': await api.startStack(stackId); break
+        case 'stop': await api.stopStack(stackId); break
+        case 'restart': await api.restartStack(stackId); break
+        case 'uninstall': {
+          const job = await api.uninstallStack(stackId)
+          window.location.hash = `#/job/${job.id}`
+          return
+        }
+      }
+      setTimeout(fetchStacks, 1000)
+      setTimeout(fetchStacks, 4000)
+    } catch (e) {
+      alert(e instanceof Error ? e.message : `${action} failed`)
+    }
+    setActionLoading(null)
+  }
+
+  const gridCols = 'grid-cols-[64px_1.5fr_80px_90px_140px_110px_50px_70px_90px_36px]'
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-5">
+        <h2 className="text-xl font-bold text-text-primary font-mono">Stacks</h2>
+        <button onClick={() => { requireAuth(() => { window.location.hash = '#/create-stack' }) }}
+          className="px-4 py-2 bg-primary text-bg-primary font-mono text-sm font-bold rounded-md cursor-pointer hover:opacity-90 transition-opacity border-none">
+          + New Stack
+        </button>
+      </div>
+      {loading ? <Center>Loading...</Center> : stacks.length === 0 ? <Center>No stacks created. <a href="#/create-stack" className="text-primary hover:underline ml-1">Create one</a></Center> : (
+        <div className="bg-bg-card border border-border rounded-lg overflow-x-auto">
+          <div className={`grid ${gridCols} gap-2 px-4 py-2 bg-bg-secondary text-[10px] text-text-muted font-mono uppercase tracking-wider border-b border-border items-center`}>
+            <span>Icons</span>
+            <span>Stack</span>
+            <span>Apps</span>
+            <span>Status</span>
+            <span>Network</span>
+            <span>Resources</span>
+            <span>Boot</span>
+            <span>Uptime</span>
+            <span>Created</span>
+            <span></span>
+          </div>
+          {stacks.map(stack => {
+            const isRunning = stack.status === 'running'
+            const isLoading = actionLoading === stack.id
+            return (
+              <div key={stack.id}
+                className={`grid ${gridCols} gap-2 px-4 py-3 border-b border-border items-center hover:bg-bg-secondary/50 cursor-pointer transition-colors ${isLoading ? 'opacity-50 pointer-events-none' : ''}`}
+                onClick={() => window.location.hash = `#/stack/${stack.id}`}>
+                {/* Overlapping icons */}
+                <div className="flex items-center -space-x-2">
+                  {stack.apps.slice(0, 3).map((app, i) => (
+                    <div key={app.app_id} className="w-7 h-7 rounded bg-bg-secondary overflow-hidden border-2 border-bg-card flex items-center justify-center" style={{ zIndex: 3 - i }}>
+                      <img src={`/api/apps/${app.app_id}/icon`} alt="" className="w-5 h-5 rounded" onError={e => { (e.target as HTMLImageElement).style.display = 'none' }} />
+                    </div>
+                  ))}
+                  {stack.apps.length > 3 && <span className="text-[10px] text-text-muted font-mono ml-1">+{stack.apps.length - 3}</span>}
+                </div>
+                {/* Name */}
+                <div className="min-w-0">
+                  <div className="text-sm font-semibold text-text-primary truncate">{stack.name}</div>
+                  {stack.ctid > 0 && <div className="text-[10px] text-text-muted font-mono">CT {stack.ctid}</div>}
+                </div>
+                {/* Apps count */}
+                <span className="text-xs font-mono text-text-muted">{stack.apps.length} app{stack.apps.length !== 1 ? 's' : ''}</span>
+                {/* Status */}
+                <div className="flex items-center gap-1.5">
+                  <StatusDot running={isRunning} />
+                  <span className={`text-xs font-mono ${isRunning ? 'text-status-running' : 'text-status-stopped'}`}>{stack.status}</span>
+                </div>
+                {/* Network */}
+                <div className="min-w-0 text-xs font-mono text-text-secondary">
+                  {stack.ip && <div className="truncate">{stack.ip}</div>}
+                </div>
+                {/* Resources */}
+                <span className="text-xs font-mono text-text-muted">{stack.cores}c / {stack.memory_mb}MB / {stack.disk_gb}GB</span>
+                {/* Boot */}
+                <span className="text-xs font-mono text-text-muted">{stack.onboot ? 'On' : 'Off'}</span>
+                {/* Uptime */}
+                <span className="text-xs font-mono text-text-muted">
+                  {isRunning && stack.uptime ? formatUptime(stack.uptime) : '-'}
+                </span>
+                {/* Created */}
+                <span className="text-[10px] font-mono text-text-muted">
+                  {new Date(stack.created_at).toLocaleDateString()}
+                </span>
+                {/* Actions */}
+                <button
+                  onClick={e => { e.stopPropagation(); setContextMenu({ stack, x: e.clientX, y: e.clientY }) }}
+                  className="text-text-muted hover:text-primary bg-transparent border-none cursor-pointer text-base font-mono p-0 leading-none"
+                  title="Actions">&#x22EE;</button>
+              </div>
+            )
+          })}
+        </div>
+      )}
+
+      {contextMenu && (
+        <StackContextMenu
+          stack={contextMenu.stack}
+          x={contextMenu.x}
+          y={contextMenu.y}
+          onClose={() => setContextMenu(null)}
+          onAction={(action, id) => { setContextMenu(null); requireAuth(() => handleAction(action, id)) }}
+          onShell={id => { setContextMenu(null); requireAuth(() => setShowTerminal(id)) }}
+          onLogs={id => { setContextMenu(null); setShowLogs(id) }}
+        />
+      )}
+
+      {showTerminal && <StackTerminalModal stackId={showTerminal} onClose={() => setShowTerminal(null)} />}
+      {showLogs && <StackLogViewerModal stackId={showLogs} onClose={() => setShowLogs(null)} />}
+    </div>
+  )
+}
+
+function StackContextMenu({ stack, x, y, onClose, onAction, onShell, onLogs }: {
+  stack: StackListItem;
+  x: number; y: number;
+  onClose: () => void;
+  onAction: (action: string, id: string) => void;
+  onShell: (id: string) => void;
+  onLogs: (id: string) => void;
+}) {
+  const isRunning = stack.status === 'running'
+  const isStopped = stack.status === 'stopped'
+
+  const menuY = Math.min(y, window.innerHeight - 320)
+  const menuX = Math.min(x, window.innerWidth - 200)
+
+  return (
+    <>
+      <div className="fixed inset-0 z-[299]" onClick={onClose} />
+      <div style={{ position: 'fixed', top: menuY, left: menuX, zIndex: 300 }}
+        className="bg-bg-card border border-border rounded-lg shadow-lg py-1 min-w-[170px]">
+        {isStopped && <CtxMenuItem label="Start" onClick={() => onAction('start', stack.id)} />}
+        {isRunning && (
+          <>
+            <CtxMenuItem label="Stop" onClick={() => onAction('stop', stack.id)} />
+            <CtxMenuItem label="Restart" onClick={() => onAction('restart', stack.id)} />
+          </>
+        )}
+        {(isRunning || isStopped) && <div className="border-t border-border my-1" />}
+        {isRunning && (
+          <>
+            <CtxMenuItem label="Logs" onClick={() => onLogs(stack.id)} />
+            <CtxMenuItem label="Shell" onClick={() => onShell(stack.id)} />
+            <div className="border-t border-border my-1" />
+          </>
+        )}
+        <CtxMenuItem label="Details" onClick={() => { onClose(); window.location.hash = `#/stack/${stack.id}` }} />
+        <div className="border-t border-border my-1" />
+        <CtxMenuItem label="Remove" danger onClick={() => onAction('uninstall', stack.id)} />
+      </div>
+    </>
+  )
+}
+
+function StackDetailView({ id, requireAuth }: { id: string; requireAuth: (cb: () => void) => void }) {
+  const [detail, setDetail] = useState<StackDetail | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+  const [showTerminal, setShowTerminal] = useState(false)
+  const [showLogs, setShowLogs] = useState(false)
+
+  const fetchDetail = useCallback(async () => {
+    try {
+      const d = await api.stackDetail(id)
+      setDetail(d)
+      setError(null)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to load')
+    }
+    setLoading(false)
+  }, [id])
+
+  useEffect(() => { fetchDetail() }, [fetchDetail])
+  useEffect(() => {
+    const interval = setInterval(fetchDetail, 5000)
+    return () => clearInterval(interval)
+  }, [fetchDetail])
+
+  const handleAction = async (action: string) => {
+    try {
+      switch (action) {
+        case 'start': await api.startStack(id); break
+        case 'stop': await api.stopStack(id); break
+        case 'restart': await api.restartStack(id); break
+        case 'uninstall': {
+          const job = await api.uninstallStack(id)
+          window.location.hash = `#/job/${job.id}`
+          return
+        }
+      }
+      setTimeout(fetchDetail, 1000)
+    } catch (e) {
+      alert(e instanceof Error ? e.message : `${action} failed`)
+    }
+  }
+
+  if (loading) return <Center>Loading...</Center>
+  if (error || !detail) return <Center className="text-status-error">{error || 'Stack not found'}</Center>
+
+  const isRunning = detail.status === 'running'
+
+  return (
+    <div>
+      <a href="#/stacks" className="text-primary text-xs font-mono no-underline hover:underline mb-4 inline-block">&larr; Back to Stacks</a>
+
+      {/* Header */}
+      <div className="flex items-start justify-between mb-6">
+        <div>
+          <h2 className="text-xl font-bold text-text-primary mb-1 font-mono">{detail.name}</h2>
+          <div className="flex items-center gap-3 text-xs font-mono text-text-muted">
+            <span>CT {detail.ctid}</span>
+            {detail.ip && <span>{detail.ip}</span>}
+            <span className="flex items-center gap-1"><StatusDot running={isRunning} /><span className={isRunning ? 'text-status-running' : 'text-status-stopped'}>{detail.status}</span></span>
+            {isRunning && detail.live?.uptime ? <span>up {formatUptime(detail.live.uptime)}</span> : null}
+          </div>
+        </div>
+        <div className="flex gap-2">
+          {detail.status === 'stopped' && <ActionButton label="Start" onClick={() => requireAuth(() => handleAction('start'))} />}
+          {isRunning && (
+            <>
+              <ActionButton label="Stop" onClick={() => requireAuth(() => handleAction('stop'))} />
+              <ActionButton label="Restart" onClick={() => requireAuth(() => handleAction('restart'))} />
+              <ActionButton label="Shell" onClick={() => requireAuth(() => setShowTerminal(true))} accent />
+              <ActionButton label="Logs" onClick={() => setShowLogs(true)} />
+            </>
+          )}
+          <ActionButton label="Remove" onClick={() => requireAuth(() => handleAction('uninstall'))} danger />
+        </div>
+      </div>
+
+      {/* Resource Cards */}
+      {isRunning && detail.live && (
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
+          <ResourceCard label="CPU" value={`${(detail.live.cpu * 100).toFixed(1)}%`} sub={`${detail.live.cpus} cores`} />
+          <ResourceCard label="Memory" value={formatBytes(detail.live.mem)} sub={`/ ${formatBytes(detail.live.maxmem)}`} />
+          <ResourceCard label="Disk" value={formatBytes(detail.live.disk)} sub={`/ ${formatBytes(detail.live.maxdisk)}`} />
+          <ResourceCard label="Network" value={`${formatBytesShort(detail.live.netin)} in`} sub={`${formatBytesShort(detail.live.netout)} out`} />
+        </div>
+      )}
+
+      {/* Contained Apps */}
+      <div className="bg-bg-card border border-border rounded-lg p-5 mb-4">
+        <h3 className="text-sm font-bold text-text-primary mb-3 font-mono">Contained Apps ({detail.apps.length})</h3>
+        <div className="grid grid-cols-[40px_1fr_100px_80px_1fr] gap-2 px-2 py-1 text-[10px] text-text-muted font-mono uppercase tracking-wider border-b border-border">
+          <span>#</span><span>App</span><span>Version</span><span>Status</span><span>Key Outputs</span>
+        </div>
+        {detail.apps.map((app: StackApp, i: number) => (
+          <div key={app.app_id} className="grid grid-cols-[40px_1fr_100px_80px_1fr] gap-2 px-2 py-2 border-b border-border items-center">
+            <span className="text-xs font-mono text-text-muted">{i + 1}</span>
+            <div className="flex items-center gap-2">
+              <div className="w-6 h-6 rounded bg-bg-secondary overflow-hidden flex items-center justify-center">
+                <img src={`/api/apps/${app.app_id}/icon`} alt="" className="w-5 h-5 rounded" onError={e => { (e.target as HTMLImageElement).style.display = 'none' }} />
+              </div>
+              <span className="text-sm text-text-primary">{app.app_name}</span>
+            </div>
+            <span className="text-xs font-mono text-text-muted">{app.app_version}</span>
+            <span className={`text-xs font-mono ${app.status === 'completed' ? 'text-status-running' : app.status === 'failed' ? 'text-status-error' : 'text-text-muted'}`}>
+              {app.status}{app.error ? ` (${app.error})` : ''}
+            </span>
+            <div className="text-xs font-mono text-text-muted truncate">
+              {app.outputs && Object.entries(app.outputs).slice(0, 2).map(([k, v]) => (
+                <span key={k} className="mr-3">{k}: {v}</span>
+              ))}
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {/* All Outputs */}
+      {detail.apps.some(a => a.outputs && Object.keys(a.outputs).length > 0) && (
+        <div className="bg-bg-card border border-border rounded-lg p-5 mb-4">
+          <h3 className="text-sm font-bold text-text-primary mb-3 font-mono">Outputs</h3>
+          <div className="grid grid-cols-2 gap-2">
+            {detail.apps.map(app => app.outputs && Object.entries(app.outputs).map(([k, v]) => (
+              <div key={`${app.app_id}-${k}`} className="text-sm font-mono">
+                <span className="text-text-muted">{app.app_id}.{k}:</span>{' '}
+                {v.startsWith('http') ? <a href={v} target="_blank" rel="noreferrer" className="text-primary hover:underline">{v}</a> : <span className="text-text-primary">{v}</span>}
+              </div>
+            )))}
+          </div>
+        </div>
+      )}
+
+      {/* Mounts */}
+      {detail.mount_points && detail.mount_points.length > 0 && (
+        <div className="bg-bg-card border border-border rounded-lg p-5 mb-4">
+          <h3 className="text-sm font-bold text-text-primary mb-3 font-mono">Mounts</h3>
+          {detail.mount_points.map((mp: MountPoint) => (
+            <div key={mp.index} className="flex items-center gap-3 py-1 text-sm font-mono">
+              <span className="text-text-muted">mp{mp.index}</span>
+              <span className="text-primary">{mp.mount_path}</span>
+              <span className="text-text-muted text-xs">({mp.type}{mp.host_path ? `: ${mp.host_path}` : ''}{mp.volume_id ? `: ${mp.volume_id}` : ''})</span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {showTerminal && <StackTerminalModal stackId={id} onClose={() => setShowTerminal(false)} />}
+      {showLogs && <StackLogViewerModal stackId={id} onClose={() => setShowLogs(false)} />}
+    </div>
+  )
+}
+
+function ActionButton({ label, onClick, accent, danger }: { label: string; onClick: () => void; accent?: boolean; danger?: boolean }) {
+  const cls = danger
+    ? 'border-status-error text-status-error hover:bg-status-error hover:text-bg-primary'
+    : accent
+    ? 'border-primary text-primary hover:bg-primary hover:text-bg-primary'
+    : 'border-border text-text-muted hover:border-primary hover:text-primary'
+  return (
+    <button onClick={onClick} className={`px-3 py-1.5 bg-transparent border rounded text-xs font-mono cursor-pointer transition-colors ${cls}`}>
+      {label}
+    </button>
+  )
+}
+
+
+function StackTerminalModal({ stackId, onClose }: { stackId: string; onClose: () => void }) {
+  const termRef = useRef<HTMLDivElement>(null)
+  const termInstance = useRef<Terminal | null>(null)
+  const wsRef = useRef<WebSocket | null>(null)
+
+  useEffect(() => {
+    if (!termRef.current) return
+
+    const term = new Terminal({
+      cursorBlink: true,
+      fontFamily: "'JetBrains Mono', monospace",
+      fontSize: 14,
+      theme: { background: '#0A0A0A', foreground: '#00FF9D', cursor: '#00FF9D', selectionBackground: 'rgba(0,255,157,0.3)' },
+    })
+    termInstance.current = term
+
+    const fitAddon = new FitAddon()
+    term.loadAddon(fitAddon)
+    term.loadAddon(new WebLinksAddon())
+    term.open(termRef.current)
+    fitAddon.fit()
+
+    let ws: WebSocket | null = null
+    let cancelled = false
+
+    api.terminalToken().then(({ token }) => {
+      if (cancelled) return
+      const wsUrl = api.stackTerminalUrl(stackId, token)
+      ws = new WebSocket(wsUrl)
+      wsRef.current = ws
+      ws.binaryType = 'arraybuffer'
+
+      ws.onopen = () => {
+        term.writeln('\x1b[32mConnected to stack container shell.\x1b[0m\r\n')
+        ws!.send(JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows }))
+      }
+      ws.onmessage = (event) => {
+        if (event.data instanceof ArrayBuffer) term.write(new Uint8Array(event.data))
+        else term.write(event.data)
+      }
+      ws.onclose = () => { term.writeln('\r\n\x1b[31mConnection closed.\x1b[0m') }
+      ws.onerror = () => { term.writeln('\r\n\x1b[31mWebSocket error.\x1b[0m') }
+
+      term.onData(data => { if (ws?.readyState === WebSocket.OPEN) ws.send(data) })
+      term.onResize(size => { if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'resize', cols: size.cols, rows: size.rows })) })
+    }).catch(() => { term.writeln('\x1b[31mFailed to get terminal token.\x1b[0m') })
+
+    const observer = new ResizeObserver(() => fitAddon.fit())
+    observer.observe(termRef.current)
+
+    return () => {
+      cancelled = true
+      observer.disconnect()
+      ws?.close()
+      term.dispose()
+    }
+  }, [stackId])
+
+  return (
+    <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-[200] p-4" onClick={onClose}>
+      <div className="bg-bg-card border border-border rounded-lg w-full max-w-4xl h-[70vh] flex flex-col" onClick={e => e.stopPropagation()}>
+        <div className="flex items-center justify-between px-4 py-2 border-b border-border">
+          <span className="text-sm font-mono text-text-primary">Stack Shell</span>
+          <button onClick={onClose} className="text-text-muted hover:text-primary bg-transparent border-none cursor-pointer text-lg font-mono">&times;</button>
+        </div>
+        <div ref={termRef} className="flex-1 p-2" />
+      </div>
+    </div>
+  )
+}
+
+function StackLogViewerModal({ stackId, onClose }: { stackId: string; onClose: () => void }) {
+  const termRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!termRef.current) return
+
+    const term = new Terminal({
+      cursorBlink: false, disableStdin: true,
+      fontFamily: "'JetBrains Mono', monospace", fontSize: 13,
+      theme: { background: '#0A0A0A', foreground: '#9CA3AF', cursor: 'transparent', selectionBackground: 'rgba(0,255,157,0.3)' },
+    })
+
+    const fitAddon = new FitAddon()
+    term.loadAddon(fitAddon)
+    term.loadAddon(new WebLinksAddon())
+    term.open(termRef.current)
+    fitAddon.fit()
+
+    let ws: WebSocket | null = null
+    let cancelled = false
+
+    api.terminalToken().then(({ token }) => {
+      if (cancelled) return
+      const wsUrl = api.stackJournalLogsUrl(stackId, token)
+      ws = new WebSocket(wsUrl)
+      ws.onopen = () => { term.writeln('\x1b[32m--- Journal log stream started ---\x1b[0m\r') }
+      ws.onmessage = (event) => {
+        const lines = (event.data as string).split('\n')
+        for (const line of lines) {
+          if (line.trim()) term.writeln(line)
+        }
+      }
+      ws.onclose = () => { term.writeln('\r\n\x1b[31m--- Stream ended ---\x1b[0m') }
+      ws.onerror = () => { term.writeln('\r\n\x1b[31mWebSocket error.\x1b[0m') }
+    }).catch(() => { term.writeln('\x1b[31mFailed to get terminal token.\x1b[0m') })
+
+    const observer = new ResizeObserver(() => fitAddon.fit())
+    observer.observe(termRef.current)
+
+    return () => {
+      cancelled = true
+      observer.disconnect()
+      ws?.close()
+      term.dispose()
+    }
+  }, [stackId])
+
+  return (
+    <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-[200] p-4" onClick={onClose}>
+      <div className="bg-bg-card border border-border rounded-lg w-full max-w-4xl h-[70vh] flex flex-col" onClick={e => e.stopPropagation()}>
+        <div className="flex items-center justify-between px-4 py-2 border-b border-border">
+          <span className="text-sm font-mono text-text-primary">Stack Logs (journalctl)</span>
+          <button onClick={onClose} className="text-text-muted hover:text-primary bg-transparent border-none cursor-pointer text-lg font-mono">&times;</button>
+        </div>
+        <div ref={termRef} className="flex-1 p-2" />
+      </div>
+    </div>
+  )
+}
+
+function StackCreateWizard({ requireAuth }: { requireAuth: (cb: () => void) => void }) {
+  const [step, setStep] = useState(1)
+  const [name, setName] = useState('')
+  const [selectedApps, setSelectedApps] = useState<{ app_id: string; name: string }[]>([])
+  const [appSearch, setAppSearch] = useState('')
+  const [allApps, setAllApps] = useState<AppSummary[]>([])
+  const [perAppInputs, setPerAppInputs] = useState<Record<string, Record<string, string>>>({})
+  const [appDetails, setAppDetails] = useState<Record<string, AppDetail>>({})
+  const [cores, setCores] = useState(2)
+  const [memoryMB, setMemoryMB] = useState(2048)
+  const [diskGB, setDiskGB] = useState(16)
+  const [storage, setStorage] = useState('')
+  const [bridge, setBridge] = useState('')
+  const [defaults, setDefaults] = useState<{ storages: string[]; bridges: string[]; defaults: { cores: number; memory_mb: number; disk_gb: number } } | null>(null)
+  const [validating, setValidating] = useState(false)
+  const [validation, setValidation] = useState<StackValidateResponse | null>(null)
+  const [creating, setCreating] = useState(false)
+
+  useEffect(() => {
+    api.apps().then(d => setAllApps(d.apps || []))
+    api.configDefaults().then(d => {
+      setDefaults(d)
+      if (d.storages.length > 0) setStorage(d.storages[0])
+      if (d.bridges.length > 0) setBridge(d.bridges[0])
+    })
+  }, [])
+
+  const addApp = (app: AppSummary) => {
+    if (selectedApps.some(a => a.app_id === app.id)) return
+    setSelectedApps(prev => [...prev, { app_id: app.id, name: app.name }])
+    // Fetch app detail for inputs
+    api.app(app.id).then(detail => {
+      setAppDetails(prev => ({ ...prev, [app.id]: detail }))
+    })
+  }
+
+  const removeApp = (appId: string) => {
+    setSelectedApps(prev => prev.filter(a => a.app_id !== appId))
+    setPerAppInputs(prev => { const next = { ...prev }; delete next[appId]; return next })
+  }
+
+  const moveApp = (index: number, direction: -1 | 1) => {
+    const newIndex = index + direction
+    if (newIndex < 0 || newIndex >= selectedApps.length) return
+    const copy = [...selectedApps]
+    const tmp = copy[index]
+    copy[index] = copy[newIndex]
+    copy[newIndex] = tmp
+    setSelectedApps(copy)
+  }
+
+  const filteredApps = appSearch
+    ? allApps.filter(a => a.name.toLowerCase().includes(appSearch.toLowerCase()) || a.id.toLowerCase().includes(appSearch.toLowerCase()))
+    : allApps
+
+  const handleValidate = async () => {
+    setValidating(true)
+    try {
+      const result = await api.validateStack({
+        name,
+        apps: selectedApps.map(a => ({ app_id: a.app_id })),
+      })
+      setValidation(result)
+      if (result.valid && result.recommended) {
+        setCores(prev => prev || result.recommended!.cores)
+        setMemoryMB(prev => prev || result.recommended!.memory_mb)
+        setDiskGB(prev => prev || result.recommended!.disk_gb)
+      }
+    } catch (e) {
+      setValidation({ valid: false, errors: [e instanceof Error ? e.message : 'Validation failed'], warnings: [] })
+    }
+    setValidating(false)
+  }
+
+  const handleCreate = async () => {
+    setCreating(true)
+    requireAuth(async () => {
+      try {
+        const req: StackCreateRequest = {
+          name,
+          apps: selectedApps.map(a => ({
+            app_id: a.app_id,
+            inputs: perAppInputs[a.app_id],
+          })),
+          storage,
+          bridge,
+          cores,
+          memory_mb: memoryMB,
+          disk_gb: diskGB,
+        }
+        const job = await api.createStack(req)
+        window.location.hash = `#/job/${job.id}`
+      } catch (e) {
+        alert(e instanceof Error ? e.message : 'Failed to create stack')
+        setCreating(false)
+      }
+    })
+  }
+
+  const canProceedStep1 = name.trim() !== '' && selectedApps.length > 0
+
+  return (
+    <div className="max-w-3xl mx-auto">
+      <a href="#/stacks" className="text-primary text-xs font-mono no-underline hover:underline mb-4 inline-block">&larr; Back to Stacks</a>
+      <h2 className="text-xl font-bold text-text-primary mb-6 font-mono">Create Stack</h2>
+
+      {/* Step indicator */}
+      <div className="flex items-center gap-2 mb-6">
+        {[1, 2, 3, 4].map(s => (
+          <div key={s} className={`flex items-center gap-2 ${s <= step ? 'text-primary' : 'text-text-muted'}`}>
+            <div className={`w-7 h-7 rounded-full flex items-center justify-center text-xs font-mono font-bold border ${s <= step ? 'border-primary bg-primary/10' : 'border-border'}`}>{s}</div>
+            <span className="text-xs font-mono">{s === 1 ? 'Apps' : s === 2 ? 'Resources' : s === 3 ? 'Inputs' : 'Review'}</span>
+            {s < 4 && <span className="text-text-muted mx-1">/</span>}
+          </div>
+        ))}
+      </div>
+
+      {/* Step 1: Name + App Selection */}
+      {step === 1 && (
+        <div className="bg-bg-card border border-border rounded-lg p-6">
+          <FormField label="Stack Name">
+            <FormInput value={name} onChange={setName} placeholder="my-media-stack" />
+          </FormField>
+
+          <div className="mt-4 grid grid-cols-2 gap-4">
+            {/* Left: Catalog search */}
+            <div>
+              <label className="text-xs text-text-muted font-mono mb-2 block">Available Apps</label>
+              <input type="text" value={appSearch} onChange={e => setAppSearch(e.target.value)} placeholder="Search apps..."
+                className="w-full px-3 py-2 bg-bg-secondary border border-border rounded-md text-text-primary text-sm outline-none focus:border-primary font-mono mb-2 placeholder:text-text-muted" />
+              <div className="max-h-[300px] overflow-y-auto space-y-1">
+                {filteredApps.map(app => (
+                  <div key={app.id} className={`flex items-center justify-between p-2 rounded cursor-pointer hover:bg-bg-secondary ${selectedApps.some(a => a.app_id === app.id) ? 'opacity-40' : ''}`}
+                    onClick={() => addApp(app)}>
+                    <div className="flex items-center gap-2">
+                      <img src={`/api/apps/${app.id}/icon`} alt="" className="w-6 h-6 rounded" onError={e => { (e.target as HTMLImageElement).style.display = 'none' }} />
+                      <span className="text-sm text-text-primary">{app.name}</span>
+                      <span className="text-[10px] text-text-muted">v{app.version}</span>
+                    </div>
+                    <button className="text-primary text-sm font-bold bg-transparent border-none cursor-pointer">+</button>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* Right: Selected apps */}
+            <div>
+              <label className="text-xs text-text-muted font-mono mb-2 block">Selected Apps ({selectedApps.length})</label>
+              <div className="space-y-1">
+                {selectedApps.map((app, i) => (
+                  <div key={app.app_id} className="flex items-center justify-between p-2 bg-bg-secondary rounded">
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs text-text-muted font-mono w-5">{i + 1}.</span>
+                      <img src={`/api/apps/${app.app_id}/icon`} alt="" className="w-5 h-5 rounded" onError={e => { (e.target as HTMLImageElement).style.display = 'none' }} />
+                      <span className="text-sm text-text-primary">{app.name}</span>
+                    </div>
+                    <div className="flex items-center gap-1">
+                      <button onClick={() => moveApp(i, -1)} disabled={i === 0} className="text-text-muted hover:text-primary bg-transparent border-none cursor-pointer text-xs disabled:opacity-30">&uarr;</button>
+                      <button onClick={() => moveApp(i, 1)} disabled={i === selectedApps.length - 1} className="text-text-muted hover:text-primary bg-transparent border-none cursor-pointer text-xs disabled:opacity-30">&darr;</button>
+                      <button onClick={() => removeApp(app.app_id)} className="text-status-error hover:text-red-400 bg-transparent border-none cursor-pointer text-sm ml-1">&times;</button>
+                    </div>
+                  </div>
+                ))}
+                {selectedApps.length === 0 && <div className="text-sm text-text-muted text-center py-8">Select apps from the left panel</div>}
+              </div>
+            </div>
+          </div>
+
+          {validation && !validation.valid && (
+            <div className="mt-3 p-3 bg-status-error/10 border border-status-error/30 rounded text-sm text-status-error">
+              {validation.errors.map((e, i) => <div key={i}>{e}</div>)}
+            </div>
+          )}
+          {validation && validation.warnings.length > 0 && (
+            <div className="mt-3 p-3 bg-status-warning/10 border border-status-warning/30 rounded text-sm text-status-warning">
+              {validation.warnings.map((w, i) => <div key={i}>{w}</div>)}
+            </div>
+          )}
+
+          <div className="mt-4 flex justify-end">
+            <button onClick={() => { if (canProceedStep1) { handleValidate().then(() => setStep(2)) } }}
+              disabled={!canProceedStep1 || validating}
+              className="px-6 py-2 bg-primary text-bg-primary font-mono text-sm font-bold rounded-md cursor-pointer hover:opacity-90 transition-opacity border-none disabled:opacity-50 disabled:cursor-not-allowed">
+              {validating ? 'Validating...' : 'Next'}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Step 2: Resources */}
+      {step === 2 && (
+        <div className="bg-bg-card border border-border rounded-lg p-6">
+          {validation?.recommended && (
+            <div className="mb-4 p-3 bg-bg-secondary border border-border rounded text-xs text-text-muted font-mono">
+              Recommended: {validation.recommended.cores} cores, {validation.recommended.memory_mb} MB RAM, {validation.recommended.disk_gb} GB disk
+              {validation.ostemplate && <span> | Template: {validation.ostemplate}</span>}
+            </div>
+          )}
+
+          <div className="grid grid-cols-3 gap-4 mb-4">
+            <FormField label="CPU Cores">
+              <FormInput value={String(cores)} onChange={v => setCores(parseInt(v) || 0)} type="number" />
+            </FormField>
+            <FormField label="Memory (MB)">
+              <FormInput value={String(memoryMB)} onChange={v => setMemoryMB(parseInt(v) || 0)} type="number" />
+            </FormField>
+            <FormField label="Disk (GB)">
+              <FormInput value={String(diskGB)} onChange={v => setDiskGB(parseInt(v) || 0)} type="number" />
+            </FormField>
+          </div>
+          <div className="grid grid-cols-2 gap-4 mb-4">
+            <FormField label="Storage">
+              <select value={storage} onChange={e => setStorage(e.target.value)}
+                className="w-full px-3 py-2 bg-bg-secondary border border-border rounded-md text-text-primary text-sm outline-none focus:border-primary font-mono">
+                {defaults?.storages.map(s => <option key={s} value={s}>{s}</option>)}
+              </select>
+            </FormField>
+            <FormField label="Bridge">
+              <select value={bridge} onChange={e => setBridge(e.target.value)}
+                className="w-full px-3 py-2 bg-bg-secondary border border-border rounded-md text-text-primary text-sm outline-none focus:border-primary font-mono">
+                {defaults?.bridges.map(b => <option key={b} value={b}>{b}</option>)}
+              </select>
+            </FormField>
+          </div>
+
+          <div className="flex justify-between">
+            <button onClick={() => setStep(1)} className="px-4 py-2 bg-transparent border border-border text-text-muted rounded text-sm font-mono cursor-pointer hover:border-primary hover:text-primary transition-colors">Back</button>
+            <button onClick={() => setStep(3)} className="px-6 py-2 bg-primary text-bg-primary font-mono text-sm font-bold rounded-md cursor-pointer hover:opacity-90 border-none">Next</button>
+          </div>
+        </div>
+      )}
+
+      {/* Step 3: Per-App Inputs */}
+      {step === 3 && (
+        <div className="bg-bg-card border border-border rounded-lg p-6">
+          <h3 className="text-sm font-bold text-text-primary mb-4 font-mono">Per-App Configuration</h3>
+          {selectedApps.map(app => {
+            const detail = appDetails[app.app_id]
+            const inputs = detail?.inputs || []
+            return (
+              <div key={app.app_id} className="mb-4 border border-border rounded-lg overflow-hidden">
+                <div className="px-4 py-2 bg-bg-secondary flex items-center gap-2">
+                  <img src={`/api/apps/${app.app_id}/icon`} alt="" className="w-5 h-5 rounded" onError={e => { (e.target as HTMLImageElement).style.display = 'none' }} />
+                  <span className="text-sm font-bold text-text-primary font-mono">{app.name}</span>
+                </div>
+                <div className="p-4">
+                  {inputs.length === 0 ? (
+                    <div className="text-sm text-text-muted">(no configuration needed)</div>
+                  ) : inputs.map(input => (
+                    <FormField key={input.key} label={input.label} description={input.description} help={input.help}>
+                      {input.type === 'select' && input.validation?.enum ? (
+                        <select value={perAppInputs[app.app_id]?.[input.key] || String(input.default || '')}
+                          onChange={e => setPerAppInputs(prev => ({ ...prev, [app.app_id]: { ...prev[app.app_id], [input.key]: e.target.value } }))}
+                          className="w-full px-3 py-2 bg-bg-secondary border border-border rounded-md text-text-primary text-sm outline-none focus:border-primary font-mono">
+                          {input.validation.enum.map(v => <option key={v} value={v}>{v}</option>)}
+                        </select>
+                      ) : input.type === 'boolean' ? (
+                        <select value={perAppInputs[app.app_id]?.[input.key] || String(input.default || 'false')}
+                          onChange={e => setPerAppInputs(prev => ({ ...prev, [app.app_id]: { ...prev[app.app_id], [input.key]: e.target.value } }))}
+                          className="w-full px-3 py-2 bg-bg-secondary border border-border rounded-md text-text-primary text-sm outline-none focus:border-primary font-mono">
+                          <option value="true">Yes</option>
+                          <option value="false">No</option>
+                        </select>
+                      ) : (
+                        <FormInput
+                          value={perAppInputs[app.app_id]?.[input.key] || String(input.default || '')}
+                          onChange={v => setPerAppInputs(prev => ({ ...prev, [app.app_id]: { ...prev[app.app_id], [input.key]: v } }))}
+                          type={input.type === 'number' ? 'number' : input.type === 'secret' ? 'password' : 'text'}
+                          placeholder={input.default != null ? String(input.default) : undefined}
+                        />
+                      )}
+                    </FormField>
+                  ))}
+                </div>
+              </div>
+            )
+          })}
+
+          <div className="flex justify-between mt-4">
+            <button onClick={() => setStep(2)} className="px-4 py-2 bg-transparent border border-border text-text-muted rounded text-sm font-mono cursor-pointer hover:border-primary hover:text-primary transition-colors">Back</button>
+            <button onClick={() => setStep(4)} className="px-6 py-2 bg-primary text-bg-primary font-mono text-sm font-bold rounded-md cursor-pointer hover:opacity-90 border-none">Next</button>
+          </div>
+        </div>
+      )}
+
+      {/* Step 4: Review & Create */}
+      {step === 4 && (
+        <div className="bg-bg-card border border-border rounded-lg p-6">
+          <h3 className="text-sm font-bold text-text-primary mb-4 font-mono">Review</h3>
+
+          <div className="grid grid-cols-2 gap-4 text-sm font-mono mb-4">
+            <div><span className="text-text-muted">Name:</span> <span className="text-text-primary">{name}</span></div>
+            <div><span className="text-text-muted">Apps:</span> <span className="text-text-primary">{selectedApps.length}</span></div>
+            <div><span className="text-text-muted">Resources:</span> <span className="text-text-primary">{cores}c / {memoryMB}MB / {diskGB}GB</span></div>
+            <div><span className="text-text-muted">Storage:</span> <span className="text-text-primary">{storage}</span></div>
+            <div><span className="text-text-muted">Bridge:</span> <span className="text-text-primary">{bridge}</span></div>
+            {validation?.ostemplate && <div><span className="text-text-muted">Template:</span> <span className="text-text-primary">{validation.ostemplate}</span></div>}
+          </div>
+
+          <div className="mb-4">
+            <div className="text-xs text-text-muted font-mono mb-2">Install Order:</div>
+            {selectedApps.map((app, i) => (
+              <div key={app.app_id} className="flex items-center gap-2 py-1 text-sm">
+                <span className="text-text-muted font-mono w-5">{i + 1}.</span>
+                <img src={`/api/apps/${app.app_id}/icon`} alt="" className="w-5 h-5 rounded" onError={e => { (e.target as HTMLImageElement).style.display = 'none' }} />
+                <span className="text-text-primary">{app.name}</span>
+              </div>
+            ))}
+          </div>
+
+          <div className="flex justify-between">
+            <button onClick={() => setStep(3)} className="px-4 py-2 bg-transparent border border-border text-text-muted rounded text-sm font-mono cursor-pointer hover:border-primary hover:text-primary transition-colors">Back</button>
+            <button onClick={handleCreate} disabled={creating}
+              className="px-6 py-2 bg-primary text-bg-primary font-mono text-sm font-bold rounded-md cursor-pointer hover:opacity-90 border-none disabled:opacity-50">
+              {creating ? 'Creating...' : 'Create Stack'}
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  )
 }
 
 // --- Helpers ---

@@ -1,4 +1,4 @@
-import type { AppsResponse, AppDetail, CategoriesResponse, HealthResponse, JobsResponse, LogsResponse, InstallsResponse, InstallRequest, InstallDetail, Job, ConfigDefaultsResponse, BrowseResponse, MountInfo, ExportResponse, ApplyResponse, AppStatusResponse } from './types';
+import type { AppsResponse, AppDetail, CategoriesResponse, HealthResponse, JobsResponse, LogsResponse, InstallsResponse, InstallRequest, InstallDetail, Job, ConfigDefaultsResponse, BrowseResponse, MountInfo, ExportResponse, ApplyResponse, AppStatusResponse, StacksResponse, StackDetail, StackCreateRequest, StackValidateResponse } from './types';
 
 const BASE = '/api';
 
@@ -135,5 +135,47 @@ export const api = {
   journalLogsUrl: (id: string, token: string) => {
     const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     return `${proto}//${window.location.host}${BASE}/installs/${id}/logs?token=${encodeURIComponent(token)}`;
+  },
+
+  // --- Stacks ---
+
+  stacks: () => fetchJSON<StacksResponse>(`${BASE}/stacks`),
+
+  stackDetail: (id: string) => fetchJSON<StackDetail>(`${BASE}/stacks/${id}`),
+
+  createStack: (req: StackCreateRequest) =>
+    fetchJSON<Job>(`${BASE}/stacks`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(req),
+    }),
+
+  validateStack: (req: StackCreateRequest) =>
+    fetchJSON<StackValidateResponse>(`${BASE}/stacks/validate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(req),
+    }),
+
+  startStack: (id: string) =>
+    fetchJSON<{ status: string; stack_id: string }>(`${BASE}/stacks/${id}/start`, { method: 'POST' }),
+
+  stopStack: (id: string) =>
+    fetchJSON<{ status: string; stack_id: string }>(`${BASE}/stacks/${id}/stop`, { method: 'POST' }),
+
+  restartStack: (id: string) =>
+    fetchJSON<{ status: string; stack_id: string }>(`${BASE}/stacks/${id}/restart`, { method: 'POST' }),
+
+  uninstallStack: (id: string) =>
+    fetchJSON<Job>(`${BASE}/stacks/${id}/uninstall`, { method: 'POST' }),
+
+  stackTerminalUrl: (id: string, token: string) => {
+    const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    return `${proto}//${window.location.host}${BASE}/stacks/${id}/terminal?token=${encodeURIComponent(token)}`;
+  },
+
+  stackJournalLogsUrl: (id: string, token: string) => {
+    const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    return `${proto}//${window.location.host}${BASE}/stacks/${id}/logs?token=${encodeURIComponent(token)}`;
   },
 };

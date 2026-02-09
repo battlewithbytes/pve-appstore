@@ -29,6 +29,7 @@ const (
 	JobTypeInstall   = "install"
 	JobTypeUninstall = "uninstall"
 	JobTypeReinstall = "reinstall"
+	JobTypeStack     = "stack"
 )
 
 // DevicePassthrough represents a host device to pass through to the container.
@@ -74,6 +75,7 @@ type Job struct {
 	MountPoints  []MountPoint       `json:"mount_points,omitempty"`
 	Devices      []DevicePassthrough `json:"devices,omitempty"`
 	EnvVars      map[string]string  `json:"env_vars,omitempty"`
+	StackID      string             `json:"stack_id,omitempty"`
 	Error        string             `json:"error,omitempty"`
 	CreatedAt    time.Time          `json:"created_at"`
 	UpdatedAt    time.Time          `json:"updated_at"`
@@ -148,4 +150,79 @@ type ReinstallRequest struct {
 	Storage  string            `json:"storage,omitempty"`
 	Bridge   string            `json:"bridge,omitempty"`
 	Inputs   map[string]string `json:"inputs,omitempty"`
+}
+
+// StackApp represents a single app within a multi-app stack.
+type StackApp struct {
+	AppID      string            `json:"app_id"`
+	AppName    string            `json:"app_name"`
+	AppVersion string            `json:"app_version"`
+	Order      int               `json:"order"`
+	Inputs     map[string]string `json:"inputs,omitempty"`
+	Outputs    map[string]string `json:"outputs,omitempty"`
+	Status     string            `json:"status"` // pending, provisioning, completed, failed
+	Error      string            `json:"error,omitempty"`
+}
+
+// Stack represents a multi-app container instance.
+type Stack struct {
+	ID           string              `json:"id"`
+	Name         string              `json:"name"`
+	CTID         int                 `json:"ctid"`
+	Node         string              `json:"node"`
+	Pool         string              `json:"pool"`
+	Storage      string              `json:"storage"`
+	Bridge       string              `json:"bridge"`
+	Cores        int                 `json:"cores"`
+	MemoryMB     int                 `json:"memory_mb"`
+	DiskGB       int                 `json:"disk_gb"`
+	Hostname     string              `json:"hostname,omitempty"`
+	OnBoot       bool                `json:"onboot"`
+	Unprivileged bool                `json:"unprivileged"`
+	OSTemplate   string              `json:"ostemplate"`
+	Apps         []StackApp          `json:"apps"`
+	MountPoints  []MountPoint        `json:"mount_points,omitempty"`
+	Devices      []DevicePassthrough `json:"devices,omitempty"`
+	EnvVars      map[string]string   `json:"env_vars,omitempty"`
+	Status       string              `json:"status"` // running, stopped, uninstalled
+	CreatedAt    time.Time           `json:"created_at"`
+}
+
+// StackCreateRequest is the input for creating a new multi-app stack.
+type StackCreateRequest struct {
+	Name         string               `json:"name"`
+	Apps         []StackAppRequest    `json:"apps"`
+	Storage      string               `json:"storage,omitempty"`
+	Bridge       string               `json:"bridge,omitempty"`
+	Cores        int                  `json:"cores,omitempty"`
+	MemoryMB     int                  `json:"memory_mb,omitempty"`
+	DiskGB       int                  `json:"disk_gb,omitempty"`
+	Hostname     string               `json:"hostname,omitempty"`
+	OnBoot       *bool                `json:"onboot,omitempty"`
+	Unprivileged *bool                `json:"unprivileged,omitempty"`
+	BindMounts   map[string]string    `json:"bind_mounts,omitempty"`
+	ExtraMounts  []ExtraMountRequest  `json:"extra_mounts,omitempty"`
+	VolumeStorages map[string]string  `json:"volume_storages,omitempty"`
+	Devices      []DevicePassthrough  `json:"devices,omitempty"`
+	EnvVars      map[string]string    `json:"env_vars,omitempty"`
+}
+
+// StackAppRequest defines per-app configuration in a stack creation request.
+type StackAppRequest struct {
+	AppID  string            `json:"app_id"`
+	Inputs map[string]string `json:"inputs,omitempty"`
+}
+
+// StackDetail combines stored stack data with live container status.
+type StackDetail struct {
+	Stack
+	IP   string                `json:"ip,omitempty"`
+	Live *ContainerStatusDetail `json:"live,omitempty"`
+}
+
+// StackListItem extends Stack with lightweight live data for the list view.
+type StackListItem struct {
+	Stack
+	IP     string `json:"ip,omitempty"`
+	Uptime int64  `json:"uptime"`
 }

@@ -71,10 +71,25 @@ inputs:
     help: Installs mosquitto and configures HA to use it automatically
 
 permissions:
-  packages: [python3, python3-venv, python3-pip, mosquitto, mosquitto-clients]
+  packages:
+    - python3
+    - python3-venv
+    - python3-pip
+    - libffi-dev
+    - libssl-dev
+    - libjpeg-dev
+    - zlib1g-dev
+    - autoconf
+    - build-essential
+    - libopenjp2-7
+    - libtiff6
+    - mosquitto
+    - mosquitto-clients
   pip: [homeassistant]
-  paths: ["/opt/homeassistant/"]
-  services: [mosquitto]
+  paths: ["/opt/homeassistant/", "/etc/systemd/", "/etc/localtime", "/etc/timezone"]
+  services: [homeassistant, mosquitto]
+  users: [homeassistant]
+  commands: [ln, dpkg-reconfigure]
 
 provisioning:
   script: provision/install.py

@@ -51,8 +51,8 @@ class BaseApp(ABC):
             self.permissions.check_package(pkg)
 
         self.log.info(f"Installing apt packages: {', '.join(packages)}")
-        self._run(["apt-get", "update"])
-        self._run(["apt-get", "install", "-y"] + list(packages))
+        self._run(["apt-get", "update", "-qq"])
+        self._run(["apt-get", "install", "-y", "-qq"] + list(packages))
 
     def write_config(self, path: str, template_str: str, **kwargs) -> str:
         """Write a config file using string.Template substitution.
@@ -138,7 +138,7 @@ class BaseApp(ABC):
 
         pip_bin = f"{venv}/bin/pip" if venv else "pip3"
         self.log.info(f"Installing pip packages: {', '.join(packages)}")
-        self._run([pip_bin, "install"] + list(packages))
+        self._run([pip_bin, "install", "--progress-bar", "off"] + list(packages))
 
     def create_venv(self, path: str) -> None:
         """Create a Python virtual environment."""
@@ -146,7 +146,7 @@ class BaseApp(ABC):
         self.log.info(f"Creating venv: {path}")
         self._run(["python3", "-m", "venv", path])
         # Upgrade pip in the new venv
-        self._run([f"{path}/bin/pip", "install", "-U", "pip"])
+        self._run([f"{path}/bin/pip", "install", "--progress-bar", "off", "-U", "pip"])
 
     def add_apt_key(self, url: str, keyring_path: str) -> None:
         """Add an APT signing key from a URL."""
@@ -212,6 +212,12 @@ class BaseApp(ABC):
         s = line.strip()
         # pip/wget progress bars: |████████████| 90% of 167.3 MiB
         if s.startswith("|") and ("%" in s or "\u2588" in s or "\u25a0" in s):
+            return True
+        # pip modern progress bars using ━ (U+2501) or ╸ (U+2578)
+        if "\u2501" in s or "\u2578" in s:
+            return True
+        # Lines that are just download sizes: "  7.0/7.0 MB 32.7 MB/s 0:00:00"
+        if ("MB/s" in s or "kB/s" in s) and ("/" in s):
             return True
         # Percentage-only lines: 70%, 80%, etc.
         if s.endswith("%") and s[:-1].replace(".", "").isdigit():

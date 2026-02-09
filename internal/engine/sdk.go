@@ -166,6 +166,30 @@ func pushPermissionsJSON(ctid int, cm ContainerManager, perms catalog.Permission
 	return cm.Push(ctid, tmpPath, permissionsPath, "0644")
 }
 
+// pushInputsJSONToPath writes app inputs as a JSON file inside the container at a custom path.
+func pushInputsJSONToPath(ctid int, cm ContainerManager, inputs map[string]string, targetPath string) error {
+	os.MkdirAll(hostTmpDir, 0750)
+	data, err := json.Marshal(inputs)
+	if err != nil {
+		return fmt.Errorf("marshaling inputs: %w", err)
+	}
+
+	tmpFile, err := os.CreateTemp(hostTmpDir, "inputs-*.json")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmpFile.Name()
+	defer os.Remove(tmpPath)
+
+	if _, err := tmpFile.Write(data); err != nil {
+		tmpFile.Close()
+		return err
+	}
+	tmpFile.Close()
+
+	return cm.Push(ctid, tmpPath, targetPath, "0644")
+}
+
 // buildProvisionCommand builds the command to run a Python provisioning script
 // via the SDK runner. Extra environment variables are passed to the container.
 func buildProvisionCommand(scriptName, action string, envVars map[string]string) []string {
@@ -176,5 +200,19 @@ func buildProvisionCommand(scriptName, action string, envVars map[string]string)
 	}
 	cmd = append(cmd, "python3", "-u", "-m", "appstore.runner",
 		inputsPath, permissionsPath, action, scriptPath)
+	return cmd
+}
+
+// buildStackProvisionCommand builds a provision command with per-app paths.
+func buildStackProvisionCommand(appID, scriptName, action string, envVars map[string]string) []string {
+	appProvisionDir := "/opt/appstore/provision/" + appID
+	scriptPath := appProvisionDir + "/" + filepath.Base(scriptName)
+	appInputsPath := "/opt/appstore/" + appID + "/inputs.json"
+	cmd := []string{"env", "PYTHONPATH=" + sdkTargetDir, "PYTHONUNBUFFERED=1"}
+	for k, v := range envVars {
+		cmd = append(cmd, k+"="+v)
+	}
+	cmd = append(cmd, "python3", "-u", "-m", "appstore.runner",
+		appInputsPath, permissionsPath, action, scriptPath)
 	return cmd
 }

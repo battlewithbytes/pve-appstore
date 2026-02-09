@@ -310,3 +310,80 @@ export interface AppStatusResponse {
   job_id?: string;
   job_state?: string;
 }
+
+// --- Stacks ---
+
+export interface StackApp {
+  app_id: string;
+  app_name: string;
+  app_version: string;
+  order: number;
+  inputs?: Record<string, string>;
+  outputs?: Record<string, string>;
+  status: string;
+  error?: string;
+}
+
+export interface Stack {
+  id: string;
+  name: string;
+  ctid: number;
+  node: string;
+  pool: string;
+  storage: string;
+  bridge: string;
+  cores: number;
+  memory_mb: number;
+  disk_gb: number;
+  hostname?: string;
+  onboot: boolean;
+  unprivileged: boolean;
+  ostemplate: string;
+  apps: StackApp[];
+  mount_points?: MountPoint[];
+  devices?: DevicePassthrough[];
+  env_vars?: Record<string, string>;
+  status: string;
+  created_at: string;
+}
+
+export interface StackDetail extends Stack {
+  ip?: string;
+  live?: ContainerLiveStatus;
+}
+
+export interface StackListItem extends Stack {
+  ip?: string;
+  uptime?: number;
+}
+
+export interface StacksResponse {
+  stacks: StackListItem[];
+  total: number;
+}
+
+export interface StackCreateRequest {
+  name: string;
+  apps: { app_id: string; inputs?: Record<string, string> }[];
+  storage?: string;
+  bridge?: string;
+  cores?: number;
+  memory_mb?: number;
+  disk_gb?: number;
+  hostname?: string;
+  onboot?: boolean;
+  unprivileged?: boolean;
+  bind_mounts?: Record<string, string>;
+  extra_mounts?: { host_path: string; mount_path: string; read_only?: boolean }[];
+  volume_storages?: Record<string, string>;
+  devices?: DevicePassthrough[];
+  env_vars?: Record<string, string>;
+}
+
+export interface StackValidateResponse {
+  valid: boolean;
+  errors: string[];
+  warnings: string[];
+  recommended?: { cores: number; memory_mb: number; disk_gb: number };
+  ostemplate?: string;
+}

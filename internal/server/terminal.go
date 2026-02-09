@@ -36,6 +36,11 @@ func (s *Server) handleTerminal(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	s.handleTerminalForCTID(w, r, inst.CTID)
+}
+
+// handleTerminalForCTID opens a WebSocket terminal to a container by CTID.
+func (s *Server) handleTerminalForCTID(w http.ResponseWriter, r *http.Request, ctid int) {
 	// Accept WebSocket
 	conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
 		OriginPatterns: []string{"*"},
@@ -48,7 +53,7 @@ func (s *Server) handleTerminal(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
 	// Spawn a root shell inside the container via pct exec
-	cmd := pctpkg.SudoNsenterCmd("/usr/sbin/pct", "exec", strconv.Itoa(inst.CTID), "--", "/bin/bash", "-l")
+	cmd := pctpkg.SudoNsenterCmd("/usr/sbin/pct", "exec", strconv.Itoa(ctid), "--", "/bin/bash", "-l")
 	cmd.Env = append(os.Environ(), "TERM=xterm-256color")
 
 	ptmx, err := pty.Start(cmd)
@@ -135,6 +140,11 @@ func (s *Server) handleJournalLogs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	s.handleJournalLogsForCTID(w, r, inst.CTID)
+}
+
+// handleJournalLogsForCTID streams journalctl output from a container by CTID via WebSocket.
+func (s *Server) handleJournalLogsForCTID(w http.ResponseWriter, r *http.Request, ctid int) {
 	// Accept WebSocket
 	conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
 		OriginPatterns: []string{"*"},
@@ -147,7 +157,7 @@ func (s *Server) handleJournalLogs(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
 	// Run journalctl inside the container via pct exec (no PTY needed)
-	cmd := pctpkg.SudoNsenterCmd("/usr/sbin/pct", "exec", strconv.Itoa(inst.CTID), "--",
+	cmd := pctpkg.SudoNsenterCmd("/usr/sbin/pct", "exec", strconv.Itoa(ctid), "--",
 		"journalctl", "-f", "--no-pager", "-n", "100", "--output=short-iso")
 	cmd.Env = append(os.Environ(), "TERM=dumb")
 

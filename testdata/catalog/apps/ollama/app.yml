@@ -101,6 +101,7 @@ permissions:
   installer_scripts: ["https://ollama.ai/install.sh"]
   paths: ["/etc/systemd/", "/usr/share/ollama/"]
   services: [ollama]
+  users: [ollama]
   commands: [ollama]
 
 provisioning:

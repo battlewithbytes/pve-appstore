@@ -58,7 +58,7 @@ class TestAptInstall:
         # Should call apt-get update then apt-get install
         assert mock_popen.call_count == 2
         install_call = mock_popen.call_args_list[1]
-        assert install_call[0][0] == ["apt-get", "install", "-y", "nginx", "curl"]
+        assert install_call[0][0] == ["apt-get", "install", "-y", "-qq", "nginx", "curl"]
 
     def test_rejects_disallowed_packages(self):
         app = make_app(packages=["nginx"])
@@ -183,7 +183,7 @@ class TestPipInstall:
         app = make_app(pip=["crawl4ai"])
         app.pip_install("crawl4ai", venv="/opt/app/venv")
         install_call = mock_popen.call_args_list[-1]
-        assert install_call[0][0] == ["/opt/app/venv/bin/pip", "install", "crawl4ai"]
+        assert install_call[0][0] == ["/opt/app/venv/bin/pip", "install", "--progress-bar", "off", "crawl4ai"]
 
     def test_rejects_disallowed_pip(self):
         app = make_app(pip=["crawl4ai"])

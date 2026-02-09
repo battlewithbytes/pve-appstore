@@ -108,6 +108,18 @@ func New(cfg *config.Config, cat *catalog.Catalog, eng *engine.Engine, spaFS fs.
 	mux.HandleFunc("POST /api/installs/{id}/uninstall", s.withAuth(s.handleUninstall))
 	mux.HandleFunc("POST /api/installs/{id}/reinstall", s.withAuth(s.handleReinstall))
 
+	// API routes — stacks
+	mux.HandleFunc("POST /api/stacks", s.withAuth(s.handleCreateStack))
+	mux.HandleFunc("GET /api/stacks", s.handleListStacks)
+	mux.HandleFunc("GET /api/stacks/{id}", s.handleGetStack)
+	mux.HandleFunc("POST /api/stacks/{id}/start", s.withAuth(s.handleStartStack))
+	mux.HandleFunc("POST /api/stacks/{id}/stop", s.withAuth(s.handleStopStack))
+	mux.HandleFunc("POST /api/stacks/{id}/restart", s.withAuth(s.handleRestartStack))
+	mux.HandleFunc("POST /api/stacks/{id}/uninstall", s.withAuth(s.handleUninstallStack))
+	mux.HandleFunc("POST /api/stacks/validate", s.withAuth(s.handleValidateStack))
+	mux.HandleFunc("GET /api/stacks/{id}/terminal", s.withAuth(s.handleStackTerminal))
+	mux.HandleFunc("GET /api/stacks/{id}/logs", s.withAuth(s.handleStackJournalLogs))
+
 	// Auth
 	if cfg.Auth.Mode == config.AuthModePassword {
 		mux.HandleFunc("POST /api/auth/login", s.handleLogin)

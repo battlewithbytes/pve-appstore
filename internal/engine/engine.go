@@ -835,6 +835,189 @@ func (e *Engine) runReinstall(job *Job, inst *Install) {
 	ctx.info("Reinstall complete! Container %d is running with reattached volumes.", ctx.job.CTID)
 }
 
+// --- Stack operations ---
+
+// GetStack returns a stack by ID.
+func (e *Engine) GetStack(id string) (*Stack, error) {
+	return e.store.GetStack(id)
+}
+
+// GetStackDetail returns a stack enriched with live data.
+func (e *Engine) GetStackDetail(id string) (*StackDetail, error) {
+	stack, err := e.store.GetStack(id)
+	if err != nil {
+		return nil, err
+	}
+
+	detail := &StackDetail{Stack: *stack}
+
+	if stack.Status != "uninstalled" && stack.CTID > 0 {
+		ctx := context.Background()
+		if sd, err := e.cm.StatusDetail(ctx, stack.CTID); err == nil {
+			detail.Live = sd
+			detail.Status = sd.Status
+		}
+		if ip, err := e.cm.GetIP(stack.CTID); err == nil && ip != "" {
+			detail.IP = ip
+		}
+	}
+
+	return detail, nil
+}
+
+// ListStacks returns all stacks.
+func (e *Engine) ListStacks() ([]*Stack, error) {
+	return e.store.ListStacks()
+}
+
+// ListStacksEnriched returns all stacks with live data from Proxmox.
+func (e *Engine) ListStacksEnriched() ([]*StackListItem, error) {
+	stacks, err := e.store.ListStacks()
+	if err != nil {
+		return nil, err
+	}
+
+	ctx := context.Background()
+	items := make([]*StackListItem, 0, len(stacks))
+	for _, stack := range stacks {
+		item := &StackListItem{Stack: *stack}
+		if stack.Status == "uninstalled" || stack.CTID == 0 {
+			items = append(items, item)
+			continue
+		}
+		if sd, err := e.cm.StatusDetail(ctx, stack.CTID); err == nil {
+			item.Status = sd.Status
+			item.Uptime = sd.Uptime
+		}
+		if ip, err := e.cm.GetIP(stack.CTID); err == nil && ip != "" {
+			item.IP = ip
+		}
+		items = append(items, item)
+	}
+
+	return items, nil
+}
+
+// StartStackContainer starts a stopped stack container.
+func (e *Engine) StartStackContainer(stackID string) error {
+	stack, err := e.store.GetStack(stackID)
+	if err != nil {
+		return fmt.Errorf("stack %q not found", stackID)
+	}
+	if stack.Status == "uninstalled" || stack.CTID == 0 {
+		return fmt.Errorf("stack %q has no active container", stackID)
+	}
+	return e.cm.Start(context.Background(), stack.CTID)
+}
+
+// StopStackContainer gracefully stops a stack container.
+func (e *Engine) StopStackContainer(stackID string) error {
+	stack, err := e.store.GetStack(stackID)
+	if err != nil {
+		return fmt.Errorf("stack %q not found", stackID)
+	}
+	if stack.Status == "uninstalled" || stack.CTID == 0 {
+		return fmt.Errorf("stack %q has no active container", stackID)
+	}
+	return e.cm.Shutdown(context.Background(), stack.CTID, 30)
+}
+
+// RestartStackContainer stops then starts a stack container.
+func (e *Engine) RestartStackContainer(stackID string) error {
+	stack, err := e.store.GetStack(stackID)
+	if err != nil {
+		return fmt.Errorf("stack %q not found", stackID)
+	}
+	if stack.Status == "uninstalled" || stack.CTID == 0 {
+		return fmt.Errorf("stack %q has no active container", stackID)
+	}
+	ctx := context.Background()
+	if err := e.cm.Shutdown(ctx, stack.CTID, 30); err != nil {
+		_ = e.cm.Stop(ctx, stack.CTID)
+	}
+	time.Sleep(2 * time.Second)
+	return e.cm.Start(ctx, stack.CTID)
+}
+
+// UninstallStack destroys a stack's container.
+func (e *Engine) UninstallStack(stackID string) (*Job, error) {
+	stack, err := e.store.GetStack(stackID)
+	if err != nil {
+		return nil, fmt.Errorf("stack %q not found", stackID)
+	}
+
+	now := time.Now()
+	job := &Job{
+		ID:        generateID(),
+		Type:      JobTypeUninstall,
+		State:     StateQueued,
+		AppID:     "stack:" + stack.Name,
+		AppName:   stack.Name,
+		CTID:      stack.CTID,
+		Node:      stack.Node,
+		Pool:      stack.Pool,
+		StackID:   stack.ID,
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+
+	if err := e.store.CreateJob(job); err != nil {
+		return nil, fmt.Errorf("creating uninstall job: %w", err)
+	}
+
+	go e.runStackUninstall(job, stack)
+
+	return job, nil
+}
+
+func (e *Engine) runStackUninstall(job *Job, stack *Stack) {
+	ctx := &installContext{engine: e, job: job}
+
+	ctx.info("Starting uninstall of stack %s (CTID %d)", stack.Name, stack.CTID)
+
+	bgCtx := context.Background()
+
+	// Stop container
+	ctx.transition("stopping")
+	if err := e.cm.Shutdown(bgCtx, stack.CTID, 30); err != nil {
+		ctx.warn("Graceful shutdown failed: %v — forcing stop", err)
+		_ = e.cm.Stop(bgCtx, stack.CTID)
+	}
+
+	// Destroy container with retries
+	ctx.transition("destroying")
+	var destroyErr error
+	for attempt := 0; attempt < 5; attempt++ {
+		if attempt > 0 {
+			time.Sleep(5 * time.Second)
+		}
+		destroyErr = e.cm.Destroy(bgCtx, stack.CTID)
+		if destroyErr == nil {
+			break
+		}
+		ctx.warn("Destroy attempt %d failed: %v", attempt+1, destroyErr)
+	}
+	if destroyErr != nil {
+		ctx.log("error", "Failed to destroy container: %v", destroyErr)
+		job.State = StateFailed
+		job.Error = fmt.Sprintf("destroy: %v", destroyErr)
+		now := time.Now()
+		job.UpdatedAt = now
+		job.CompletedAt = &now
+		e.store.UpdateJob(job)
+		return
+	}
+
+	// Remove stack record
+	e.store.DeleteStack(stack.ID)
+
+	ctx.transition(StateCompleted)
+	now := time.Now()
+	job.CompletedAt = &now
+	e.store.UpdateJob(job)
+	ctx.info("Stack %s uninstalled. Container %d destroyed.", stack.Name, stack.CTID)
+}
+
 // GetStorageInfo returns resolved storage information for a Proxmox storage ID.
 func (e *Engine) GetStorageInfo(ctx context.Context, storageID string) (*StorageInfo, error) {
 	return e.cm.GetStorageInfo(ctx, storageID)

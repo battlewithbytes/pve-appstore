@@ -19,9 +19,10 @@ class OllamaApp(BaseApp):
         default_model = self.inputs.string("model", "")
 
         # Install Ollama via upstream installer script
+        # (creates ollama user, systemd service, and binary)
         self.run_installer_script("https://ollama.ai/install.sh")
 
-        # Configure environment
+        # Configure environment overrides
         self.create_dir("/etc/systemd/system/ollama.service.d")
         self.write_config(
             "/etc/systemd/system/ollama.service.d/override.conf",
@@ -32,7 +33,10 @@ class OllamaApp(BaseApp):
             num_ctx=num_ctx,
         )
 
+        # Ensure models directory exists with correct ownership
         self.create_dir(models_path)
+        self.chown(models_path, "ollama:ollama", recursive=True)
+
         self.restart_service("ollama")
 
         # Pull default model if specified
