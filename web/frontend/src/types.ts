@@ -281,6 +281,14 @@ export interface InstallRequest {
   env_vars?: Record<string, string>;
 }
 
+export interface EditRequest {
+  cores?: number;
+  memory_mb?: number;
+  disk_gb?: number;
+  bridge?: string;
+  inputs?: Record<string, string>;
+}
+
 export interface ExportRecipe {
   app_id: string;
   storage: string;

@@ -4,7 +4,7 @@ import { FitAddon } from '@xterm/addon-fit'
 import { WebLinksAddon } from '@xterm/addon-web-links'
 import '@xterm/xterm/css/xterm.css'
 import { api } from './api'
-import type { AppSummary, AppDetail, AppInput, HealthResponse, Job, LogEntry, InstallDetail, InstallListItem, ContainerLiveStatus, ConfigDefaultsResponse, MountPoint, MountInfo, BrowseEntry, ExportResponse, ExportRecipe, InstallRequest, DevicePassthrough, AppStatusResponse, StackListItem, StackDetail, StackCreateRequest, StackValidateResponse, StackApp } from './types'
+import type { AppSummary, AppDetail, AppInput, HealthResponse, Job, LogEntry, InstallDetail, InstallListItem, ContainerLiveStatus, ConfigDefaultsResponse, MountPoint, MountInfo, BrowseEntry, ExportResponse, ExportRecipe, InstallRequest, EditRequest, DevicePassthrough, AppStatusResponse, StackListItem, StackDetail, StackCreateRequest, StackValidateResponse, StackApp } from './types'
 
 function useHash() {
   const [hash, setHash] = useState(window.location.hash)
@@ -996,6 +996,8 @@ function InstallDetailView({ id, requireAuth }: { id: string; requireAuth: (cb: 
   const [showUninstallDialog, setShowUninstallDialog] = useState(false)
   const [showUpdateDialog, setShowUpdateDialog] = useState(false)
   const [updating, setUpdating] = useState(false)
+  const [showEditDialog, setShowEditDialog] = useState(false)
+  const [editing, setEditing] = useState(false)
 
   const fetchDetail = useCallback(() => {
     api.installDetail(id).then(d => {
@@ -1056,6 +1058,21 @@ function InstallDetailView({ id, requireAuth }: { id: string; requireAuth: (cb: 
     })
   }
 
+  const handleEdit = (req: EditRequest) => {
+    requireAuth(async () => {
+      if (!detail) return
+      setEditing(true)
+      setShowEditDialog(false)
+      try {
+        const j = await api.editInstall(detail.id, req)
+        window.location.hash = `#/job/${j.id}`
+      } catch (e: unknown) {
+        alert(e instanceof Error ? e.message : 'Edit failed')
+        setEditing(false)
+      }
+    })
+  }
+
   if (error) return <div><BackLink href="#/installs" label="Back to installed" /><Center className="text-status-stopped">{error}</Center></div>
   if (!detail) return <Center>Loading...</Center>
 
@@ -1109,6 +1126,11 @@ function InstallDetailView({ id, requireAuth }: { id: string; requireAuth: (cb: 
               {reinstalling ? 'Reinstalling...' : 'Reinstall'}
             </button>
           )}
+          {!isUninstalled && (
+            <button onClick={() => setShowEditDialog(true)} disabled={editing} className="px-4 py-2 text-sm font-mono border border-border rounded-lg cursor-pointer text-text-primary bg-transparent hover:border-primary hover:text-primary transition-colors disabled:opacity-50">
+              {editing ? 'Editing...' : 'Edit'}
+            </button>
+          )}
           {isRunning && (
             <button onClick={() => setShowTerminal(true)} className="px-4 py-2 text-sm font-mono border border-border rounded-lg cursor-pointer text-text-primary bg-transparent hover:border-primary hover:text-primary transition-colors">
               &gt;_ Shell
@@ -1143,6 +1165,18 @@ function InstallDetailView({ id, requireAuth }: { id: string; requireAuth: (cb: 
           isRunning={isRunning}
           onConfirm={handleUpdate}
           onCancel={() => setShowUpdateDialog(false)}
+        />
+      )}
+
+      {/* Edit dialog */}
+      {showEditDialog && detail && (
+        <EditDialog
+          detail={detail}
+          appInfo={appInfo}
+          bridges={[]}
+          isRunning={isRunning}
+          onConfirm={handleEdit}
+          onCancel={() => setShowEditDialog(false)}
         />
       )}
 
@@ -1318,6 +1352,145 @@ function UpdateDialog({ appName, ctid, currentVersion, newVersion, isRunning, on
           <button onClick={onCancel} className="px-5 py-2.5 text-sm font-semibold border border-border rounded-lg cursor-pointer text-text-secondary bg-transparent hover:border-text-secondary transition-colors font-mono">Cancel</button>
           <button onClick={onConfirm} className="px-5 py-2.5 text-sm font-semibold border-none rounded-lg cursor-pointer bg-primary text-bg-primary hover:shadow-[0_0_20px_rgba(0,255,157,0.3)] transition-all font-mono">
             Update
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// --- Edit Dialog ---
+
+function EditDialog({ detail, appInfo, isRunning, onConfirm, onCancel }: {
+  detail: InstallDetail; appInfo: AppDetail | null; bridges: string[];
+  isRunning: boolean; onConfirm: (req: EditRequest) => void; onCancel: () => void;
+}) {
+  const [cores, setCores] = useState(String(detail.cores))
+  const [memoryMB, setMemoryMB] = useState(String(detail.memory_mb))
+  const [diskGB, setDiskGB] = useState(String(detail.disk_gb))
+  const [bridge, setBridge] = useState(detail.bridge)
+  const [inputs, setInputs] = useState<Record<string, string>>({ ...(detail.inputs || {}) })
+  const [configDefaults, setConfigDefaults] = useState<ConfigDefaultsResponse | null>(null)
+
+  useEffect(() => {
+    api.configDefaults().then(setConfigDefaults).catch(() => {})
+  }, [])
+
+  const bridgeOptions = configDefaults?.bridges || [detail.bridge]
+
+  const appInputs = appInfo?.inputs || []
+
+  const hasChanges = () => {
+    if (Number(cores) !== detail.cores) return true
+    if (Number(memoryMB) !== detail.memory_mb) return true
+    if (Number(diskGB) !== detail.disk_gb) return true
+    if (bridge !== detail.bridge) return true
+    for (const key of Object.keys(inputs)) {
+      if (inputs[key] !== (detail.inputs?.[key] || '')) return true
+    }
+    return false
+  }
+
+  const buildRequest = (): EditRequest => {
+    const req: EditRequest = {}
+    if (Number(cores) !== detail.cores) req.cores = Number(cores)
+    if (Number(memoryMB) !== detail.memory_mb) req.memory_mb = Number(memoryMB)
+    if (Number(diskGB) !== detail.disk_gb) req.disk_gb = Number(diskGB)
+    if (bridge !== detail.bridge) req.bridge = bridge
+    const changedInputs: Record<string, string> = {}
+    let hasInputChanges = false
+    for (const key of Object.keys(inputs)) {
+      if (inputs[key] !== (detail.inputs?.[key] || '')) {
+        changedInputs[key] = inputs[key]
+        hasInputChanges = true
+      }
+    }
+    if (hasInputChanges) req.inputs = changedInputs
+    return req
+  }
+
+  return (
+    <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-[100]" onClick={onCancel}>
+      <div className="bg-bg-card border border-border rounded-xl p-8 w-full max-w-[520px] max-h-[80vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+        <h2 className="text-lg font-bold text-text-primary mb-2 font-mono">Edit {detail.app_name}</h2>
+        <p className="text-sm text-text-secondary mb-4">
+          Modify settings and recreate container CT {detail.ctid}.
+        </p>
+
+        {isRunning && (
+          <div className="mb-4 p-2.5 bg-status-warning/10 border border-status-warning/30 rounded text-status-warning text-xs font-mono">
+            Container is running and will be stopped during this operation.
+          </div>
+        )}
+
+        {/* Resource fields */}
+        <div className="space-y-3 mb-4">
+          <div>
+            <label className="block text-xs text-text-muted font-mono mb-1">CPU Cores</label>
+            <input type="number" min={1} value={cores} onChange={e => setCores(e.target.value)}
+              className="w-full bg-bg-secondary border border-border rounded-lg px-3 py-2 text-sm text-text-primary font-mono focus:border-primary outline-none" />
+          </div>
+          <div>
+            <label className="block text-xs text-text-muted font-mono mb-1">Memory (MB)</label>
+            <input type="number" min={128} step={128} value={memoryMB} onChange={e => setMemoryMB(e.target.value)}
+              className="w-full bg-bg-secondary border border-border rounded-lg px-3 py-2 text-sm text-text-primary font-mono focus:border-primary outline-none" />
+          </div>
+          <div>
+            <label className="block text-xs text-text-muted font-mono mb-1">Disk (GB) — can only grow</label>
+            <input type="number" min={detail.disk_gb} value={diskGB} onChange={e => setDiskGB(e.target.value)}
+              className="w-full bg-bg-secondary border border-border rounded-lg px-3 py-2 text-sm text-text-primary font-mono focus:border-primary outline-none" />
+          </div>
+          <div>
+            <label className="block text-xs text-text-muted font-mono mb-1">Bridge</label>
+            <select value={bridge} onChange={e => setBridge(e.target.value)}
+              className="w-full bg-bg-secondary border border-border rounded-lg px-3 py-2 text-sm text-text-primary font-mono focus:border-primary outline-none">
+              {bridgeOptions.map(b => <option key={b} value={b}>{b}</option>)}
+            </select>
+          </div>
+        </div>
+
+        {/* App inputs */}
+        {appInputs.length > 0 && (
+          <div className="mb-4">
+            <h3 className="text-xs font-semibold text-text-muted mb-2 uppercase tracking-wider font-mono">App Settings</h3>
+            <div className="space-y-3">
+              {appInputs.map(inp => (
+                <div key={inp.key}>
+                  <label className="block text-xs text-text-muted font-mono mb-1">{inp.label || inp.key}</label>
+                  {inp.type === 'select' && inp.validation?.enum ? (
+                    <select value={inputs[inp.key] || ''} onChange={e => setInputs({ ...inputs, [inp.key]: e.target.value })}
+                      className="w-full bg-bg-secondary border border-border rounded-lg px-3 py-2 text-sm text-text-primary font-mono focus:border-primary outline-none">
+                      {inp.validation.enum.map(v => <option key={v} value={v}>{v}</option>)}
+                    </select>
+                  ) : inp.type === 'boolean' ? (
+                    <select value={inputs[inp.key] || 'false'} onChange={e => setInputs({ ...inputs, [inp.key]: e.target.value })}
+                      className="w-full bg-bg-secondary border border-border rounded-lg px-3 py-2 text-sm text-text-primary font-mono focus:border-primary outline-none">
+                      <option value="true">true</option>
+                      <option value="false">false</option>
+                    </select>
+                  ) : (
+                    <input
+                      type={inp.type === 'number' ? 'number' : inp.type === 'secret' ? 'password' : 'text'}
+                      value={inputs[inp.key] || ''}
+                      onChange={e => setInputs({ ...inputs, [inp.key]: e.target.value })}
+                      className="w-full bg-bg-secondary border border-border rounded-lg px-3 py-2 text-sm text-text-primary font-mono focus:border-primary outline-none"
+                    />
+                  )}
+                  {inp.help && <p className="text-xs text-text-muted mt-0.5">{inp.help}</p>}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        <p className="text-xs text-text-muted mb-4 font-mono">
+          Data volumes and MAC address (IP) will be preserved.
+        </p>
+
+        <div className="flex gap-3 justify-end">
+          <button onClick={onCancel} className="px-5 py-2.5 text-sm font-semibold border border-border rounded-lg cursor-pointer text-text-secondary bg-transparent hover:border-text-secondary transition-colors font-mono">Cancel</button>
+          <button onClick={() => onConfirm(buildRequest())} disabled={!hasChanges()} className="px-5 py-2.5 text-sm font-semibold border-none rounded-lg cursor-pointer bg-primary text-bg-primary hover:shadow-[0_0_20px_rgba(0,255,157,0.3)] transition-all font-mono disabled:opacity-50 disabled:cursor-not-allowed">
+            Apply Changes
           </button>
         </div>
       </div>

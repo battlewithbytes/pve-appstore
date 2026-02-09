@@ -22,6 +22,7 @@ type ContainerCreateOptions struct {
 	Cores        int
 	MemoryMB     int
 	Bridge       string
+	HWAddr       string // MAC address to preserve across recreates
 	Hostname     string
 	IPAddress    string
 	Unprivileged bool
@@ -43,6 +44,9 @@ func (c *Client) Create(ctx context.Context, opts ContainerCreateOptions) error 
 	params.Set("memory", strconv.Itoa(opts.MemoryMB))
 	params.Set("hostname", opts.Hostname)
 	netCfg := fmt.Sprintf("name=eth0,bridge=%s", opts.Bridge)
+	if opts.HWAddr != "" {
+		netCfg += ",hwaddr=" + opts.HWAddr
+	}
 	if opts.IPAddress != "" {
 		netCfg += ",ip=" + formatIPConfig(opts.IPAddress)
 	} else {

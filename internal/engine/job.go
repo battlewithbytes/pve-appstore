@@ -31,6 +31,7 @@ const (
 	JobTypeUninstall = "uninstall"
 	JobTypeReinstall = "reinstall"
 	JobTypeUpdate    = "update"
+	JobTypeEdit      = "edit"
 	JobTypeStack     = "stack"
 )
 
@@ -155,6 +156,16 @@ type ReinstallRequest struct {
 	MemoryMB int               `json:"memory_mb,omitempty"`
 	DiskGB   int               `json:"disk_gb,omitempty"`
 	Storage  string            `json:"storage,omitempty"`
+	Bridge   string            `json:"bridge,omitempty"`
+	Inputs   map[string]string `json:"inputs,omitempty"`
+}
+
+// EditRequest is the input for editing (recreating) an active install.
+// Storage is excluded (volumes are tied to it). Disk can only grow.
+type EditRequest struct {
+	Cores    int               `json:"cores,omitempty"`
+	MemoryMB int               `json:"memory_mb,omitempty"`
+	DiskGB   int               `json:"disk_gb,omitempty"`
 	Bridge   string            `json:"bridge,omitempty"`
 	Inputs   map[string]string `json:"inputs,omitempty"`
 }

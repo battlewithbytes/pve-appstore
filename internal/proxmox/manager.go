@@ -39,6 +39,7 @@ func (m *Manager) Create(ctx context.Context, opts engine.CreateOptions) error {
 		Cores:        opts.Cores,
 		MemoryMB:     opts.MemoryMB,
 		Bridge:       opts.Bridge,
+		HWAddr:       opts.HWAddr,
 		Hostname:     opts.Hostname,
 		IPAddress:    opts.IPAddress,
 		Unprivileged: opts.Unprivileged,

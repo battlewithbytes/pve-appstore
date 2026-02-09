@@ -46,6 +46,7 @@ type installContext struct {
 	engine   *Engine
 	job      *Job
 	manifest *catalog.AppManifest
+	hwAddr   string // MAC address to preserve across recreates
 }
 
 func (ctx *installContext) log(level, msg string, args ...interface{}) {
@@ -218,6 +219,7 @@ func stepCreateContainer(ctx *installContext) error {
 		Cores:        ctx.job.Cores,
 		MemoryMB:     ctx.job.MemoryMB,
 		Bridge:       ctx.job.Bridge,
+		HWAddr:       ctx.hwAddr,
 		Hostname:     ctx.job.Hostname,
 		IPAddress:    ctx.job.IPAddress,
 		Unprivileged: ctx.job.Unprivileged,
