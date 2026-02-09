@@ -4,7 +4,7 @@ import { FitAddon } from '@xterm/addon-fit'
 import { WebLinksAddon } from '@xterm/addon-web-links'
 import '@xterm/xterm/css/xterm.css'
 import { api } from './api'
-import type { AppSummary, AppDetail, AppInput, HealthResponse, Job, LogEntry, InstallDetail, InstallListItem, ConfigDefaultsResponse, MountPoint, MountInfo, BrowseEntry, ExportResponse, ExportRecipe, InstallRequest, DevicePassthrough, AppStatusResponse, StackListItem, StackDetail, StackCreateRequest, StackValidateResponse, StackApp } from './types'
+import type { AppSummary, AppDetail, AppInput, HealthResponse, Job, LogEntry, InstallDetail, InstallListItem, ContainerLiveStatus, ConfigDefaultsResponse, MountPoint, MountInfo, BrowseEntry, ExportResponse, ExportRecipe, InstallRequest, DevicePassthrough, AppStatusResponse, StackListItem, StackDetail, StackCreateRequest, StackValidateResponse, StackApp } from './types'
 
 function useHash() {
   const [hash, setHash] = useState(window.location.hash)
@@ -1446,7 +1446,7 @@ function InstallsList({ requireAuth }: { requireAuth: (cb: () => void) => void }
                 <div className="w-8 h-8 rounded bg-bg-secondary overflow-hidden flex items-center justify-center flex-shrink-0">
                   <img src={`/api/apps/${inst.app_id}/icon`} alt="" className="w-7 h-7 rounded" onError={e => { (e.target as HTMLImageElement).style.display = 'none' }} />
                 </div>
-                {/* Name+Version+CTID */}
+                {/* Name+Version+CTID+Bars */}
                 <div className="min-w-0">
                   <div className="flex items-center gap-1.5 flex-wrap">
                     <span className="text-sm font-semibold text-text-primary truncate">{inst.app_name}</span>
@@ -1456,6 +1456,13 @@ function InstallsList({ requireAuth }: { requireAuth: (cb: () => void) => void }
                     )}
                   </div>
                   {inst.ctid > 0 && <div className="text-[10px] text-text-muted font-mono">CT {inst.ctid}</div>}
+                  {isRunning && inst.live && (
+                    <div className="flex items-center gap-2 mt-1">
+                      <MiniBar label="CPU" pct={inst.live.cpu * 100} />
+                      <MiniBar label="Mem" pct={inst.live.maxmem > 0 ? (inst.live.mem / inst.live.maxmem) * 100 : 0} />
+                      <MiniBar label="Disk" pct={inst.live.maxdisk > 0 ? (inst.live.disk / inst.live.maxdisk) * 100 : 0} />
+                    </div>
+                  )}
                 </div>
                 {/* Status */}
                 <div className="flex items-center gap-1.5">
@@ -1512,7 +1519,7 @@ function InstallsList({ requireAuth }: { requireAuth: (cb: () => void) => void }
                   <div className="w-8 h-8 rounded bg-primary/10 flex items-center justify-center flex-shrink-0">
                     <span className="text-primary text-sm font-mono font-bold">S</span>
                   </div>
-                  {/* Name */}
+                  {/* Name+Bars */}
                   <div className="min-w-0">
                     <div className="flex items-center gap-1.5 flex-wrap">
                       <span className="text-sm font-semibold text-text-primary truncate">{stack.name}</span>
@@ -1520,6 +1527,13 @@ function InstallsList({ requireAuth }: { requireAuth: (cb: () => void) => void }
                       <span className="text-[10px] text-text-muted font-mono">{stack.apps.length} app{stack.apps.length !== 1 ? 's' : ''}</span>
                     </div>
                     {stack.ctid > 0 && <div className="text-[10px] text-text-muted font-mono">CT {stack.ctid}</div>}
+                    {isRunning && stack.live && (
+                      <div className="flex items-center gap-2 mt-1">
+                        <MiniBar label="CPU" pct={stack.live.cpu * 100} />
+                        <MiniBar label="Mem" pct={stack.live.maxmem > 0 ? (stack.live.mem / stack.live.maxmem) * 100 : 0} />
+                        <MiniBar label="Disk" pct={stack.live.maxdisk > 0 ? (stack.live.disk / stack.live.maxdisk) * 100 : 0} />
+                      </div>
+                    )}
                   </div>
                   {/* Status */}
                   <div className="flex items-center gap-1.5">
@@ -1554,7 +1568,7 @@ function InstallsList({ requireAuth }: { requireAuth: (cb: () => void) => void }
                   const appDisplayStatus = app.status === 'completed' ? 'installed' : app.status
                   return (
                     <div key={`stack-${stack.id}-${app.app_id}`}
-                      className="grid grid-cols-[40px_1.5fr_90px_160px_1fr] gap-2 px-4 py-2 border-b border-border/50 items-center pl-12 bg-bg-primary/50 cursor-pointer hover:bg-bg-secondary/30 transition-colors"
+                      className={`grid ${gridCols} gap-2 px-4 py-2 border-b border-border/50 items-center pl-12 bg-bg-primary/50 cursor-pointer hover:bg-bg-secondary/30 transition-colors`}
                       onClick={() => window.location.hash = `#/app/${app.app_id}`}>
                       {/* Icon */}
                       <div className="w-6 h-6 rounded bg-bg-secondary overflow-hidden flex items-center justify-center flex-shrink-0">
@@ -1579,6 +1593,15 @@ function InstallsList({ requireAuth }: { requireAuth: (cb: () => void) => void }
                             className="text-primary hover:underline block truncate text-[10px]">{u.url.replace(/^https?:\/\//, '')}</a>
                         ))}
                       </div>
+                      {/* Resources — shared with stack */}
+                      <span className="text-[10px] font-mono text-text-muted/50">—</span>
+                      {/* Boot */}
+                      <span className="text-[10px] font-mono text-text-muted/50">—</span>
+                      {/* Uptime */}
+                      <span className="text-[10px] font-mono text-text-muted/50">—</span>
+                      {/* Created */}
+                      <span className="text-[10px] font-mono text-text-muted/50">—</span>
+                      {/* Actions spacer */}
                       <span></span>
                     </div>
                   )
@@ -1975,6 +1998,21 @@ function TerminalModal({ installId, onClose }: { installId: string; onClose: () 
   const termRef = useRef<HTMLDivElement>(null)
   const termInstance = useRef<Terminal | null>(null)
   const wsRef = useRef<WebSocket | null>(null)
+  const [info, setInfo] = useState<{ name: string; ip: string; live?: ContainerLiveStatus } | null>(null)
+
+  // Poll install detail for status bar
+  useEffect(() => {
+    let alive = true
+    const poll = () => {
+      api.installDetail(installId).then(d => {
+        if (!alive) return
+        setInfo({ name: d.app_name, ip: d.ip || '', live: d.live })
+      }).catch(() => {})
+    }
+    poll()
+    const iv = setInterval(poll, 5000)
+    return () => { alive = false; clearInterval(iv) }
+  }, [installId])
 
   useEffect(() => {
     if (!termRef.current) return
@@ -2042,30 +2080,78 @@ function TerminalModal({ installId, onClose }: { installId: string; onClose: () 
       term.writeln('\x1b[31mFailed to get terminal token. Are you logged in?\x1b[0m')
     })
 
-    // Handle resize
+    // Handle resize — use ResizeObserver on the container for reliable fitting
     const handleResize = () => {
       fitAddon.fit()
       if (ws && ws.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows }))
       }
     }
+    const observer = new ResizeObserver(() => handleResize())
+    observer.observe(termRef.current)
     window.addEventListener('resize', handleResize)
 
     return () => {
       cancelled = true
+      observer.disconnect()
       window.removeEventListener('resize', handleResize)
       if (ws) ws.close()
       term.dispose()
     }
   }, [installId])
 
+  const live = info?.live
+  const cpuPct = live ? live.cpu * 100 : 0
+  const memPct = live && live.maxmem > 0 ? (live.mem / live.maxmem) * 100 : 0
+
   return (
     <div className="fixed inset-0 bg-black/95 flex flex-col z-[200]">
-      <div className="flex items-center justify-between px-4 py-2 bg-bg-card border-b border-border">
-        <span className="text-primary font-mono text-sm">&gt;_ Terminal — {installId}</span>
-        <button onClick={onClose} className="text-text-muted hover:text-text-primary bg-transparent border-none cursor-pointer text-lg font-mono">&times;</button>
+      <div className="grid grid-cols-[1fr_auto_1fr] items-center px-4 py-2 bg-bg-card border-b border-border gap-4">
+        <div className="flex items-center gap-3 min-w-0">
+          <span className="text-primary font-mono text-sm whitespace-nowrap">&gt;_ {info?.name || 'Terminal'}</span>
+          {info?.ip && <span className="text-text-muted font-mono text-xs">{info.ip}</span>}
+        </div>
+        <div className="flex items-center gap-4 text-xs font-mono">
+          {live ? (
+            <>
+              <TerminalMiniGauge label="CPU" value={`${cpuPct.toFixed(0)}%`} pct={cpuPct} />
+              <TerminalMiniGauge label="MEM" value={`${memPct.toFixed(0)}%`} pct={memPct} />
+              <span className="text-text-muted">{formatBytesShort(live.netin)}&darr; {formatBytesShort(live.netout)}&uarr;</span>
+            </>
+          ) : (
+            <span className="text-text-muted">loading...</span>
+          )}
+        </div>
+        <div className="flex justify-end">
+          <button onClick={onClose} className="text-text-muted hover:text-text-primary bg-transparent border-none cursor-pointer text-lg font-mono">&times;</button>
+        </div>
       </div>
-      <div ref={termRef} className="flex-1 p-2" />
+      <div ref={termRef} className="flex-1 min-h-0 overflow-hidden p-2" />
+    </div>
+  )
+}
+
+function TerminalMiniGauge({ label, value, pct }: { label: string; value: string; pct: number }) {
+  const color = pct > 90 ? '#ff4444' : pct > 70 ? '#ffaa00' : '#00ff9d'
+  return (
+    <div className="flex items-center gap-1.5">
+      <span className="text-text-muted">{label}</span>
+      <div className="w-12 h-1.5 bg-[#222] rounded-full overflow-hidden">
+        <div className="h-full rounded-full transition-all duration-500" style={{ width: `${Math.min(pct, 100)}%`, backgroundColor: color }} />
+      </div>
+      <span style={{ color }}>{value}</span>
+    </div>
+  )
+}
+
+function MiniBar({ label, pct }: { label: string; pct: number }) {
+  const color = pct > 90 ? '#ff4444' : pct > 70 ? '#ffaa00' : '#00ff9d'
+  return (
+    <div className="flex items-center gap-1" title={`${label}: ${pct.toFixed(0)}%`}>
+      <span className="text-[9px] text-text-muted w-6">{label}</span>
+      <div className="w-8 h-1 bg-[#222] rounded-full overflow-hidden">
+        <div className="h-full rounded-full" style={{ width: `${Math.min(pct, 100)}%`, backgroundColor: color }} />
+      </div>
     </div>
   )
 }

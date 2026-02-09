@@ -669,10 +669,11 @@ func (e *Engine) ListInstalls() ([]*Install, error) {
 // InstallListItem extends Install with lightweight live data for the list view.
 type InstallListItem struct {
 	Install
-	IP              string `json:"ip,omitempty"`
-	Uptime          int64  `json:"uptime"`
-	CatalogVersion  string `json:"catalog_version,omitempty"`
-	UpdateAvailable bool   `json:"update_available,omitempty"`
+	IP              string                 `json:"ip,omitempty"`
+	Uptime          int64                  `json:"uptime"`
+	Live            *ContainerStatusDetail `json:"live,omitempty"`
+	CatalogVersion  string                 `json:"catalog_version,omitempty"`
+	UpdateAvailable bool                   `json:"update_available,omitempty"`
 }
 
 // ListInstallsLive returns all installations with live status refreshed from Proxmox.
@@ -713,6 +714,7 @@ func (e *Engine) ListInstallsEnriched() ([]*InstallListItem, error) {
 		if sd, err := e.cm.StatusDetail(ctx, inst.CTID); err == nil {
 			item.Status = sd.Status
 			item.Uptime = sd.Uptime
+			item.Live = sd
 		}
 		if ip, err := e.cm.GetIP(inst.CTID); err == nil && ip != "" {
 			item.IP = ip
@@ -1124,6 +1126,7 @@ func (e *Engine) ListStacksEnriched() ([]*StackListItem, error) {
 		if sd, err := e.cm.StatusDetail(ctx, stack.CTID); err == nil {
 			item.Status = sd.Status
 			item.Uptime = sd.Uptime
+			item.Live = sd
 		}
 		if ip, err := e.cm.GetIP(stack.CTID); err == nil && ip != "" {
 			item.IP = ip

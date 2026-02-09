@@ -252,6 +252,7 @@ export interface LogsResponse {
 export interface InstallListItem extends Install {
   ip?: string;
   uptime?: number;
+  live?: ContainerLiveStatus;
   catalog_version?: string;
   update_available?: boolean;
 }
@@ -365,6 +366,7 @@ export interface StackDetail extends Stack {
 export interface StackListItem extends Stack {
   ip?: string;
   uptime?: number;
+  live?: ContainerLiveStatus;
 }
 
 export interface StacksResponse {

@@ -232,6 +232,7 @@ type StackDetail struct {
 // StackListItem extends Stack with lightweight live data for the list view.
 type StackListItem struct {
 	Stack
-	IP     string `json:"ip,omitempty"`
-	Uptime int64  `json:"uptime"`
+	IP     string                 `json:"ip,omitempty"`
+	Uptime int64                  `json:"uptime"`
+	Live   *ContainerStatusDetail `json:"live,omitempty"`
 }
