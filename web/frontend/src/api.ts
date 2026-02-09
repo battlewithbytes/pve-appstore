@@ -183,6 +183,13 @@ export const api = {
   uninstallStack: (id: string) =>
     fetchJSON<Job>(`${BASE}/stacks/${id}/uninstall`, { method: 'POST' }),
 
+  editStack: (id: string, req: EditRequest) =>
+    fetchJSON<Job>(`${BASE}/stacks/${id}/edit`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(req),
+    }),
+
   stackTerminalUrl: (id: string, token: string) => {
     const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     return `${proto}//${window.location.host}${BASE}/stacks/${id}/terminal?token=${encodeURIComponent(token)}`;

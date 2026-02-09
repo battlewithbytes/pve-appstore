@@ -331,8 +331,18 @@ func stepConfigureContainer(ctx *installContext) error {
 	}
 	// Apply extra LXC config lines from the manifest (e.g. TUN device, cgroup rules)
 	if len(ctx.manifest.LXC.ExtraConfig) > 0 {
-		ctx.info("Applying %d extra LXC config line(s)...", len(ctx.manifest.LXC.ExtraConfig))
-		if err := ctx.engine.cm.AppendLXCConfig(ctx.job.CTID, ctx.manifest.LXC.ExtraConfig); err != nil {
+		var validatedLines []string
+		for _, line := range ctx.manifest.LXC.ExtraConfig {
+			// Basic validation: ensure it's a key=value pair and not a flag.
+			if strings.HasPrefix(line, "-") || !strings.Contains(line, "=") {
+				return fmt.Errorf("invalid extra LXC config line: %q - must be key=value and not start with '-'", line)
+			}
+			// Further validation could include a strict allowlist of keys
+			validatedLines = append(validatedLines, line)
+		}
+
+		ctx.info("Applying %d extra LXC config line(s)...", len(validatedLines))
+		if err := ctx.engine.cm.AppendLXCConfig(ctx.job.CTID, validatedLines); err != nil {
 			return fmt.Errorf("applying extra LXC config: %w", err)
 		}
 	}

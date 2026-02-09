@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -47,7 +48,7 @@ type ContainerManager interface {
 	Start(ctx context.Context, ctid int) error
 	Stop(ctx context.Context, ctid int) error
 	Shutdown(ctx context.Context, ctid int, timeout int) error
-	Destroy(ctx context.Context, ctid int) error
+	Destroy(ctx context.Context, ctid int, keepVolumes ...bool) error
 	Status(ctx context.Context, ctid int) (string, error)
 	StatusDetail(ctx context.Context, ctid int) (*ContainerStatusDetail, error)
 	ResolveTemplate(ctx context.Context, name, storage string) string
@@ -549,7 +550,7 @@ func (e *Engine) runUninstall(job *Job, inst *Install, keepVolumes bool) {
 			ctx.info("Retry %d: waiting before destroy attempt...", attempt)
 			time.Sleep(5 * time.Second)
 		}
-		destroyErr = e.cm.Destroy(bgCtx, inst.CTID)
+		destroyErr = e.cm.Destroy(bgCtx, inst.CTID, keepVolumes)
 		if destroyErr == nil {
 			break
 		}
@@ -977,6 +978,7 @@ func (e *Engine) runUpdate(job *Job, inst *Install) {
 		bgCtx := context.Background()
 
 		// Detach managed volumes before destroy if present
+		hasDetachedVolumes := false
 		if len(inst.MountPoints) > 0 {
 			var managedIndexes []int
 			for _, mp := range inst.MountPoints {
@@ -1004,6 +1006,8 @@ func (e *Engine) runUpdate(job *Job, inst *Install) {
 				}
 				if err := e.cm.DetachMountPoints(bgCtx, inst.CTID, managedIndexes); err != nil {
 					ctx.warn("Failed to detach mount points: %v — volumes may be destroyed", err)
+				} else {
+					hasDetachedVolumes = true
 				}
 				// Update job's mount points with fresh volume IDs
 				job.MountPoints = inst.MountPoints
@@ -1019,7 +1023,7 @@ func (e *Engine) runUpdate(job *Job, inst *Install) {
 			if attempt > 0 {
 				time.Sleep(5 * time.Second)
 			}
-			destroyErr = e.cm.Destroy(bgCtx, inst.CTID)
+			destroyErr = e.cm.Destroy(bgCtx, inst.CTID, hasDetachedVolumes)
 			if destroyErr == nil {
 				break
 			}
@@ -1036,6 +1040,8 @@ func (e *Engine) runUpdate(job *Job, inst *Install) {
 			return
 		}
 		ctx.info("Old container destroyed successfully")
+		// Brief pause after destroy for ZFS dataset cleanup to fully propagate
+		time.Sleep(3 * time.Second)
 	}
 
 	// Run full install pipeline
@@ -1196,6 +1202,7 @@ func (e *Engine) runEdit(job *Job, inst *Install) {
 		}
 
 		// Detach managed volumes before destroy if present
+		hasDetachedVolumes := false
 		if len(inst.MountPoints) > 0 {
 			var managedIndexes []int
 			for _, mp := range inst.MountPoints {
@@ -1223,6 +1230,8 @@ func (e *Engine) runEdit(job *Job, inst *Install) {
 				}
 				if err := e.cm.DetachMountPoints(bgCtx, inst.CTID, managedIndexes); err != nil {
 					ctx.warn("Failed to detach mount points: %v — volumes may be destroyed", err)
+				} else {
+					hasDetachedVolumes = true
 				}
 				// Update job's mount points with fresh volume IDs
 				job.MountPoints = inst.MountPoints
@@ -1239,7 +1248,7 @@ func (e *Engine) runEdit(job *Job, inst *Install) {
 			if attempt > 0 {
 				time.Sleep(5 * time.Second)
 			}
-			destroyErr = e.cm.Destroy(bgCtx, inst.CTID)
+			destroyErr = e.cm.Destroy(bgCtx, inst.CTID, hasDetachedVolumes)
 			if destroyErr == nil {
 				break
 			}
@@ -1256,6 +1265,7 @@ func (e *Engine) runEdit(job *Job, inst *Install) {
 			return
 		}
 		ctx.info("Old container destroyed successfully")
+		time.Sleep(3 * time.Second)
 	}
 
 	// Run full install pipeline (uses ctx.hwAddr for MAC preservation)
@@ -1486,6 +1496,479 @@ func (e *Engine) runStackUninstall(job *Job, stack *Stack) {
 	job.CompletedAt = &now
 	e.store.UpdateJob(job)
 	ctx.info("Stack %s uninstalled. Container %d destroyed.", stack.Name, stack.CTID)
+}
+
+// EditStack recreates a stack container with modified resource settings.
+// Preserves MAC address for DHCP lease continuity.
+func (e *Engine) EditStack(stackID string, req EditRequest) (*Job, error) {
+	stack, err := e.store.GetStack(stackID)
+	if err != nil {
+		return nil, fmt.Errorf("stack %q not found", stackID)
+	}
+	if stack.Status == "uninstalled" {
+		return nil, fmt.Errorf("stack %q is uninstalled — cannot edit", stackID)
+	}
+
+	// Apply overrides
+	cores := stack.Cores
+	if req.Cores > 0 {
+		cores = req.Cores
+	}
+	memoryMB := stack.MemoryMB
+	if req.MemoryMB > 0 {
+		memoryMB = req.MemoryMB
+	}
+	diskGB := stack.DiskGB
+	if req.DiskGB > 0 {
+		if req.DiskGB < stack.DiskGB {
+			return nil, fmt.Errorf("cannot shrink disk from %d GB to %d GB (Proxmox limitation)", stack.DiskGB, req.DiskGB)
+		}
+		diskGB = req.DiskGB
+	}
+	bridge := stack.Bridge
+	if req.Bridge != "" {
+		bridge = req.Bridge
+	}
+
+	now := time.Now()
+	job := &Job{
+		ID:          generateID(),
+		Type:        JobTypeEdit,
+		State:       StateQueued,
+		AppID:       "stack:" + stack.Name,
+		AppName:     stack.Name,
+		Node:        e.cfg.NodeName,
+		Pool:        stack.Pool,
+		Storage:     stack.Storage,
+		Bridge:      bridge,
+		Cores:       cores,
+		MemoryMB:    memoryMB,
+		DiskGB:      diskGB,
+		Hostname:    stack.Hostname,
+		IPAddress:   stack.IPAddress,
+		OnBoot:      stack.OnBoot,
+		Unprivileged: stack.Unprivileged,
+		Inputs:      make(map[string]string),
+		Outputs:     make(map[string]string),
+		MountPoints: stack.MountPoints,
+		Devices:     stack.Devices,
+		EnvVars:     stack.EnvVars,
+		StackID:     stack.ID,
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	}
+
+	if err := e.store.CreateJob(job); err != nil {
+		return nil, fmt.Errorf("creating stack edit job: %w", err)
+	}
+
+	go e.runStackEdit(job, stack)
+
+	return job, nil
+}
+
+func (e *Engine) runStackEdit(job *Job, stack *Stack) {
+	// Collect manifests for all apps in the stack
+	manifests := make([]*catalog.AppManifest, 0, len(stack.Apps))
+	for _, app := range stack.Apps {
+		m, ok := e.catalog.Get(app.AppID)
+		if !ok {
+			job.State = StateFailed
+			job.Error = fmt.Sprintf("app %q not found in catalog", app.AppID)
+			now := time.Now()
+			job.UpdatedAt = now
+			job.CompletedAt = &now
+			e.store.UpdateJob(job)
+			return
+		}
+		manifests = append(manifests, m)
+	}
+
+	ctx := &installContext{engine: e, job: job}
+	ctx.info("Starting edit of stack %s (CTID %d)", stack.Name, stack.CTID)
+
+	bgCtx := context.Background()
+
+	// Read MAC address before destroying
+	if stack.CTID > 0 {
+		if config, err := e.cm.GetConfig(bgCtx, stack.CTID); err == nil {
+			if net0, ok := config["net0"]; ok {
+				if net0Str, ok := net0.(string); ok {
+					ctx.hwAddr = extractHWAddr(net0Str)
+					if ctx.hwAddr != "" {
+						ctx.info("Preserved MAC address: %s", ctx.hwAddr)
+					}
+				}
+			}
+		}
+
+		// Detach managed volumes before destroy
+		hasDetachedVolumes := false
+		if len(stack.MountPoints) > 0 {
+			var managedIndexes []int
+			for _, mp := range stack.MountPoints {
+				if mp.Type == "volume" {
+					managedIndexes = append(managedIndexes, mp.Index)
+				}
+			}
+			if len(managedIndexes) > 0 {
+				ctx.info("Detaching %d volume(s) before destroy...", len(managedIndexes))
+				if config, err := e.cm.GetConfig(bgCtx, stack.CTID); err == nil {
+					for i := range stack.MountPoints {
+						if stack.MountPoints[i].Type != "volume" {
+							continue
+						}
+						key := fmt.Sprintf("mp%d", stack.MountPoints[i].Index)
+						if val, ok := config[key]; ok {
+							if valStr, ok := val.(string); ok {
+								parts := strings.SplitN(valStr, ",", 2)
+								if len(parts) > 0 {
+									stack.MountPoints[i].VolumeID = parts[0]
+								}
+							}
+						}
+					}
+				}
+				if err := e.cm.DetachMountPoints(bgCtx, stack.CTID, managedIndexes); err != nil {
+					ctx.warn("Failed to detach mount points: %v", err)
+				} else {
+					hasDetachedVolumes = true
+				}
+				job.MountPoints = stack.MountPoints
+			}
+		}
+
+		// Stop and destroy old container
+		ctx.info("Stopping and destroying old container CT %d...", stack.CTID)
+		if err := e.cm.Shutdown(bgCtx, stack.CTID, 30); err != nil {
+			_ = e.cm.Stop(bgCtx, stack.CTID)
+		}
+		var destroyErr error
+		for attempt := 0; attempt < 5; attempt++ {
+			if attempt > 0 {
+				time.Sleep(5 * time.Second)
+			}
+			destroyErr = e.cm.Destroy(bgCtx, stack.CTID, hasDetachedVolumes)
+			if destroyErr == nil {
+				break
+			}
+			ctx.warn("Destroy attempt %d failed: %v", attempt+1, destroyErr)
+		}
+		if destroyErr != nil {
+			ctx.log("error", "Failed to destroy old container: %v", destroyErr)
+			job.State = StateFailed
+			job.Error = fmt.Sprintf("destroy old container: %v", destroyErr)
+			now := time.Now()
+			job.UpdatedAt = now
+			job.CompletedAt = &now
+			e.store.UpdateJob(job)
+			return
+		}
+		ctx.info("Old container destroyed successfully")
+		time.Sleep(3 * time.Second)
+	}
+
+	// Re-run the full stack install pipeline (reuses hwAddr via the installContext)
+	// We need to inject hwAddr into the stack create step — done via installContext
+	e.runStackInstallWithHWAddr(bgCtx, job, stack, manifests, ctx.hwAddr)
+}
+
+// runStackInstallWithHWAddr re-runs the stack install pipeline preserving the MAC address.
+// On success, updates the existing stack record instead of creating a new one.
+func (e *Engine) runStackInstallWithHWAddr(bgCtx context.Context, job *Job, stack *Stack, manifests []*catalog.AppManifest, hwAddr string) {
+	ctx := &installContext{
+		ctx:    bgCtx,
+		engine: e,
+		job:    job,
+		hwAddr: hwAddr,
+	}
+
+	ctx.info("Recreating stack %s with %d apps", stack.Name, len(stack.Apps))
+
+	// Build fresh StackApp entries from existing stack (preserve inputs)
+	apps := make([]StackApp, len(stack.Apps))
+	copy(apps, stack.Apps)
+	for i := range apps {
+		apps[i].Status = "pending"
+		apps[i].Error = ""
+		apps[i].Outputs = make(map[string]string)
+	}
+
+	// Step 1: Validate manifests
+	ctx.transition(StateValidateManifest)
+	for _, m := range manifests {
+		if err := m.Validate(); err != nil {
+			ctx.failJob("validate_manifest: %v", err)
+			return
+		}
+	}
+
+	// Step 2: Allocate CTID
+	ctx.transition(StateAllocateCTID)
+	ctid, err := e.cm.AllocateCTID(bgCtx)
+	if err != nil {
+		ctx.failJob("allocate_ctid: %v", err)
+		return
+	}
+	ctx.job.CTID = ctid
+	ctx.job.UpdatedAt = time.Now()
+	e.store.UpdateJob(ctx.job)
+	ctx.info("Allocated CTID: %d", ctid)
+
+	// Step 3: Create container with preserved MAC
+	ctx.transition(StateCreateContainer)
+	template := stack.OSTemplate
+	if !strings.Contains(template, ":") {
+		template = e.cm.ResolveTemplate(bgCtx, template, job.Storage)
+	}
+
+	featureSet := make(map[string]bool)
+	for _, m := range manifests {
+		for _, f := range m.LXC.Defaults.Features {
+			featureSet[f] = true
+		}
+	}
+	var features []string
+	for f := range featureSet {
+		features = append(features, f)
+	}
+
+	opts := CreateOptions{
+		CTID:         ctid,
+		OSTemplate:   template,
+		Storage:      job.Storage,
+		RootFSSize:   job.DiskGB,
+		Cores:        job.Cores,
+		MemoryMB:     job.MemoryMB,
+		Bridge:       job.Bridge,
+		HWAddr:       hwAddr,
+		Hostname:     job.Hostname,
+		IPAddress:    job.IPAddress,
+		Unprivileged: job.Unprivileged,
+		Pool:         job.Pool,
+		Features:     features,
+		OnBoot:       job.OnBoot,
+		Tags:         buildTags("appstore;stack;managed", job.ExtraTags),
+	}
+
+	for _, mp := range job.MountPoints {
+		mpStorage := mp.Storage
+		if mpStorage == "" {
+			mpStorage = job.Storage
+		}
+		opts.MountPoints = append(opts.MountPoints, MountPointOption{
+			Index: mp.Index, Type: mp.Type, MountPath: mp.MountPath,
+			Storage: mpStorage, SizeGB: mp.SizeGB, VolumeID: mp.VolumeID,
+			HostPath: mp.HostPath, ReadOnly: mp.ReadOnly,
+		})
+	}
+
+	ctx.info("Creating container %d (template=%s, %d cores, %d MB, %d GB)", ctid, template, opts.Cores, opts.MemoryMB, opts.RootFSSize)
+	if hwAddr != "" {
+		ctx.info("Using preserved MAC address: %s", hwAddr)
+	}
+	if err := e.cm.Create(bgCtx, opts); err != nil {
+		ctx.failJob("create_container: %v", err)
+		return
+	}
+
+	// Configure devices
+	if len(job.Devices) > 0 {
+		ctx.info("Configuring %d device passthrough(s)...", len(job.Devices))
+		if err := e.cm.ConfigureDevices(ctid, job.Devices); err != nil {
+			ctx.failJob("configure_devices: %v", err)
+			return
+		}
+		if hasNvidiaDevices(job.Devices) {
+			libPath, _ := resolveNvidiaLibPath()
+			if libPath != "" {
+				nextMP := len(job.MountPoints)
+				e.cm.MountHostPath(ctid, nextMP, libPath, nvidiaContainerLibPath, true)
+			}
+		}
+	}
+
+	// Apply extra LXC config from all manifests
+	for _, m := range manifests {
+		if len(m.LXC.ExtraConfig) > 0 {
+			e.cm.AppendLXCConfig(ctid, m.LXC.ExtraConfig)
+		}
+	}
+
+	// Start container
+	ctx.transition(StateStartContainer)
+	if err := e.cm.Start(bgCtx, ctid); err != nil {
+		ctx.failJob("start_container: %v", err)
+		return
+	}
+
+	// Wait for network
+	ctx.transition(StateWaitForNetwork)
+	for i := 0; i < 30; i++ {
+		ip, err := e.cm.GetIP(ctid)
+		if err == nil && ip != "" && ip != "127.0.0.1" {
+			ctx.info("Container %d has IP: %s", ctid, ip)
+			break
+		}
+		time.Sleep(2 * time.Second)
+	}
+
+	// GPU runtime setup
+	if hasNvidiaDevices(job.Devices) {
+		ldconfContent := nvidiaContainerLibPath + "\n"
+		for _, cmd := range [][]string{
+			{"mkdir", "-p", "/etc/ld.so.conf.d"},
+			{"sh", "-c", fmt.Sprintf("echo '%s' > %s", ldconfContent, nvidiaLdconfPath)},
+			{"ldconfig"},
+		} {
+			e.cm.Exec(ctid, cmd)
+		}
+	}
+
+	// Install base packages
+	ctx.transition(StateInstallBasePkgs)
+	if err := stepInstallBasePackages(ctx); err != nil {
+		ctx.failJob("install_base_packages: %v", err)
+		return
+	}
+
+	// Push SDK
+	ctx.transition(StatePushAssets)
+	if err := ensurePython(ctid, e.cm); err != nil {
+		ctx.failJob("push_assets: %v", err)
+		return
+	}
+	if err := pushSDK(ctid, e.cm); err != nil {
+		ctx.failJob("push_assets: %v", err)
+		return
+	}
+	mergedPerms := mergeAllPermissions(manifests)
+	if err := pushPermissionsJSON(ctid, e.cm, mergedPerms); err != nil {
+		ctx.failJob("push_assets: %v", err)
+		return
+	}
+
+	// Provision each app
+	ctx.transition(StateProvision)
+	allOutputs := make(map[string]string)
+
+	for i, app := range apps {
+		manifest := manifests[i]
+		apps[i].Status = "provisioning"
+		ctx.info("[%d/%d] Provisioning: %s", i+1, len(apps), app.AppName)
+
+		appProvisionDir := filepath.Join(manifest.DirPath, "provision")
+		if _, err := os.Stat(appProvisionDir); os.IsNotExist(err) {
+			apps[i].Status = "failed"
+			apps[i].Error = "provision directory not found"
+			continue
+		}
+
+		targetProvisionDir := "/opt/appstore/provision/" + app.AppID
+		e.cm.Exec(ctid, []string{"mkdir", "-p", targetProvisionDir})
+		entries, _ := os.ReadDir(appProvisionDir)
+		for _, entry := range entries {
+			if entry.IsDir() {
+				continue
+			}
+			src := filepath.Join(appProvisionDir, entry.Name())
+			e.cm.Push(ctid, src, targetProvisionDir+"/"+entry.Name(), "0755")
+		}
+
+		templatesDir := filepath.Join(manifest.DirPath, "templates")
+		if _, err := os.Stat(templatesDir); err == nil {
+			e.cm.Exec(ctid, []string{"mkdir", "-p", "/opt/appstore/templates"})
+			tEntries, _ := os.ReadDir(templatesDir)
+			for _, te := range tEntries {
+				if !te.IsDir() {
+					e.cm.Push(ctid, filepath.Join(templatesDir, te.Name()), "/opt/appstore/templates/"+te.Name(), "0644")
+				}
+			}
+		}
+
+		e.cm.Exec(ctid, []string{"mkdir", "-p", "/opt/appstore/" + app.AppID})
+		pushInputsJSONToPath(ctid, e.cm, app.Inputs, "/opt/appstore/"+app.AppID+"/inputs.json")
+
+		envVars := mergeEnvVars(manifest.Provisioning.Env, job.EnvVars)
+		cmd := buildStackProvisionCommand(app.AppID, manifest.Provisioning.Script, "install", envVars)
+
+		appOutputs := make(map[string]string)
+		result, err := e.cm.ExecStream(ctid, cmd, func(line string) {
+			line = strings.TrimSpace(line)
+			if line == "" {
+				return
+			}
+			if strings.HasPrefix(line, "@@APPLOG@@") {
+				jsonStr := strings.TrimPrefix(line, "@@APPLOG@@")
+				level := extractJSONField(jsonStr, "level")
+				msg := extractJSONField(jsonStr, "msg")
+				if level == "output" {
+					key := extractJSONField(jsonStr, "key")
+					value := extractJSONField(jsonStr, "value")
+					if key != "" {
+						appOutputs[key] = value
+					}
+				} else if msg != "" {
+					ctx.log(level, "[%s] %s", app.AppID, msg)
+				}
+			} else {
+				ctx.info("[%s] %s", app.AppID, line)
+			}
+		})
+
+		if err != nil || (result != nil && result.ExitCode != 0) {
+			apps[i].Status = "failed"
+			if err != nil {
+				apps[i].Error = err.Error()
+			} else {
+				apps[i].Error = fmt.Sprintf("exit code %d", result.ExitCode)
+			}
+			continue
+		}
+
+		apps[i].Status = "completed"
+		apps[i].Outputs = appOutputs
+		for k, v := range appOutputs {
+			allOutputs[app.AppID+"."+k] = v
+		}
+	}
+
+	// Collect manifest outputs
+	ip, _ := e.cm.GetIP(ctid)
+	for i, app := range apps {
+		manifest := manifests[i]
+		for _, out := range manifest.Outputs {
+			value := out.Value
+			value = strings.ReplaceAll(value, "{{ip}}", ip)
+			for k, v := range app.Inputs {
+				value = strings.ReplaceAll(value, "{{"+k+"}}", v)
+			}
+			allOutputs[app.AppID+"."+out.Key] = value
+			if apps[i].Outputs == nil {
+				apps[i].Outputs = make(map[string]string)
+			}
+			apps[i].Outputs[out.Key] = value
+		}
+	}
+
+	job.Outputs = allOutputs
+	ctx.transition(StateCompleted)
+	now := time.Now()
+	ctx.job.CompletedAt = &now
+	e.store.UpdateJob(ctx.job)
+
+	// Update existing stack record
+	stack.CTID = ctid
+	stack.Status = "running"
+	stack.Bridge = job.Bridge
+	stack.Cores = job.Cores
+	stack.MemoryMB = job.MemoryMB
+	stack.DiskGB = job.DiskGB
+	stack.Apps = apps
+	stack.MountPoints = job.MountPoints
+	e.store.UpdateStack(stack)
+
+	ctx.info("Stack edit complete! %s CT %d recreated with preserved MAC address.", stack.Name, ctid)
 }
 
 // GetStorageInfo returns resolved storage information for a Proxmox storage ID.

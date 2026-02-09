@@ -1002,6 +1002,31 @@ func (s *Server) handleUninstallStack(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusAccepted, job)
 }
 
+func (s *Server) handleEditStack(w http.ResponseWriter, r *http.Request) {
+	stackID := r.PathValue("id")
+
+	if s.engine == nil {
+		writeError(w, http.StatusServiceUnavailable, "engine not available")
+		return
+	}
+
+	var req engine.EditRequest
+	if r.Body != nil && r.ContentLength > 0 {
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid request body")
+			return
+		}
+	}
+
+	job, err := s.engine.EditStack(stackID, req)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusAccepted, job)
+}
+
 func (s *Server) handleValidateStack(w http.ResponseWriter, r *http.Request) {
 	if s.engine == nil {
 		writeError(w, http.StatusServiceUnavailable, "engine not available")

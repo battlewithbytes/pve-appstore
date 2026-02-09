@@ -118,6 +118,7 @@ func New(cfg *config.Config, cat *catalog.Catalog, eng *engine.Engine, spaFS fs.
 	mux.HandleFunc("POST /api/stacks/{id}/stop", s.withAuth(s.handleStopStack))
 	mux.HandleFunc("POST /api/stacks/{id}/restart", s.withAuth(s.handleRestartStack))
 	mux.HandleFunc("POST /api/stacks/{id}/uninstall", s.withAuth(s.handleUninstallStack))
+	mux.HandleFunc("POST /api/stacks/{id}/edit", s.withAuth(s.handleEditStack))
 	mux.HandleFunc("POST /api/stacks/validate", s.withAuth(s.handleValidateStack))
 	mux.HandleFunc("GET /api/stacks/{id}/terminal", s.withAuth(s.handleStackTerminal))
 	mux.HandleFunc("GET /api/stacks/{id}/logs", s.withAuth(s.handleStackJournalLogs))

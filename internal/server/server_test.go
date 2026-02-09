@@ -25,7 +25,7 @@ func (m *mockCM) Create(ctx context.Context, opts engine.CreateOptions) error { 
 func (m *mockCM) Start(ctx context.Context, ctid int) error { return nil }
 func (m *mockCM) Stop(ctx context.Context, ctid int) error { return nil }
 func (m *mockCM) Shutdown(ctx context.Context, ctid int, timeout int) error { return nil }
-func (m *mockCM) Destroy(ctx context.Context, ctid int) error { return nil }
+func (m *mockCM) Destroy(ctx context.Context, ctid int, keepVolumes ...bool) error { return nil }
 func (m *mockCM) Status(ctx context.Context, ctid int) (string, error) { return "stopped", nil }
 func (m *mockCM) StatusDetail(ctx context.Context, ctid int) (*engine.ContainerStatusDetail, error) {
 	return &engine.ContainerStatusDetail{

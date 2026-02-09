@@ -1498,6 +1498,93 @@ function EditDialog({ detail, appInfo, isRunning, onConfirm, onCancel }: {
   )
 }
 
+function StackEditDialog({ detail, isRunning, onConfirm, onCancel }: {
+  detail: StackDetail;
+  isRunning: boolean; onConfirm: (req: EditRequest) => void; onCancel: () => void;
+}) {
+  const [cores, setCores] = useState(String(detail.cores))
+  const [memoryMB, setMemoryMB] = useState(String(detail.memory_mb))
+  const [diskGB, setDiskGB] = useState(String(detail.disk_gb))
+  const [bridge, setBridge] = useState(detail.bridge)
+  const [configDefaults, setConfigDefaults] = useState<ConfigDefaultsResponse | null>(null)
+
+  useEffect(() => {
+    api.configDefaults().then(setConfigDefaults).catch(() => {})
+  }, [])
+
+  const bridgeOptions = configDefaults?.bridges || [detail.bridge]
+
+  const hasChanges = () => {
+    if (Number(cores) !== detail.cores) return true
+    if (Number(memoryMB) !== detail.memory_mb) return true
+    if (Number(diskGB) !== detail.disk_gb) return true
+    if (bridge !== detail.bridge) return true
+    return false
+  }
+
+  const buildRequest = (): EditRequest => {
+    const req: EditRequest = {}
+    if (Number(cores) !== detail.cores) req.cores = Number(cores)
+    if (Number(memoryMB) !== detail.memory_mb) req.memory_mb = Number(memoryMB)
+    if (Number(diskGB) !== detail.disk_gb) req.disk_gb = Number(diskGB)
+    if (bridge !== detail.bridge) req.bridge = bridge
+    return req
+  }
+
+  return (
+    <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-[100]" onClick={onCancel}>
+      <div className="bg-bg-card border border-border rounded-xl p-8 w-full max-w-[520px] max-h-[80vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+        <h2 className="text-lg font-bold text-text-primary mb-2 font-mono">Edit Stack: {detail.name}</h2>
+        <p className="text-sm text-text-secondary mb-4">
+          Modify resource settings and recreate stack CT {detail.ctid}.
+        </p>
+
+        {isRunning && (
+          <div className="mb-4 p-2.5 bg-status-warning/10 border border-status-warning/30 rounded text-status-warning text-xs font-mono">
+            Stack is running and will be stopped during this operation.
+          </div>
+        )}
+
+        <div className="space-y-3 mb-4">
+          <div>
+            <label className="block text-xs text-text-muted font-mono mb-1">CPU Cores</label>
+            <input type="number" min={1} value={cores} onChange={e => setCores(e.target.value)}
+              className="w-full bg-bg-secondary border border-border rounded-lg px-3 py-2 text-sm text-text-primary font-mono focus:border-primary outline-none" />
+          </div>
+          <div>
+            <label className="block text-xs text-text-muted font-mono mb-1">Memory (MB)</label>
+            <input type="number" min={128} step={128} value={memoryMB} onChange={e => setMemoryMB(e.target.value)}
+              className="w-full bg-bg-secondary border border-border rounded-lg px-3 py-2 text-sm text-text-primary font-mono focus:border-primary outline-none" />
+          </div>
+          <div>
+            <label className="block text-xs text-text-muted font-mono mb-1">Disk (GB) — can only grow</label>
+            <input type="number" min={detail.disk_gb} value={diskGB} onChange={e => setDiskGB(e.target.value)}
+              className="w-full bg-bg-secondary border border-border rounded-lg px-3 py-2 text-sm text-text-primary font-mono focus:border-primary outline-none" />
+          </div>
+          <div>
+            <label className="block text-xs text-text-muted font-mono mb-1">Bridge</label>
+            <select value={bridge} onChange={e => setBridge(e.target.value)}
+              className="w-full bg-bg-secondary border border-border rounded-lg px-3 py-2 text-sm text-text-primary font-mono focus:border-primary outline-none">
+              {bridgeOptions.map(b => <option key={b} value={b}>{b}</option>)}
+            </select>
+          </div>
+        </div>
+
+        <p className="text-xs text-text-muted mb-4 font-mono">
+          Data volumes and MAC address (IP) will be preserved.
+        </p>
+
+        <div className="flex gap-3 justify-end">
+          <button onClick={onCancel} className="px-5 py-2.5 text-sm font-semibold border border-border rounded-lg cursor-pointer text-text-secondary bg-transparent hover:border-text-secondary transition-colors font-mono">Cancel</button>
+          <button onClick={() => onConfirm(buildRequest())} disabled={!hasChanges()} className="px-5 py-2.5 text-sm font-semibold border-none rounded-lg cursor-pointer bg-primary text-bg-primary hover:shadow-[0_0_20px_rgba(0,255,157,0.3)] transition-all font-mono disabled:opacity-50 disabled:cursor-not-allowed">
+            Apply Changes
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // --- Installs List ---
 
 function InstallsList({ requireAuth }: { requireAuth: (cb: () => void) => void }) {
@@ -2804,6 +2891,8 @@ function StackDetailView({ id, requireAuth }: { id: string; requireAuth: (cb: ()
   const [error, setError] = useState<string | null>(null)
   const [showTerminal, setShowTerminal] = useState(false)
   const [showLogs, setShowLogs] = useState(false)
+  const [showEditDialog, setShowEditDialog] = useState(false)
+  const [editing, setEditing] = useState(false)
 
   const fetchDetail = useCallback(async () => {
     try {
@@ -2840,6 +2929,21 @@ function StackDetailView({ id, requireAuth }: { id: string; requireAuth: (cb: ()
     }
   }
 
+  const handleStackEdit = (req: EditRequest) => {
+    requireAuth(async () => {
+      if (!detail) return
+      setEditing(true)
+      setShowEditDialog(false)
+      try {
+        const j = await api.editStack(detail.id, req)
+        window.location.hash = `#/job/${j.id}`
+      } catch (e: unknown) {
+        alert(e instanceof Error ? e.message : 'Edit failed')
+        setEditing(false)
+      }
+    })
+  }
+
   if (loading) return <Center>Loading...</Center>
   if (error || !detail) return <Center className="text-status-error">{error || 'Stack not found'}</Center>
 
@@ -2870,9 +2974,20 @@ function StackDetailView({ id, requireAuth }: { id: string; requireAuth: (cb: ()
               <ActionButton label="Logs" onClick={() => setShowLogs(true)} />
             </>
           )}
+          <ActionButton label={editing ? 'Editing...' : 'Edit'} onClick={() => setShowEditDialog(true)} />
           <ActionButton label="Remove" onClick={() => requireAuth(() => handleAction('uninstall'))} danger />
         </div>
       </div>
+
+      {/* Stack Edit Dialog */}
+      {showEditDialog && detail && (
+        <StackEditDialog
+          detail={detail}
+          isRunning={isRunning}
+          onConfirm={handleStackEdit}
+          onCancel={() => setShowEditDialog(false)}
+        />
+      )}
 
       {/* Resource Cards */}
       {isRunning && detail.live && (
