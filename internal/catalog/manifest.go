@@ -3,7 +3,9 @@ package catalog
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -40,6 +42,7 @@ type AppManifest struct {
 type LXCConfig struct {
 	OSTemplate string      `yaml:"ostemplate" json:"ostemplate"`
 	Defaults   LXCDefaults `yaml:"defaults" json:"defaults"`
+	ExtraConfig []string   `yaml:"extra_config,omitempty" json:"extra_config,omitempty"` // raw LXC config lines
 }
 
 type LXCDefaults struct {
@@ -63,13 +66,22 @@ type InputSpec struct {
 	Help        string          `yaml:"help,omitempty" json:"help,omitempty"`
 	Description string          `yaml:"description,omitempty" json:"description,omitempty"`
 	Group       string          `yaml:"group,omitempty" json:"group,omitempty"`
+	ShowWhen    *ShowWhenSpec   `yaml:"show_when,omitempty" json:"show_when,omitempty"`
+}
+
+// ShowWhenSpec controls conditional visibility of an input.
+// The input is shown only when the referenced input's value matches one of the given values.
+type ShowWhenSpec struct {
+	Input  string   `yaml:"input" json:"input"`   // key of another input to check
+	Values []string `yaml:"values" json:"values"` // show when value is one of these
 }
 
 type InputValidation struct {
-	Regex string   `yaml:"regex,omitempty" json:"regex,omitempty"`
-	Min   *float64 `yaml:"min,omitempty" json:"min,omitempty"`
-	Max   *float64 `yaml:"max,omitempty" json:"max,omitempty"`
-	Enum  []string `yaml:"enum,omitempty" json:"enum,omitempty"`
+	Regex   string   `yaml:"regex,omitempty" json:"regex,omitempty"`
+	Min     *float64 `yaml:"min,omitempty" json:"min,omitempty"`
+	Max     *float64 `yaml:"max,omitempty" json:"max,omitempty"`
+	Enum    []string `yaml:"enum,omitempty" json:"enum,omitempty"`
+	EnumDir string   `yaml:"enum_dir,omitempty" json:"-"` // directory of .yml files to build enum from
 }
 
 type ProvisioningSpec struct {
@@ -137,7 +149,52 @@ func ParseManifest(path string) (*AppManifest, error) {
 		return nil, fmt.Errorf("parsing manifest %s: %w", path, err)
 	}
 
+	// Resolve enum_dir references relative to the manifest's directory.
+	baseDir := filepath.Dir(path)
+	if err := m.resolveEnumDirs(baseDir); err != nil {
+		return nil, fmt.Errorf("manifest %s: %w", path, err)
+	}
+
 	return &m, nil
+}
+
+// resolveEnumDirs reads .yml files from any enum_dir directories and
+// populates the corresponding Enum slices from their id fields.
+func (m *AppManifest) resolveEnumDirs(baseDir string) error {
+	for i := range m.Inputs {
+		v := m.Inputs[i].Validation
+		if v == nil || v.EnumDir == "" {
+			continue
+		}
+		enumDir := filepath.Join(baseDir, v.EnumDir)
+		entries, err := os.ReadDir(enumDir)
+		if err != nil {
+			return fmt.Errorf("reading enum_dir %q: %w", v.EnumDir, err)
+		}
+		for _, entry := range entries {
+			if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".yml") {
+				continue
+			}
+			data, err := os.ReadFile(filepath.Join(enumDir, entry.Name()))
+			if err != nil {
+				return fmt.Errorf("reading enum file %s: %w", entry.Name(), err)
+			}
+			var e struct {
+				ID string `yaml:"id"`
+			}
+			if err := yaml.Unmarshal(data, &e); err != nil {
+				return fmt.Errorf("parsing enum file %s: %w", entry.Name(), err)
+			}
+			if e.ID != "" {
+				v.Enum = append(v.Enum, e.ID)
+			}
+		}
+		sort.Strings(v.Enum)
+		if len(v.Enum) == 0 {
+			return fmt.Errorf("enum_dir %q produced no entries", v.EnumDir)
+		}
+	}
+	return nil
 }
 
 // Validate checks that a manifest has all required fields and valid values.

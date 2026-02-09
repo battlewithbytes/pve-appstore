@@ -667,10 +667,17 @@ function InstallWizard({ app, onClose }: { app: AppDetail; onClose: () => void }
             All app settings below apply inside the LXC container, not on the Proxmox host.
           </div>
         )}
-        {Object.entries(otherInputGroups).map(([group, groupInps]) => (
+        {Object.entries(otherInputGroups).map(([group, groupInps]) => {
+          const visibleInps = groupInps.filter(inp => {
+            if (!inp.show_when) return true
+            const depVal = inputs[inp.show_when.input] || ''
+            return inp.show_when.values.includes(depVal)
+          })
+          if (visibleInps.length === 0) return null
+          return (
           <div key={group}>
             <SectionTitle>{group}</SectionTitle>
-            {groupInps.map(inp => (
+            {visibleInps.map(inp => (
               <FormRow key={inp.key} label={inp.label} help={inp.help} description={inp.description}>
                 {inp.type === 'select' && inp.validation?.enum ? (
                   <select value={inputs[inp.key] || ''} onChange={e => setInputs(p => ({ ...p, [inp.key]: e.target.value }))} className="w-full px-3 py-2 bg-bg-secondary border border-border rounded-md text-text-primary text-sm outline-none focus:border-primary font-mono">
@@ -689,7 +696,8 @@ function InstallWizard({ app, onClose }: { app: AppDetail; onClose: () => void }
               </FormRow>
             ))}
           </div>
-        ))}
+          )
+        })}
 
         {/* Storage-path inputs with optional "mount externally" toggle */}
         {storagePathInputs.length > 0 && (

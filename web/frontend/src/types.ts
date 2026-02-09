@@ -66,6 +66,10 @@ export interface AppInput {
   help?: string;
   description?: string;
   group?: string;
+  show_when?: {
+    input: string;
+    values: string[];
+  };
 }
 
 export interface StorageDetail {

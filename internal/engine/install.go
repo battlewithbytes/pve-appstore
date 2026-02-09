@@ -327,6 +327,14 @@ func stepConfigureContainer(ctx *installContext) error {
 			}
 		}
 	}
+	// Apply extra LXC config lines from the manifest (e.g. TUN device, cgroup rules)
+	if len(ctx.manifest.LXC.ExtraConfig) > 0 {
+		ctx.info("Applying %d extra LXC config line(s)...", len(ctx.manifest.LXC.ExtraConfig))
+		if err := ctx.engine.cm.AppendLXCConfig(ctx.job.CTID, ctx.manifest.LXC.ExtraConfig); err != nil {
+			return fmt.Errorf("applying extra LXC config: %w", err)
+		}
+	}
+
 	ctx.info("Container %d configured", ctx.job.CTID)
 	return nil
 }

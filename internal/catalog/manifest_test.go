@@ -494,6 +494,88 @@ func checkPythonSyntax(t *testing.T, scriptPath string) {
 	}
 }
 
+func TestEnumDirResolution(t *testing.T) {
+	dir := t.TempDir()
+
+	// Create providers directory with two provider files
+	provDir := filepath.Join(dir, "providers")
+	os.MkdirAll(provDir, 0755)
+	os.WriteFile(filepath.Join(provDir, "alpha.yml"), []byte("id: alpha\nname: Alpha VPN\n"), 0644)
+	os.WriteFile(filepath.Join(provDir, "beta.yml"), []byte("id: beta\nname: Beta VPN\n"), 0644)
+
+	manifest := `id: test-app
+name: Test App
+description: Test enum_dir
+version: 1.0.0
+categories:
+  - testing
+lxc:
+  ostemplate: debian-12
+  defaults:
+    cores: 1
+    memory_mb: 512
+    disk_gb: 2
+inputs:
+  - key: provider
+    label: Provider
+    type: select
+    required: true
+    validation:
+      enum_dir: providers
+provisioning:
+  script: install.py
+`
+	path := writeManifest(t, dir, manifest)
+
+	m, err := ParseManifest(path)
+	if err != nil {
+		t.Fatalf("parse failed: %v", err)
+	}
+
+	if m.Inputs[0].Validation == nil {
+		t.Fatal("validation is nil")
+	}
+	enum := m.Inputs[0].Validation.Enum
+	if len(enum) != 2 {
+		t.Fatalf("enum: got %d entries, want 2: %v", len(enum), enum)
+	}
+	// Should be sorted
+	if enum[0] != "alpha" || enum[1] != "beta" {
+		t.Errorf("enum: got %v, want [alpha beta]", enum)
+	}
+}
+
+func TestEnumDirMissingDir(t *testing.T) {
+	dir := t.TempDir()
+	manifest := `id: test-app
+name: Test App
+description: Test
+version: 1.0.0
+categories:
+  - testing
+lxc:
+  ostemplate: debian-12
+  defaults:
+    cores: 1
+    memory_mb: 512
+    disk_gb: 2
+inputs:
+  - key: provider
+    label: Provider
+    type: select
+    required: true
+    validation:
+      enum_dir: nonexistent
+provisioning:
+  script: install.py
+`
+	path := writeManifest(t, dir, manifest)
+	_, err := ParseManifest(path)
+	if err == nil {
+		t.Fatal("expected error for missing enum_dir")
+	}
+}
+
 func TestAllTestdataAppsHaveUniqueIDs(t *testing.T) {
 	catalogDir := filepath.Join("..", "..", "testdata", "catalog")
 	if _, err := os.Stat(catalogDir); os.IsNotExist(err) {

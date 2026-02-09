@@ -54,6 +54,7 @@ func (m *mockCM) ConfigureDevices(ctid int, devices []engine.DevicePassthrough) 
 func (m *mockCM) MountHostPath(ctid int, mpIndex int, hostPath, containerPath string, readOnly bool) error {
 	return nil
 }
+func (m *mockCM) AppendLXCConfig(ctid int, lines []string) error { return nil }
 func (m *mockCM) GetStorageInfo(ctx context.Context, storageID string) (*engine.StorageInfo, error) {
 	return &engine.StorageInfo{
 		ID:        storageID,
@@ -151,8 +152,8 @@ func TestHealthEndpoint(t *testing.T) {
 		t.Errorf("node = %v, want %q", body["node"], "testnode")
 	}
 	count := body["app_count"].(float64)
-	if count != 7 {
-		t.Errorf("app_count = %v, want 7", count)
+	if count != 8 {
+		t.Errorf("app_count = %v, want 8", count)
 	}
 }
 
@@ -168,12 +169,12 @@ func TestListAppsEndpoint(t *testing.T) {
 
 	body := decodeJSON(t, w)
 	total := body["total"].(float64)
-	if total != 7 {
-		t.Errorf("total = %v, want 7", total)
+	if total != 8 {
+		t.Errorf("total = %v, want 8", total)
 	}
 	apps := body["apps"].([]interface{})
-	if len(apps) != 7 {
-		t.Errorf("apps count = %d, want 7", len(apps))
+	if len(apps) != 8 {
+		t.Errorf("apps count = %d, want 8", len(apps))
 	}
 }
 

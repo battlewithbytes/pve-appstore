@@ -3,6 +3,9 @@ package proxmox
 import (
 	"context"
 	"fmt"
+	"io"
+	"os/exec"
+	"strings"
 
 	"github.com/battlewithbytes/pve-appstore/internal/engine"
 	"github.com/battlewithbytes/pve-appstore/internal/pct"
@@ -142,6 +145,27 @@ func (m *Manager) MountHostPath(ctid int, mpIndex int, hostPath, containerPath s
 		val += ",ro=1"
 	}
 	return pct.Set(ctid, fmt.Sprintf("-mp%d", mpIndex), val)
+}
+
+func (m *Manager) AppendLXCConfig(ctid int, lines []string) error {
+	confPath := fmt.Sprintf("/etc/pve/lxc/%d.conf", ctid)
+	content := "\n" + strings.Join(lines, "\n") + "\n"
+
+	// /etc/pve/ is owned by root:www-data (0640) on the pmxcfs FUSE filesystem.
+	// The service runs as the appstore user with ProtectSystem=strict, so we
+	// need sudo + nsenter to escape the mount namespace and write as root.
+	cmd := exec.Command(
+		"sudo", "/usr/bin/nsenter", "--mount=/proc/1/ns/mnt", "--",
+		"/usr/bin/tee", "-a", confPath,
+	)
+	cmd.Stdin = strings.NewReader(content)
+	cmd.Stdout = io.Discard // tee echoes input to stdout
+	var stderr strings.Builder
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("appending to LXC config %s: %w (%s)", confPath, err, stderr.String())
+	}
+	return nil
 }
 
 func (m *Manager) GetStorageInfo(ctx context.Context, storageID string) (*engine.StorageInfo, error) {

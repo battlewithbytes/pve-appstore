@@ -19,11 +19,13 @@ const sudoersContent = `# PVE App Store — managed sudoers file
 # pct exec/push: provisioning and shell access
 # pct set: device passthrough (GPU) — the Proxmox API restricts dev* to root@pam,
 #   so we apply device config post-creation via pct set on the host.
+# tee -a: append raw lxc.* lines to /etc/pve/lxc/*.conf (extra_config)
 # All other container lifecycle ops use the Proxmox REST API via API token.
 
 appstore ALL=(root) NOPASSWD: /usr/bin/nsenter --mount=/proc/1/ns/mnt -- /usr/sbin/pct exec *
 appstore ALL=(root) NOPASSWD: /usr/bin/nsenter --mount=/proc/1/ns/mnt -- /usr/sbin/pct push *
 appstore ALL=(root) NOPASSWD: /usr/bin/nsenter --mount=/proc/1/ns/mnt -- /usr/sbin/pct set *
+appstore ALL=(root) NOPASSWD: /usr/bin/nsenter --mount=/proc/1/ns/mnt -- /usr/bin/tee -a /etc/pve/lxc/*
 `
 
 const systemdUnit = `[Unit]

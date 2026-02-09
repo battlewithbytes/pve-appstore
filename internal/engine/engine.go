@@ -61,6 +61,7 @@ type ContainerManager interface {
 	GetStorageInfo(ctx context.Context, storageID string) (*StorageInfo, error)
 	ConfigureDevices(ctid int, devices []DevicePassthrough) error
 	MountHostPath(ctid int, mpIndex int, hostPath, containerPath string, readOnly bool) error
+	AppendLXCConfig(ctid int, lines []string) error
 }
 
 // MountPointOption defines a mount point for container creation.

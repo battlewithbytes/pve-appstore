@@ -1,0 +1,305 @@
+id: gluetun
+name: Gluetun VPN Client
+description: Multi-provider VPN client with built-in proxy servers and kill switch
+overview: |
+  Gluetun is a lightweight VPN client that supports 24+ providers including Mullvad, NordVPN, ProtonVPN, Surfshark, and Windscribe. It runs the official Gluetun binary inside a privileged LXC container, providing full WireGuard and OpenVPN support with an iptables-based kill switch.
+
+  Built-in HTTP and SOCKS5 proxy servers let you route traffic from other containers or devices through the VPN tunnel. The control API on port 8000 provides real-time status, public IP information, and dynamic server switching without restarts.
+
+  The container requires privileged mode for NET_ADMIN capabilities, TUN device access, and iptables firewall rules. After installation, configure other services to use the HTTP proxy at port 8888 or point their default gateway at this container.
+version: "3.40.0"
+categories:
+  - networking
+  - security
+tags:
+  - vpn
+  - wireguard
+  - openvpn
+  - proxy
+  - privacy
+homepage: https://github.com/qdm12/gluetun
+license: MIT
+maintainers:
+  - PVE App Store
+
+official: true
+lxc:
+  ostemplate: debian-12
+  defaults:
+    unprivileged: false
+    cores: 1
+    memory_mb: 256
+    disk_gb: 2
+    features:
+      - nesting
+    onboot: true
+  extra_config:
+    - "lxc.cgroup2.devices.allow: c 10:200 rwm"
+    - "lxc.mount.entry: /dev/net/tun dev/net/tun none bind,create=file"
+
+inputs:
+  # --- Provider ---
+  - key: vpn_provider
+    label: VPN Provider
+    type: select
+    required: true
+    group: Provider
+    description: The VPN service provider. Choose "custom" for manual OpenVPN/WireGuard configuration files.
+    help: Each provider requires different credentials — see Gluetun wiki for details
+    validation:
+      enum_dir: providers
+  - key: vpn_type
+    label: VPN Protocol
+    type: select
+    default: wireguard
+    required: true
+    group: Provider
+    description: VPN tunnel protocol. WireGuard is faster and lighter; OpenVPN has wider provider support.
+    help: Not all providers support both protocols
+    validation:
+      enum:
+        - wireguard
+        - openvpn
+  - key: vpn_port_forwarding
+    label: VPN Port Forwarding
+    type: boolean
+    default: false
+    required: false
+    group: Provider
+    description: Request a forwarded port from the VPN provider. The provider randomly assigns a port, which Gluetun writes to /tmp/gluetun/forwarded_port and exposes via the control API. Required for torrenting or hosting services through the VPN.
+    help: The assigned port is shown on the status page
+    show_when:
+      input: vpn_provider
+      values: [airvpn, private internet access, protonvpn, perfect privacy]
+
+  # --- OpenVPN ---
+  - key: openvpn_user
+    label: OpenVPN Username
+    type: secret
+    required: false
+    group: OpenVPN
+    description: Username for OpenVPN authentication. Required by most providers when using OpenVPN protocol.
+    help: Check your provider's dashboard for service credentials
+    show_when:
+      input: vpn_type
+      values: [openvpn]
+  - key: openvpn_password
+    label: OpenVPN Password
+    type: secret
+    required: false
+    group: OpenVPN
+    description: Password for OpenVPN authentication.
+    help: This is often different from your account login password
+    show_when:
+      input: vpn_type
+      values: [openvpn]
+
+  # --- WireGuard ---
+  - key: wireguard_private_key
+    label: WireGuard Private Key
+    type: secret
+    required: false
+    group: WireGuard
+    description: WireGuard private key. Required by most providers when using WireGuard protocol.
+    help: Generate from your provider's WireGuard configuration page
+    show_when:
+      input: vpn_type
+      values: [wireguard]
+  - key: wireguard_addresses
+    label: WireGuard Addresses
+    type: string
+    required: false
+    group: WireGuard
+    description: WireGuard interface address in CIDR notation (e.g. 10.64.222.21/32).
+    help: Provided by your VPN provider's WireGuard config
+    show_when:
+      input: vpn_type
+      values: [wireguard]
+  - key: wireguard_preshared_key
+    label: WireGuard Preshared Key
+    type: secret
+    required: false
+    group: WireGuard
+    description: Optional WireGuard preshared key for additional security.
+    help: Only some providers use this — leave blank if unsure
+    show_when:
+      input: vpn_type
+      values: [wireguard]
+  - key: wireguard_keepalive
+    label: WireGuard Keepalive Interval
+    type: string
+    default: ""
+    required: false
+    group: WireGuard
+    description: Persistent keepalive interval for WireGuard (e.g. 25s). Helps maintain connections behind NAT.
+    help: ProtonVPN recommends 25s. Leave blank for default behavior.
+    show_when:
+      input: vpn_type
+      values: [wireguard]
+
+  # --- Server Selection ---
+  - key: server_countries
+    label: Server Countries
+    type: string
+    required: false
+    group: Server
+    description: Comma-separated list of countries to connect through (e.g. "Netherlands,Switzerland").
+    help: Leave blank for automatic server selection
+  - key: server_regions
+    label: Server Regions
+    type: string
+    required: false
+    group: Server
+    description: Comma-separated list of regions (e.g. "Europe,North America").
+    help: More specific than countries
+  - key: server_cities
+    label: Server Cities
+    type: string
+    required: false
+    group: Server
+    description: Comma-separated list of cities (e.g. "Amsterdam,Zurich").
+    help: Most specific server selection
+  - key: server_hostnames
+    label: Server Hostnames
+    type: string
+    required: false
+    group: Server
+    description: Comma-separated list of specific server hostnames.
+    help: For advanced users who want a specific server
+
+  # --- Proxy ---
+  - key: httpproxy
+    label: Enable HTTP Proxy
+    type: boolean
+    default: true
+    required: false
+    group: Proxy
+    description: Run a built-in HTTP proxy on this container. Other services can route traffic through the VPN by using this proxy.
+    help: "Default port: 8888"
+  - key: httpproxy_port
+    label: HTTP Proxy Port
+    type: string
+    default: "8888"
+    required: false
+    group: Proxy
+    description: Port for the built-in HTTP proxy server.
+    help: Must be between 1024-65535
+  - key: shadowsocks
+    label: Enable Shadowsocks
+    type: boolean
+    default: false
+    required: false
+    group: Proxy
+    description: Run a built-in Shadowsocks proxy server for encrypted SOCKS5 proxying.
+    help: "Default port: 8388"
+  - key: shadowsocks_port
+    label: Shadowsocks Port
+    type: string
+    default: "8388"
+    required: false
+    group: Proxy
+    description: Port for the built-in Shadowsocks server.
+    help: Must be between 1024-65535
+
+  # --- Status ---
+  - key: status_port
+    label: Status Page Port
+    type: string
+    default: "8001"
+    required: false
+    group: Status
+    description: Port for the VPN status page showing your public IP, country, and connection status.
+    help: Visit http://<container-ip>:8001 to verify VPN is working
+
+  # --- Advanced ---
+  - key: timezone
+    label: Timezone
+    type: string
+    required: false
+    group: Advanced
+    description: Container timezone (e.g. America/New_York, Europe/London).
+    help: Leave blank for UTC
+  - key: updater_period
+    label: Server List Update Interval
+    type: string
+    default: "24h"
+    required: false
+    group: Advanced
+    description: How often Gluetun updates its server list from the provider. Set to 0 to disable.
+    help: "Format: 24h, 12h, 0 (disabled)"
+  - key: firewall_vpn_input_ports
+    label: Firewall Input Ports
+    type: string
+    required: false
+    group: Advanced
+    description: Comma-separated ports to manually allow through Gluetun's kill switch firewall on the VPN interface. This is separate from provider port forwarding — use this only if you need to open specific known ports.
+    help: Not needed when VPN Port Forwarding is on (that opens the assigned port automatically)
+  - key: extra_env
+    label: Extra Environment Variables
+    type: string
+    required: false
+    group: Advanced
+    description: Additional KEY=VALUE pairs for provider-specific settings (one per line). Security-critical settings (DNS_SERVER, DNS_KEEP_NAMESERVER, FIREWALL_OUTBOUND_SUBNETS) cannot be overridden.
+    help: "Example: OPENVPN_CUSTOM_CONFIG=/etc/gluetun/custom.ovpn"
+
+permissions:
+  packages:
+    - openvpn
+    - wireguard-tools
+    - iptables
+    - ca-certificates
+    - kmod
+    - curl
+    - jq
+  urls:
+    - "https://auth.docker.io/*"
+    - "https://registry-1.docker.io/*"
+  paths:
+    - "/"
+    - "/usr/sbin/"
+    - "/etc/systemd/system/"
+    - "/etc/sysctl.d/"
+    - "/etc/gluetun/"
+    - "/etc/"
+    - "/gluetun/"
+    - "/tmp/gluetun/"
+  services:
+    - gluetun
+    - gluetun-status
+  commands:
+    - chmod
+    - ln
+    - sysctl
+    - gluetun-entrypoint
+
+provisioning:
+  script: provision/install.py
+  timeout_sec: 600
+  redact_keys:
+    - openvpn_user
+    - openvpn_password
+    - wireguard_private_key
+    - wireguard_preshared_key
+
+outputs:
+  - key: status_page
+    label: VPN Status
+    value: "http://{{ip}}:{{status_port}}"
+  - key: http_proxy
+    label: HTTP Proxy
+    value: "http://{{ip}}:{{httpproxy_port}}"
+  - key: control_api
+    label: Control API
+    value: "http://{{ip}}:8000"
+  - key: forwarded_port_file
+    label: Forwarded Port File
+    value: "/tmp/gluetun/forwarded_port"
+  - key: forwarded_port_api
+    label: Forwarded Port API
+    value: "http://{{ip}}:8000/v1/portforward"
+  - key: vpn_provider
+    label: VPN Provider
+    value: "{{vpn_provider}}"
+  - key: vpn_type
+    label: VPN Protocol
+    value: "{{vpn_type}}"
