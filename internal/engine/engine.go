@@ -665,6 +665,11 @@ func (e *Engine) runUninstall(job *Job, inst *Install, keepVolumes bool) {
 	ctx.info("Uninstall complete. Container %d destroyed.", inst.CTID)
 }
 
+// ClearJobs deletes all terminal (completed/failed/cancelled) jobs and their logs.
+func (e *Engine) ClearJobs() (int64, error) {
+	return e.store.ClearTerminalJobs()
+}
+
 // GetJob returns a job by ID.
 func (e *Engine) GetJob(id string) (*Job, error) {
 	return e.store.GetJob(id)

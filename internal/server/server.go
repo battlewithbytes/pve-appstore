@@ -96,6 +96,7 @@ func New(cfg *config.Config, cat *catalog.Catalog, eng *engine.Engine, spaFS fs.
 	// API routes — install engine
 	mux.HandleFunc("POST /api/apps/{id}/install", s.withAuth(s.handleInstallApp))
 	mux.HandleFunc("GET /api/jobs", s.handleListJobs)
+	mux.HandleFunc("DELETE /api/jobs", s.withAuth(s.handleClearJobs))
 	mux.HandleFunc("GET /api/jobs/{id}", s.handleGetJob)
 	mux.HandleFunc("GET /api/jobs/{id}/logs", s.handleGetJobLogs)
 	mux.HandleFunc("POST /api/jobs/{id}/cancel", s.withAuth(s.handleCancelJob))

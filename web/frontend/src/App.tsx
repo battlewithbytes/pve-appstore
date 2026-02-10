@@ -2315,12 +2315,40 @@ function ConfigView({ requireAuth }: { requireAuth: (cb: () => void) => void }) 
 function JobsList() {
   const [jobs, setJobs] = useState<Job[]>([])
   const [loading, setLoading] = useState(true)
+  const [clearing, setClearing] = useState(false)
+  const [confirmClear, setConfirmClear] = useState(false)
 
-  useEffect(() => { api.jobs().then(d => { setJobs(d.jobs || []); setLoading(false) }) }, [])
+  const load = () => api.jobs().then(d => { setJobs(d.jobs || []); setLoading(false) })
+  useEffect(() => { load() }, [])
+
+  const terminalStates = ['completed', 'failed', 'cancelled']
+  const hasTerminalJobs = jobs.some(j => terminalStates.includes(j.state))
+
+  const handleClear = async () => {
+    setClearing(true)
+    try {
+      await api.clearJobs()
+      setConfirmClear(false)
+      await load()
+    } catch { /* ignore */ }
+    setClearing(false)
+  }
 
   return (
     <div>
-      <h2 className="text-xl font-bold text-text-primary mb-5 font-mono">Jobs</h2>
+      <div className="flex justify-between items-center mb-5">
+        <h2 className="text-xl font-bold text-text-primary font-mono">Jobs</h2>
+        {hasTerminalJobs && !confirmClear && (
+          <button onClick={() => setConfirmClear(true)} className="px-3 py-1.5 text-sm rounded border border-border text-text-muted hover:text-red-400 hover:border-red-400/50 transition-colors font-mono">Clear</button>
+        )}
+        {confirmClear && (
+          <div className="flex items-center gap-2">
+            <span className="text-sm text-text-muted">Delete completed/failed jobs?</span>
+            <button onClick={handleClear} disabled={clearing} className="px-3 py-1.5 text-sm rounded bg-red-500/20 border border-red-500/50 text-red-400 hover:bg-red-500/30 transition-colors font-mono disabled:opacity-50">{clearing ? 'Clearing...' : 'Confirm'}</button>
+            <button onClick={() => setConfirmClear(false)} className="px-3 py-1.5 text-sm rounded border border-border text-text-muted hover:text-text-primary transition-colors font-mono">Cancel</button>
+          </div>
+        )}
+      </div>
       {loading ? <Center>Loading...</Center> : jobs.length === 0 ? <Center>No jobs yet</Center> : (
         <div className="flex flex-col gap-2">
           {jobs.map(j => (

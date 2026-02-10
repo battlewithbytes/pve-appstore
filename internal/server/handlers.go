@@ -309,6 +309,19 @@ func (s *Server) handleCancelJob(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "cancelled", "job_id": id})
 }
 
+func (s *Server) handleClearJobs(w http.ResponseWriter, r *http.Request) {
+	if s.engine == nil {
+		writeError(w, http.StatusServiceUnavailable, "engine not available")
+		return
+	}
+	n, err := s.engine.ClearJobs()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]int64{"deleted": n})
+}
+
 func (s *Server) handleListJobs(w http.ResponseWriter, r *http.Request) {
 	if s.engine == nil {
 		writeJSON(w, http.StatusOK, map[string]interface{}{"jobs": []interface{}{}, "total": 0})

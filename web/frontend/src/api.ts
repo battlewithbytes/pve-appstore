@@ -44,6 +44,8 @@ export const api = {
 
   jobs: () => fetchJSON<JobsResponse>(`${BASE}/jobs`),
 
+  clearJobs: () => fetchJSON<{ deleted: number }>(`${BASE}/jobs`, { method: 'DELETE' }),
+
   job: (id: string) => fetchJSON<Job>(`${BASE}/jobs/${id}`),
 
   cancelJob: (id: string) =>

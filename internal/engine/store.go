@@ -538,6 +538,23 @@ func (s *Store) RecoverOrphanedJobs() (int, error) {
 	return int(affected), nil
 }
 
+// ClearTerminalJobs deletes all jobs in a terminal state (completed, failed, cancelled)
+// and their associated log entries. Returns the number of jobs deleted.
+func (s *Store) ClearTerminalJobs() (int64, error) {
+	// Delete logs for terminal jobs first (foreign key)
+	_, err := s.db.Exec(`DELETE FROM job_logs WHERE job_id IN (
+		SELECT id FROM jobs WHERE state IN ('completed','failed','cancelled')
+	)`)
+	if err != nil {
+		return 0, err
+	}
+	res, err := s.db.Exec(`DELETE FROM jobs WHERE state IN ('completed','failed','cancelled')`)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
 // scanJobRow scans a single job from a Rows iterator.
 func scanJobRow(rows *sql.Rows) (*Job, error) {
 	var job Job

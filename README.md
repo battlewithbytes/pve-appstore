@@ -1,107 +1,128 @@
 # PVE App Store
 
-One-click LXC container apps for Proxmox VE. An "Unraid Apps"-style application store that provisions self-contained containers from a Git-based catalog with first-class GPU support.
+An app store for Proxmox VE — install self-hosted apps in one click.
 
-## Features
+PVE App Store lets you browse a catalog of self-hosted applications and deploy them as LXC containers on your Proxmox server, all from a web UI. Pick an app, tweak a few settings, and the store handles container creation, networking, and provisioning automatically.
 
-- **One-click installs** — Browse, configure, and deploy apps from a web UI
-- **Git-based catalog** — Apps defined as YAML manifests in a Git repository; stays up to date automatically
-- **Sandboxed provisioning** — Python SDK with allowlist-enforced permissions; apps can only install packages, write files, and enable services they've declared
-- **GPU passthrough** — Intel QSV and NVIDIA profiles for media transcoding and AI workloads
-- **Proxmox-native** — Uses the Proxmox REST API for container lifecycle; runs as a systemd service
-- **Unprivileged by default** — Containers run unprivileged with minimal sudo surface (pct exec/push only)
+![App Catalog](docs/screenshots/apps.png)
+
+## Highlights
+
+- **One-click install** from a web UI — no manual container setup or shell scripts
+- **Growing catalog** of apps in a [separate Git repo](https://github.com/battlewithbytes/pve-appstore-catalog), from media servers to AI tools
+- **Multi-app stacks** — export/import groups of apps as a single YAML file
+- **GPU passthrough** — Intel QSV and NVIDIA profiles for transcoding and AI workloads
+- **Config backup & restore** — save your installs and settings as portable YAML
+- **Sandboxed provisioning** — apps run through a Python SDK with enforced permission boundaries
 
 ## Quick Start
 
-**Requirements:** Proxmox VE 8.x+, single node.
+**Prerequisites:** Proxmox VE 8.x on a single node.
 
 ```bash
-# Download and run the interactive installer
 curl -fsSL https://github.com/battlewithbytes/pve-appstore/releases/latest/download/install.sh | bash
 ```
 
 The installer will:
-1. Detect your Proxmox host and architecture
+
+1. Detect your Proxmox host and CPU architecture
 2. Download the latest release binary
-3. Run the TUI setup wizard (Proxmox API token, catalog URL, network bridge, storage)
-4. Create the systemd service and start the web UI
+3. Walk you through a setup wizard (API token, catalog URL, storage, network bridge)
+4. Create a systemd service and start the web UI
 
-After setup, open the web UI to browse and install apps.
+Open **http://your-proxmox-ip:8088** to browse and install apps.
 
-## Architecture
+## Available Apps
 
-```
-pve-appstore (Go binary)
-  ├── Web UI (React SPA)          — browse, search, install apps
-  ├── REST API                    — app catalog, install jobs, auth
-  ├── Catalog module              — git clone/pull, manifest validation
-  ├── Install engine              — job queue, CT provisioning pipeline
-  ├── Proxmox API client          — container lifecycle, task polling
-  └── Python SDK (embedded)       — sandboxed provisioning inside containers
-```
+| App | Category | GPU |
+|-----|----------|-----|
+| Crawl4AI | AI | — |
+| Gluetun VPN Client | Networking | — |
+| Home Assistant | Automation | — |
+| Jellyfin | Media | Intel / NVIDIA |
+| Nginx | Web | — |
+| Ollama | AI | Intel / NVIDIA |
+| Plex Media Server | Media | Intel / NVIDIA |
 
-The service runs as an unprivileged `appstore` user. Container operations use the Proxmox REST API with token-based auth. Provisioning scripts run inside containers via `pct exec`, with the embedded Python SDK enforcing permission boundaries.
+See the [catalog repo](https://github.com/battlewithbytes/pve-appstore-catalog) for the full list and details.
+
+## Screenshots
+
+### Installed Apps
+
+Live status, resource bars, network links, and uptime — all refreshed from the Proxmox API.
+
+![Installed Apps](docs/screenshots/installed.png)
+
+### Install Detail
+
+Per-container metrics (CPU, memory, disk, network), mount points, service URLs, and container config at a glance.
+
+![Install Detail](docs/screenshots/details.png)
+
+### Web Terminal
+
+Drop into any container shell directly from the browser.
+
+![Web Terminal](docs/screenshots/shell.png)
+
+### Multi-App Stacks
+
+Bundle multiple apps into a single container with a step-by-step wizard.
+
+![Create Stack — Apps](docs/screenshots/createstack.png)
+![Create Stack — Resources](docs/screenshots/stack.png)
+
+### Config Export & Restore
+
+Back up all installs and stacks as portable YAML, then restore on another node.
+
+![Configuration](docs/screenshots/config.png)
+
+## How It Works
+
+The catalog is a Git repository of app manifests (YAML + Python install scripts). PVE App Store clones it locally and serves the catalog through a web UI. When you install an app, a job engine creates an LXC container via the Proxmox REST API, pushes the install script inside, and runs it through a sandboxed Python SDK that enforces declared permissions.
+
+## Writing Your Own App
+
+App manifests are YAML files paired with a Python install script. The [App Development Tutorial](tutorial.md) walks through building one from scratch, and the [catalog repo](https://github.com/battlewithbytes/pve-appstore-catalog) has a quickstart guide.
+
+## Security
+
+- Runs as an unprivileged `appstore` user under systemd with `ProtectSystem=strict`
+- Uses Proxmox API tokens — never root credentials — scoped to a single pool
+- Provisioning SDK enforces per-app permission allowlists; no arbitrary shell execution
+
+See [SECURITY.md](SECURITY.md) for the full security model.
 
 ## Development
 
 ```bash
-# Install dependencies
-make deps
-
-# Run tests (Go + Python SDK)
-make test
-cd sdk/python && python3 -m pytest tests/
-
-# Build binary
-make build
-
-# Run dev server with test catalog
-make run-serve
-
-# Build frontend
-make frontend
-
-# Cross-compile release binaries
-make release
+make deps          # install Go + JS dependencies
+make build         # compile binary with version info
+make test          # Go tests + Python SDK tests
+make frontend      # build React SPA
+make run-serve     # dev server with test catalog
+make release       # cross-compile linux/amd64 + arm64
 ```
 
 ### Project Structure
 
 ```
-cmd/pve-appstore/       CLI entry point (cobra)
+cmd/pve-appstore/        CLI entry point (cobra)
 internal/
-  config/               config.yml parsing and validation
-  catalog/              git catalog, manifest parsing, search
-  server/               HTTP server, REST API, auth, SPA serving
-  engine/               install/uninstall job pipeline
-  proxmox/              Proxmox REST API client
-  pct/                  pct exec/push wrappers
-  installer/            TUI setup wizard
-  version/              build version info
-sdk/python/appstore/    Python provisioning SDK
-web/frontend/           React + TypeScript SPA
-deploy/                 install.sh one-liner
-testdata/catalog/       sample app catalog for testing
+  config/                config.yml parsing and validation
+  catalog/               git catalog, manifest parsing, search
+  server/                HTTP server, REST API, auth, SPA serving
+  engine/                install/uninstall job pipeline
+  proxmox/               Proxmox REST API client
+  pct/                   pct exec/push wrappers
+  installer/             TUI setup wizard
+sdk/python/appstore/     Python provisioning SDK
+web/frontend/            React + TypeScript SPA
+deploy/                  install.sh one-liner
+testdata/catalog/        sample app catalog for testing
 ```
-
-## App Catalog
-
-Apps live in a separate Git repository ([pve-appstore-catalog](https://github.com/battlewithbytes/pve-appstore-catalog)). Each app has a YAML manifest defining metadata, LXC defaults, user inputs, permissions, and a Python install script.
-
-Use the web UI to browse and search the catalog — filter by name, category, or tags.
-
-For details on writing apps, see the [App Development Tutorial](tutorial.md) or the [catalog README](https://github.com/battlewithbytes/pve-appstore-catalog).
-
-## Security
-
-- Apps declare permissions in their manifest; the SDK enforces them at runtime
-- No arbitrary shell execution — all provisioning uses the Python SDK
-- Containers are unprivileged by default with nesting enabled
-- The service uses Proxmox API tokens (not root credentials)
-- Pool and tag boundaries prevent touching unmanaged containers
-- Secrets are never logged and are redacted in job output
-
-See [SECURITY.md](SECURITY.md) for the full security model.
 
 ## License
 
