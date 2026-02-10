@@ -29,7 +29,7 @@ type Server struct {
 // isPathAllowed checks whether a filesystem path is under a configured storage root.
 func (s *Server) isPathAllowed(requested string) bool {
 	if len(s.allowedPaths) == 0 {
-		return true // no scoping if storages not resolved (e.g. dev mode)
+		return false // deny all if no storage paths resolved
 	}
 	cleaned := filepath.Clean(requested)
 	for _, allowed := range s.allowedPaths {
@@ -137,6 +137,7 @@ func New(cfg *config.Config, cat *catalog.Catalog, eng *engine.Engine, spaFS fs.
 	}
 
 	var handler http.Handler = mux
+	handler = maxBodyMiddleware(handler, 1<<20) // 1 MB limit for API requests
 	handler = corsMiddleware(handler)
 	handler = logMiddleware(handler)
 
@@ -166,6 +167,17 @@ func (s *Server) Addr() string {
 	return s.http.Addr
 }
 
+func maxBodyMiddleware(next http.Handler, maxBytes int64) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Only limit request body for API POST/PUT/DELETE, not WebSocket upgrades or static assets
+		if r.Body != nil && strings.HasPrefix(r.URL.Path, "/api/") && r.Method != "GET" &&
+			!strings.Contains(r.Header.Get("Upgrade"), "websocket") {
+			r.Body = http.MaxBytesReader(w, r.Body, maxBytes)
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
 func logMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
@@ -176,7 +188,21 @@ func logMiddleware(next http.Handler) http.Handler {
 
 func corsMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
+		origin := r.Header.Get("Origin")
+		if origin != "" {
+			// Reflect the request origin only if it matches this server's host,
+			// or if no Origin header is present (same-origin requests).
+			host := r.Host
+			if strings.HasPrefix(origin, "http://"+host) || strings.HasPrefix(origin, "https://"+host) {
+				w.Header().Set("Access-Control-Allow-Origin", origin)
+				w.Header().Set("Access-Control-Allow-Credentials", "true")
+			}
+			// For dev: also allow localhost origins connecting to any host
+			if strings.Contains(origin, "://localhost:") || strings.Contains(origin, "://127.0.0.1:") {
+				w.Header().Set("Access-Control-Allow-Origin", origin)
+				w.Header().Set("Access-Control-Allow-Credentials", "true")
+			}
+		}
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Upgrade, Connection")
 		if r.Method == "OPTIONS" {
@@ -185,6 +211,20 @@ func corsMiddleware(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// allowedOriginPatterns returns WebSocket origin patterns matching the server's host.
+func (s *Server) allowedOriginPatterns(r *http.Request) []string {
+	patterns := []string{"localhost:*", "127.0.0.1:*"}
+	if host := r.Host; host != "" {
+		// Strip port if present for the pattern
+		h := host
+		if idx := strings.LastIndex(h, ":"); idx > 0 {
+			h = h[:idx]
+		}
+		patterns = append(patterns, h+":*", host)
+	}
+	return patterns
 }
 
 // spaHandler serves static files from the SPA filesystem, falling back to index.html.

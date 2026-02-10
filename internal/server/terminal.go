@@ -41,9 +41,9 @@ func (s *Server) handleTerminal(w http.ResponseWriter, r *http.Request) {
 
 // handleTerminalForCTID opens a WebSocket terminal to a container by CTID.
 func (s *Server) handleTerminalForCTID(w http.ResponseWriter, r *http.Request, ctid int) {
-	// Accept WebSocket
+	// Accept WebSocket — restrict to same host + localhost for dev
 	conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
-		OriginPatterns: []string{"*"},
+		OriginPatterns: s.allowedOriginPatterns(r),
 	})
 	if err != nil {
 		return
@@ -145,9 +145,9 @@ func (s *Server) handleJournalLogs(w http.ResponseWriter, r *http.Request) {
 
 // handleJournalLogsForCTID streams journalctl output from a container by CTID via WebSocket.
 func (s *Server) handleJournalLogsForCTID(w http.ResponseWriter, r *http.Request, ctid int) {
-	// Accept WebSocket
+	// Accept WebSocket — restrict to same host + localhost for dev
 	conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
-		OriginPatterns: []string{"*"},
+		OriginPatterns: s.allowedOriginPatterns(r),
 	})
 	if err != nil {
 		return

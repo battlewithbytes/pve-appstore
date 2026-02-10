@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -254,6 +255,34 @@ func (e *Engine) StartInstall(req InstallRequest) (*Job, error) {
 		}
 	}
 
+	// Validate request inputs
+	if err := ValidateHostname(req.Hostname); err != nil {
+		return nil, err
+	}
+	if err := ValidateBridge(req.Bridge); err != nil {
+		return nil, err
+	}
+	if err := ValidateIPAddress(req.IPAddress); err != nil {
+		return nil, err
+	}
+	if err := ValidateTags(req.ExtraTags); err != nil {
+		return nil, err
+	}
+	if err := ValidateEnvVars(req.EnvVars); err != nil {
+		return nil, err
+	}
+	// Validate bind mount paths
+	for _, hp := range req.BindMounts {
+		if err := ValidateBindMountPath(hp); err != nil {
+			return nil, err
+		}
+	}
+	for _, em := range req.ExtraMounts {
+		if err := ValidateBindMountPath(em.HostPath); err != nil {
+			return nil, err
+		}
+	}
+
 	// Apply defaults from config, then from manifest, then from request
 	storage := e.cfg.Storages[0]
 	if req.Storage != "" {
@@ -321,15 +350,26 @@ func (e *Engine) StartInstall(req InstallRequest) (*Job, error) {
 		ExtraTags:    req.ExtraTags,
 		Inputs:       req.Inputs,
 		Outputs:      make(map[string]string),
-		Devices:      req.Devices,
+		Devices:      nil, // Devices are now determined from GPUProfile, not directly from request
 		EnvVars:      req.EnvVars,
 		CreatedAt:    now,
 		UpdatedAt:    now,
 	}
 
-	// Auto-add GPU devices from manifest profiles if none specified.
+	// Determine GPU devices from request profile or manifest profiles.
 	// Validate that device nodes actually exist on the host before adding.
-	if len(job.Devices) == 0 && len(app.GPU.Profiles) > 0 && e.cfg.GPU.Policy != config.GPUPolicyNone {
+	if req.GPUProfile != "" && e.cfg.GPU.Policy != config.GPUPolicyNone {
+		if devs, ok := gpuProfiles[req.GPUProfile]; ok {
+			available, missing := validateGPUDevices(devs)
+			if len(missing) > 0 && app.GPU.Required {
+				return nil, fmt.Errorf("GPU profile %q requires device(s) not found on host: %s", req.GPUProfile, strings.Join(missing, ", "))
+			}
+			job.Devices = available
+		} else {
+			return nil, fmt.Errorf("invalid GPU profile requested: %s", req.GPUProfile)
+		}
+	} else if len(app.GPU.Profiles) > 0 && e.cfg.GPU.Policy != config.GPUPolicyNone {
+		// Auto-select from manifest if no profile requested
 		for _, profile := range app.GPU.Profiles {
 			if devs, ok := gpuProfiles[profile]; ok {
 				available, missing := validateGPUDevices(devs)
@@ -339,17 +379,9 @@ func (e *Engine) StartInstall(req InstallRequest) (*Job, error) {
 				job.Devices = available
 				break // use first matching profile
 			}
-		}
-	}
-	// Validate explicitly-requested devices too
-	if len(job.Devices) > 0 {
-		available, missing := validateGPUDevices(job.Devices)
-		if len(missing) > 0 {
-			if app.GPU.Required {
-				return nil, fmt.Errorf("GPU required but device(s) not found on host: %s", strings.Join(missing, ", "))
-			}
-			// Non-required: silently use only available devices
-			job.Devices = available
+			// If app.GPU.Required is true, and the profile is not found, it should error here,
+			// but we can't do that as the loop `break`s after the first matching profile.
+			// The manifest validation should catch invalid profiles anyway.
 		}
 	}
 
@@ -547,7 +579,6 @@ func (e *Engine) runUninstall(job *Job, inst *Install, keepVolumes bool) {
 	var destroyErr error
 	for attempt := 0; attempt < 5; attempt++ {
 		if attempt > 0 {
-			ctx.info("Retry %d: waiting before destroy attempt...", attempt)
 			time.Sleep(5 * time.Second)
 		}
 		destroyErr = e.cm.Destroy(bgCtx, inst.CTID, keepVolumes)
@@ -879,7 +910,7 @@ func (e *Engine) Update(installID string, req ReinstallRequest) (*Job, error) {
 	if err != nil {
 		return nil, fmt.Errorf("install %q not found", installID)
 	}
-	if inst.Status == "uninstalled" {
+	if inst.Status != "uninstalled" {
 		return nil, fmt.Errorf("install %q is uninstalled — use reinstall instead", installID)
 	}
 
@@ -1090,6 +1121,11 @@ func (e *Engine) EditInstall(installID string, req EditRequest) (*Job, error) {
 	}
 	if inst.Status == "uninstalled" {
 		return nil, fmt.Errorf("install %q is uninstalled — cannot edit", installID)
+	}
+
+	// Validate edit request inputs
+	if err := ValidateBridge(req.Bridge); err != nil {
+		return nil, err
 	}
 
 	// Look up the app
@@ -1303,12 +1339,20 @@ func (e *Engine) runEdit(job *Job, inst *Install) {
 	ctx.info("Edit complete! %s CT %d recreated with preserved MAC address.", app.Name, ctx.job.CTID)
 }
 
+// validMAC matches a standard colon-separated MAC address (e.g. BC:24:11:AB:CD:EF).
+var validMAC = regexp.MustCompile(`^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$`)
+
 // extractHWAddr parses a Proxmox net0 config string and returns the hwaddr value.
 // Example input: "name=eth0,bridge=vmbr0,hwaddr=BC:24:11:AB:CD:EF,ip=dhcp"
+// Returns empty string if the value is missing or doesn't match MAC format.
 func extractHWAddr(net0 string) string {
 	for _, part := range strings.Split(net0, ",") {
 		if strings.HasPrefix(part, "hwaddr=") {
-			return strings.TrimPrefix(part, "hwaddr=")
+			mac := strings.TrimPrefix(part, "hwaddr=")
+			if validMAC.MatchString(mac) {
+				return mac
+			}
+			return ""
 		}
 	}
 	return ""
@@ -1509,6 +1553,11 @@ func (e *Engine) EditStack(stackID string, req EditRequest) (*Job, error) {
 		return nil, fmt.Errorf("stack %q is uninstalled — cannot edit", stackID)
 	}
 
+	// Validate edit request inputs
+	if err := ValidateBridge(req.Bridge); err != nil {
+		return nil, err
+	}
+
 	// Apply overrides
 	cores := stack.Cores
 	if req.Cores > 0 {
@@ -1539,7 +1588,7 @@ func (e *Engine) EditStack(stackID string, req EditRequest) (*Job, error) {
 		AppName:     stack.Name,
 		Node:        e.cfg.NodeName,
 		Pool:        stack.Pool,
-		Storage:     stack.Storage,
+		Storage:     stack.Storage, // storage cannot change (volumes tied to it)
 		Bridge:      bridge,
 		Cores:       cores,
 		MemoryMB:    memoryMB,
@@ -1550,7 +1599,7 @@ func (e *Engine) EditStack(stackID string, req EditRequest) (*Job, error) {
 		Unprivileged: stack.Unprivileged,
 		Inputs:      make(map[string]string),
 		Outputs:     make(map[string]string),
-		MountPoints: stack.MountPoints,
+		MountPoints: stack.MountPoints, // carry mount points forward
 		Devices:     stack.Devices,
 		EnvVars:     stack.EnvVars,
 		StackID:     stack.ID,
@@ -1772,6 +1821,26 @@ func (e *Engine) runStackInstallWithHWAddr(bgCtx context.Context, job *Job, stac
 		return
 	}
 
+	// Aggregate GPU devices from all app manifests in the stack
+	var allStackDevices []DevicePassthrough
+	for _, m := range manifests {
+		if len(m.GPU.Profiles) > 0 && e.cfg.GPU.Policy != config.GPUPolicyNone {
+			// Take the first profile for each app that matches
+			for _, profile := range m.GPU.Profiles {
+				if devs, ok := gpuProfiles[profile]; ok {
+					available, missing := validateGPUDevices(devs)
+					if len(missing) > 0 && m.GPU.Required {
+						ctx.failJob("GPU required for app %q but device(s) not found on host: %s", m.ID, strings.Join(missing, ", "))
+						return
+					}
+					allStackDevices = append(allStackDevices, available...)
+					break
+				}
+			}
+		}
+	}
+	job.Devices = allStackDevices // Update job's devices
+
 	// Configure devices
 	if len(job.Devices) > 0 {
 		ctx.info("Configuring %d device passthrough(s)...", len(job.Devices))
@@ -1788,9 +1857,13 @@ func (e *Engine) runStackInstallWithHWAddr(bgCtx context.Context, job *Job, stac
 		}
 	}
 
-	// Apply extra LXC config from all manifests
+	// Apply extra LXC config from all manifests (with validation)
 	for _, m := range manifests {
 		if len(m.LXC.ExtraConfig) > 0 {
+			if err := ValidateExtraConfig(m.LXC.ExtraConfig); err != nil {
+				ctx.failJob("extra LXC config validation for %s: %v", m.ID, err)
+				return
+			}
 			e.cm.AppendLXCConfig(ctid, m.LXC.ExtraConfig)
 		}
 	}

@@ -23,6 +23,14 @@ web/frontend/node_modules/
 __pycache__/
 *.pyc
 
+# Secrets / keys
+*.pem
+*.key
+*.p12
+*.pfx
+.env
+.env.*
+
 # OS
 .DS_Store
 Thumbs.db

@@ -1,10 +1,13 @@
 package installer
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 
 	"golang.org/x/crypto/bcrypt"
@@ -58,12 +61,7 @@ WantedBy=multi-user.target
 `
 
 // ApplySystem executes all system changes after the TUI completes.
-func ApplySystem(answers *InstallerAnswers, res *DiscoveredResources) error {
-	nums, err := answers.ParseNumerics()
-	if err != nil {
-		return fmt.Errorf("invalid input: %w", err)
-	}
-
+func ApplySystem(answers *InstallerAnswers, res *DiscoveredResources, port int) error {
 	steps := []struct {
 		name string
 		fn   func() error
@@ -72,7 +70,7 @@ func ApplySystem(answers *InstallerAnswers, res *DiscoveredResources) error {
 		{"Setting up Proxmox API token", func() error { return createAPIToken(answers, res) }},
 		{"Creating system user", createSystemUser},
 		{"Creating directories", createDirectories},
-		{"Writing configuration", func() error { return writeConfig(answers, nums, res) }},
+		{"Writing configuration", func() error { return writeConfig(answers, port, res) }},
 		{"Installing sudoers", installSudoers},
 		{"Installing systemd unit", installSystemdUnit},
 		{"Starting service", startService},
@@ -245,16 +243,29 @@ func createDirectories() error {
 	return nil
 }
 
-func writeConfig(answers *InstallerAnswers, nums *ParsedNumerics, res *DiscoveredResources) error {
+func writeConfig(answers *InstallerAnswers, port int, res *DiscoveredResources) error {
+	cores, err := strconv.Atoi(answers.CoresStr)
+	if err != nil {
+		return fmt.Errorf("invalid default cores: %w", err)
+	}
+	memoryMB, err := strconv.Atoi(answers.MemoryMBStr)
+	if err != nil {
+		return fmt.Errorf("invalid default memory: %w", err)
+	}
+	diskGB, err := strconv.Atoi(answers.DiskGBStr)
+	if err != nil {
+		return fmt.Errorf("invalid default disk: %w", err)
+	}
+
 	cfg := &config.Config{
 		NodeName: res.NodeName,
 		Pool:     answers.EffectivePool(),
 		Storages: answers.Storages,
 		Bridges:  answers.Bridges,
 		Defaults: config.ResourceConfig{
-			Cores:    nums.Cores,
-			MemoryMB: nums.MemoryMB,
-			DiskGB:   nums.DiskGB,
+			Cores:    cores,
+			MemoryMB: memoryMB,
+			DiskGB:   diskGB,
 		},
 		Security: config.SecurityConfig{
 			UnprivilegedOnly: answers.UnprivilegedOnly,
@@ -262,7 +273,7 @@ func writeConfig(answers *InstallerAnswers, nums *ParsedNumerics, res *Discovere
 		},
 		Service: config.ServiceConfig{
 			BindAddress: answers.BindAddress,
-			Port:        nums.Port,
+			Port:        port,
 		},
 		Auth: config.AuthConfig{
 			Mode: answers.AuthMode,
@@ -293,6 +304,14 @@ func writeConfig(answers *InstallerAnswers, nums *ParsedNumerics, res *Discovere
 			return fmt.Errorf("hashing password: %w", err)
 		}
 		cfg.Auth.PasswordHash = string(hash)
+	}
+	// Generate HMAC secret if empty (will be saved when config is saved)
+	if cfg.Auth.HMACSecret == "" {
+		secretBytes := make([]byte, 32)
+		if _, err := rand.Read(secretBytes); err != nil {
+			return fmt.Errorf("failed to generate HMAC secret: %w", err)
+		}
+		cfg.Auth.HMACSecret = hex.EncodeToString(secretBytes)
 	}
 
 	path := config.DefaultConfigPath
@@ -362,4 +381,3 @@ func startService() error {
 
 	return nil
 }
-

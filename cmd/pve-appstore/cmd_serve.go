@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"io/fs"
 	"net"
@@ -54,6 +56,21 @@ var serveCmd = &cobra.Command{
 		cfg, err := config.Load(serveConfigPath)
 		if err != nil {
 			return fmt.Errorf("failed to load config: %w", err)
+		}
+
+		// Generate HMAC secret if missing
+		if cfg.Auth.HMACSecret == "" {
+			secretBytes := make([]byte, 32)
+			if _, err := rand.Read(secretBytes); err != nil {
+				return fmt.Errorf("failed to generate HMAC secret: %w", err)
+			}
+			cfg.Auth.HMACSecret = hex.EncodeToString(secretBytes)
+			if err := cfg.Save(serveConfigPath); err != nil {
+				fmt.Printf("  auth:    WARNING: generated HMAC secret but could not persist to %s: %v\n", serveConfigPath, err)
+				fmt.Printf("           Sessions will not survive service restarts. Add hmac_secret to your config.\n")
+			} else {
+				fmt.Printf("  auth:    generated new HMAC secret and saved to %s\n", serveConfigPath)
+			}
 		}
 
 		fmt.Printf("PVE App Store starting...\n")

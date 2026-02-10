@@ -1,0 +1,4 @@
+# Test configuration for Ollama
+# Skip model download during testing — it's slow and not needed to verify install.
+inputs:
+  model: ""

@@ -2,7 +2,9 @@ package installer
 
 import (
 	"fmt"
+	"net"
 	"strings"
+	"regexp"
 
 	"github.com/charmbracelet/huh"
 
@@ -97,12 +99,7 @@ func newPoolGroup(answers *InstallerAnswers) *huh.Group {
 		huh.NewInput().
 			Title("New pool name").
 			Value(&answers.NewPool).
-			Validate(func(s string) error {
-				if strings.TrimSpace(s) == "" {
-					return fmt.Errorf("pool name cannot be empty")
-				}
-				return nil
-			}),
+			Validate(ValidateProxmoxID),
 	).WithHideFunc(func() bool { return answers.PoolChoice != "__new__" })
 }
 
@@ -129,12 +126,14 @@ func placementGroup(res *DiscoveredResources, answers *InstallerAnswers) *huh.Gr
 			Title("Allowed Storages").
 			Description("Select one or more storages for container root filesystems.").
 			Options(storageOpts...).
-			Value(&answers.Storages),
+			Value(&answers.Storages).
+			Validate(ValidateMultiSelectProxmoxIDs),
 		huh.NewMultiSelect[string]().
 			Title("Allowed Network Bridges").
 			Description("Select one or more network bridges for containers.").
 			Options(bridgeOpts...).
-			Value(&answers.Bridges),
+			Value(&answers.Bridges).
+			Validate(ValidateMultiSelectProxmoxIDs),
 	)
 }
 
@@ -175,12 +174,7 @@ func serviceGroup(answers *InstallerAnswers) *huh.Group {
 			Title("Bind Address").
 			Description("IP address to listen on. Use 0.0.0.0 for all interfaces.").
 			Value(&answers.BindAddress).
-			Validate(func(s string) error {
-				if strings.TrimSpace(s) == "" {
-					return fmt.Errorf("bind address cannot be empty")
-				}
-				return nil
-			}),
+			Validate(ValidateIPAddress),
 		huh.NewInput().
 			Title("Port").
 			Value(&answers.PortStr).
@@ -263,10 +257,12 @@ func catalogGroup(answers *InstallerAnswers) *huh.Group {
 	return huh.NewGroup(
 		huh.NewInput().
 			Title("Catalog Repository URL").
-			Value(&answers.CatalogURL),
+			Value(&answers.CatalogURL).
+			Validate(ValidateCatalogURL),
 		huh.NewInput().
 			Title("Branch").
-			Value(&answers.Branch),
+			Value(&answers.Branch).
+			Validate(ValidateCatalogBranch),
 		huh.NewSelect[string]().
 			Title("Auto-refresh Schedule").
 			Options(
@@ -331,4 +327,74 @@ func confirmGroup(answers *InstallerAnswers) *huh.Group {
 			Title("Proceed with installation?").
 			Value(&answers.Confirmed),
 	)
+}
+
+// ValidateProxmoxID ensures a string is a valid Proxmox identifier (no leading hyphens, alphanumeric, etc.).
+func ValidateProxmoxID(s string) error {
+	if strings.TrimSpace(s) == "" {
+		return fmt.Errorf("cannot be empty")
+	}
+	if strings.HasPrefix(s, "-") {
+		return fmt.Errorf("cannot start with '-'")
+	}
+	// Proxmox IDs generally allow alphanumeric, hyphens, underscores.
+	if !regexp.MustCompile(`^[a-zA-Z0-9\-_.]+$`).MatchString(s) {
+		return fmt.Errorf("contains invalid characters (alphanumeric, hyphen, underscore, period only)")
+	}
+	return nil
+}
+
+// ValidateIPAddress ensures a string is a valid IP address or "0.0.0.0".
+func ValidateIPAddress(s string) error {
+	if strings.TrimSpace(s) == "" {
+		return fmt.Errorf("cannot be empty")
+	}
+	if s == "0.0.0.0" {
+		return nil
+	}
+	if net.ParseIP(s) == nil {
+		return fmt.Errorf("invalid IP address format")
+	}
+	return nil
+}
+
+// ValidateCatalogURL ensures a string is a valid catalog URL.
+func ValidateCatalogURL(s string) error {
+	if strings.TrimSpace(s) == "" {
+		return fmt.Errorf("catalog URL is required")
+	}
+	if strings.HasPrefix(s, "-") {
+		return fmt.Errorf("catalog URL cannot start with '-'")
+	}
+	if !strings.HasPrefix(s, "http://") && !strings.HasPrefix(s, "https://") && !strings.HasPrefix(s, "git@") {
+		return fmt.Errorf("must be a valid http(s) or git@ URL")
+	}
+	return nil
+}
+
+// ValidateCatalogBranch ensures a string is a valid git branch name.
+func ValidateCatalogBranch(s string) error {
+	if strings.TrimSpace(s) == "" {
+		return fmt.Errorf("branch name is required")
+	}
+	if strings.HasPrefix(s, "-") {
+		return fmt.Errorf("branch name cannot start with '-'")
+	}
+	if !regexp.MustCompile(`^[a-zA-Z0-9\-_/.]+$`).MatchString(s) {
+		return fmt.Errorf("contains invalid characters (alphanumeric, hyphen, underscore, period, forward slash only)")
+	}
+	return nil
+}
+
+// ValidateMultiSelectProxmoxIDs ensures all selected strings are valid Proxmox identifiers.
+func ValidateMultiSelectProxmoxIDs(values []string) error {
+	if len(values) == 0 {
+		return fmt.Errorf("at least one item must be selected")
+	}
+	for _, v := range values {
+		if err := ValidateProxmoxID(v); err != nil {
+			return fmt.Errorf("invalid item %q: %w", v, err)
+		}
+	}
+	return nil
 }

@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -42,6 +44,7 @@ type ServiceConfig struct {
 type AuthConfig struct {
 	Mode         string `yaml:"mode"`
 	PasswordHash string `yaml:"password_hash,omitempty"`
+	HMACSecret   string `yaml:"hmac_secret,omitempty"` // New field for session token signing
 }
 
 type ProxmoxConfig struct {
@@ -150,6 +153,31 @@ func (c *Config) Validate() error {
 	default:
 		return fmt.Errorf("catalog.refresh must be %q, %q, or %q", RefreshDaily, RefreshWeekly, RefreshManual)
 	}
+
+	// Catalog URL and Branch validation
+	if c.Catalog.URL == "" {
+		return fmt.Errorf("catalog.url is required")
+	}
+	if strings.HasPrefix(c.Catalog.URL, "-") {
+		return fmt.Errorf("catalog.url cannot start with '-'")
+	}
+	// Basic URL format check
+	if !strings.HasPrefix(c.Catalog.URL, "http://") && !strings.HasPrefix(c.Catalog.URL, "https://") && !strings.HasPrefix(c.Catalog.URL, "git@") {
+		return fmt.Errorf("catalog.url must be a valid http(s) or git@ URL")
+	}
+
+	if c.Catalog.Branch == "" {
+		return fmt.Errorf("catalog.branch is required")
+	}
+	if strings.HasPrefix(c.Catalog.Branch, "-") {
+		return fmt.Errorf("catalog.branch cannot start with '-'")
+	}
+	// Basic branch name validation (allow alphanumeric, hyphen, underscore, forward slash)
+	// More comprehensive validation might be needed depending on git branch naming rules
+	if !regexp.MustCompile(`^[a-zA-Z0-9\-_/.]+$`).MatchString(c.Catalog.Branch) {
+		return fmt.Errorf("catalog.branch contains invalid characters")
+	}
+
 
 	// GPU policy
 	switch c.GPU.Policy {

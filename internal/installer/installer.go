@@ -3,6 +3,7 @@ package installer
 import (
 	"fmt"
 	"net"
+	"strconv" // Added
 
 	"github.com/battlewithbytes/pve-appstore/internal/config"
 	"github.com/battlewithbytes/pve-appstore/internal/ui"
@@ -29,20 +30,20 @@ func Run() error {
 		return nil
 	}
 
-	// Validate port is available before proceeding
-	nums, err := answers.ParseNumerics()
+	// Convert port string to int and validate availability
+	port, err := strconv.Atoi(answers.PortStr)
 	if err != nil {
-		return fmt.Errorf("invalid input: %w", err)
+		return fmt.Errorf("invalid port number: %w", err)
 	}
-	if err := checkPortAvailable(answers.BindAddress, nums.Port); err != nil {
-		return fmt.Errorf("port %d is already in use: %w", nums.Port, err)
+	if err := checkPortAvailable(answers.BindAddress, port); err != nil {
+		return fmt.Errorf("port %d is already in use: %w", port, err)
 	}
 
 	fmt.Println()
 	fmt.Println("Installing PVE App Store...")
 	fmt.Println()
 
-	if err := ApplySystem(answers, res); err != nil {
+	if err := ApplySystem(answers, res, port); err != nil {
 		return fmt.Errorf("installation failed: %w", err)
 	}
 
@@ -57,8 +58,8 @@ func Run() error {
 	fmt.Println()
 	fmt.Println(ui.Green.Render("Installation complete!"))
 	fmt.Println()
-	fmt.Printf("  %s %s\n", ui.Dim.Render("Web UI: "), ui.Cyan.Render(fmt.Sprintf("http://%s:%d", displayAddr, nums.Port)))
-	fmt.Printf("  %s %s\n", ui.Dim.Render("Health: "), ui.Cyan.Render(fmt.Sprintf("http://%s:%d/api/health", displayAddr, nums.Port)))
+	fmt.Printf("  %s %s\n", ui.Dim.Render("Web UI: "), ui.Cyan.Render(fmt.Sprintf("http://%s:%d", displayAddr, port)))
+	fmt.Printf("  %s %s\n", ui.Dim.Render("Health: "), ui.Cyan.Render(fmt.Sprintf("http://%s:%d/api/health", displayAddr, port)))
 	fmt.Printf("  %s %s\n", ui.Dim.Render("Config: "), ui.Cyan.Render(config.DefaultConfigPath))
 	fmt.Printf("  %s %s\n", ui.Dim.Render("Logs:   "), ui.Cyan.Render(config.DefaultLogDir+"/"))
 	fmt.Printf("  %s %s\n", ui.Dim.Render("Service:"), ui.Cyan.Render("systemctl status pve-appstore"))

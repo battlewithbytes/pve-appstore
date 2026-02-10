@@ -1,0 +1,4 @@
+# Test configuration for Plex
+# Bind mounts require root@pam which the API token may not have.
+# Skip them for testing — the app provisions fine without media dirs.
+skip_bind_mounts: true

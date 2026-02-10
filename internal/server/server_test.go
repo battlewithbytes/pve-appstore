@@ -524,15 +524,37 @@ func TestUninstallNotFound(t *testing.T) {
 
 func TestCORSHeaders(t *testing.T) {
 	srv := testServer(t)
-	w := doRequest(t, srv, "GET", "/api/health", "")
+
+	// Same-origin request should get CORS headers
+	req := httptest.NewRequest("GET", "/api/health", nil)
+	req.Host = "localhost:8088"
+	req.Header.Set("Origin", "http://localhost:8088")
+	w := httptest.NewRecorder()
+	srv.http.Handler.ServeHTTP(w, req)
 
 	cors := w.Header().Get("Access-Control-Allow-Origin")
-	if cors != "*" {
-		t.Errorf("CORS origin = %q, want %q", cors, "*")
+	if cors != "http://localhost:8088" {
+		t.Errorf("CORS origin = %q, want %q", cors, "http://localhost:8088")
+	}
+	creds := w.Header().Get("Access-Control-Allow-Credentials")
+	if creds != "true" {
+		t.Errorf("CORS credentials = %q, want %q", creds, "true")
 	}
 	methods := w.Header().Get("Access-Control-Allow-Methods")
 	if methods == "" {
 		t.Error("CORS methods header is empty")
+	}
+
+	// Cross-origin request from unknown origin should NOT get CORS origin header
+	req2 := httptest.NewRequest("GET", "/api/health", nil)
+	req2.Host = "localhost:8088"
+	req2.Header.Set("Origin", "http://evil.com")
+	w2 := httptest.NewRecorder()
+	srv.http.Handler.ServeHTTP(w2, req2)
+
+	cors2 := w2.Header().Get("Access-Control-Allow-Origin")
+	if cors2 != "" {
+		t.Errorf("CORS origin for cross-origin = %q, want empty", cors2)
 	}
 }
 
@@ -766,8 +788,8 @@ func TestBrowseMkdirForbidden(t *testing.T) {
 func TestConfigExportWithInstalls(t *testing.T) {
 	srv := testServer(t)
 
-	// Start an install for nginx
-	w := doRequest(t, srv, "POST", "/api/apps/nginx/install", `{"cores":1,"memory_mb":512,"disk_gb":4,"hostname":"my-nginx","devices":[{"path":"/dev/dri/renderD128","gid":44,"mode":"0666"}],"env_vars":{"FOO":"bar"}}`)
+	// Start an install for nginx (devices are determined from gpu_profile, not request)
+	w := doRequest(t, srv, "POST", "/api/apps/nginx/install", `{"cores":1,"memory_mb":512,"disk_gb":4,"hostname":"my-nginx","env_vars":{"FOO":"bar"}}`)
 	if w.Code != http.StatusAccepted {
 		t.Fatalf("install status = %d (body: %s)", w.Code, w.Body.String())
 	}
@@ -805,14 +827,10 @@ func TestConfigExportWithInstalls(t *testing.T) {
 	if recipe["hostname"] != "my-nginx" {
 		t.Errorf("recipe hostname = %v, want my-nginx", recipe["hostname"])
 	}
-	// Verify devices are in the recipe
+	// Devices are determined from GPU profile, not request — verify nil/empty is fine
 	if devices, ok := recipe["devices"].([]interface{}); ok && len(devices) > 0 {
-		dev := devices[0].(map[string]interface{})
-		if dev["path"] != "/dev/dri/renderD128" {
-			t.Errorf("device path = %v, want /dev/dri/renderD128", dev["path"])
-		}
-	} else {
-		t.Error("expected devices in recipe")
+		// If GPU profile matched and host has device, it would appear here
+		_ = devices
 	}
 	// Verify env_vars
 	if ev, ok := recipe["env_vars"].(map[string]interface{}); ok {

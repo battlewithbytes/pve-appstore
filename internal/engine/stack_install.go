@@ -30,6 +30,33 @@ func (e *Engine) StartStack(req StackCreateRequest) (*Job, error) {
 		manifests = append(manifests, app)
 	}
 
+	// Validate request inputs
+	if err := ValidateHostname(req.Hostname); err != nil {
+		return nil, err
+	}
+	if err := ValidateBridge(req.Bridge); err != nil {
+		return nil, err
+	}
+	if err := ValidateIPAddress(req.IPAddress); err != nil {
+		return nil, err
+	}
+	if err := ValidateEnvVars(req.EnvVars); err != nil {
+		return nil, err
+	}
+	if err := ValidateDevices(req.Devices); err != nil {
+		return nil, err
+	}
+	for _, hp := range req.BindMounts {
+		if err := ValidateBindMountPath(hp); err != nil {
+			return nil, err
+		}
+	}
+	for _, em := range req.ExtraMounts {
+		if err := ValidateBindMountPath(em.HostPath); err != nil {
+			return nil, err
+		}
+	}
+
 	// Validate OS template compatibility — all apps must use the same template
 	osTemplate := manifests[0].LXC.OSTemplate
 	for _, m := range manifests[1:] {

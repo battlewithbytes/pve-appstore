@@ -138,9 +138,11 @@ type InstallRequest struct {
 	BindMounts     map[string]string    `json:"bind_mounts,omitempty"`      // vol-name -> host path
 	ExtraMounts    []ExtraMountRequest  `json:"extra_mounts,omitempty"`     // user-added
 	VolumeStorages map[string]string    `json:"volume_storages,omitempty"`  // vol-name -> storage
+	MountPoints    []MountPoint         `json:"mount_points,omitempty"`     // for reattaching volumes
 	Devices        []DevicePassthrough  `json:"devices,omitempty"`
 	EnvVars        map[string]string    `json:"env_vars,omitempty"`
 	ExtraTags      string               `json:"extra_tags,omitempty"`
+	GPUProfile     string               `json:"gpu_profile,omitempty"`      // GPU passthrough profile
 }
 
 // ExtraMountRequest is a user-defined bind mount added at install time.

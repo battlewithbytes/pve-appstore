@@ -3,9 +3,6 @@ package proxmox
 import (
 	"context"
 	"fmt"
-	"io"
-	"os/exec"
-	"strings"
 
 	"github.com/battlewithbytes/pve-appstore/internal/engine"
 	"github.com/battlewithbytes/pve-appstore/internal/pct"
