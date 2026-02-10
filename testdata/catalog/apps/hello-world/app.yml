@@ -7,7 +7,7 @@ overview: |
   The container is intentionally lightweight — just Nginx serving a single HTML page with a customizable greeting message and color theme. Use it to validate your storage, networking, and container configuration before deploying more complex applications.
 
   After installation, visit the web URL in the outputs to confirm everything is working. You can then safely remove this container or keep it as a simple status page.
-version: 1.0.0
+version: 1.0.1
 categories:
   - web
   - tools

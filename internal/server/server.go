@@ -85,6 +85,7 @@ func New(cfg *config.Config, cat *catalog.Catalog, eng *engine.Engine, spaFS fs.
 	mux.HandleFunc("GET /api/config/export", s.withAuth(s.handleConfigExport))
 	mux.HandleFunc("GET /api/config/export/download", s.withAuth(s.handleConfigExportDownload))
 	mux.HandleFunc("POST /api/config/apply", s.withAuth(s.handleConfigApply))
+	mux.HandleFunc("POST /api/config/apply/preview", s.withAuth(s.handleConfigApplyPreview))
 
 	// API routes — filesystem browser
 	mux.HandleFunc("GET /api/browse/paths", s.withAuth(s.handleBrowsePaths))

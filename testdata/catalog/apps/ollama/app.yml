@@ -7,7 +7,7 @@ overview: |
   Running LLMs locally on Proxmox gives you complete privacy, no API costs, and the ability to fine-tune models for your specific use case. With GPU passthrough enabled, Ollama can leverage your NVIDIA or Intel GPU for dramatically faster inference speeds.
 
   The API is compatible with the OpenAI chat format, making it a drop-in replacement for many AI-powered applications. After installation, use the CLI to pull models and start chatting, or point your favorite AI tools at the API endpoint.
-version: 0.5.0
+version: 0.6.0
 categories:
   - ai
   - tools

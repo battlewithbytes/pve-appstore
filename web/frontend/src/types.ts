@@ -308,15 +308,42 @@ export interface ExportRecipe {
   extra_mounts?: { host_path: string; mount_path: string; read_only?: boolean }[];
 }
 
+export interface ExportStackRecipe {
+  name: string;
+  apps: { app_id: string; inputs?: Record<string, string> }[];
+  storage: string;
+  bridge: string;
+  cores: number;
+  memory_mb: number;
+  disk_gb: number;
+  hostname?: string;
+  onboot?: boolean;
+  unprivileged?: boolean;
+  devices?: DevicePassthrough[];
+  env_vars?: Record<string, string>;
+  bind_mounts?: Record<string, string>;
+  volume_storages?: Record<string, string>;
+  extra_mounts?: { host_path: string; mount_path: string; read_only?: boolean }[];
+}
+
 export interface ExportResponse {
   exported_at: string;
   node: string;
+  version?: string;
   recipes: ExportRecipe[];
+  stacks?: ExportStackRecipe[];
   installs: Install[];
 }
 
 export interface ApplyResponse {
   jobs: { app_id: string; job_id: string }[];
+  stack_jobs?: { name: string; job_id: string }[];
+}
+
+export interface ApplyPreviewResponse {
+  recipes: ExportRecipe[];
+  stacks: ExportStackRecipe[];
+  errors: string[];
 }
 
 export interface AppStatusResponse {

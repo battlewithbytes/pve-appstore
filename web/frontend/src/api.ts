@@ -1,4 +1,4 @@
-import type { AppsResponse, AppDetail, CategoriesResponse, HealthResponse, JobsResponse, LogsResponse, InstallsResponse, InstallRequest, InstallDetail, Job, ConfigDefaultsResponse, BrowseResponse, MountInfo, ExportResponse, ApplyResponse, AppStatusResponse, StacksResponse, StackDetail, StackCreateRequest, StackValidateResponse, EditRequest } from './types';
+import type { AppsResponse, AppDetail, CategoriesResponse, HealthResponse, JobsResponse, LogsResponse, InstallsResponse, InstallRequest, InstallDetail, Job, ConfigDefaultsResponse, BrowseResponse, MountInfo, ExportResponse, ApplyResponse, ApplyPreviewResponse, AppStatusResponse, StacksResponse, StackDetail, StackCreateRequest, StackValidateResponse, EditRequest } from './types';
 
 const BASE = '/api';
 
@@ -119,12 +119,25 @@ export const api = {
     window.open(`${BASE}/config/export/download`, '_blank')
   },
 
-  configApply: (recipes: InstallRequest[]) =>
+  configApply: (recipes: InstallRequest[], stacks?: StackCreateRequest[]) =>
     fetchJSON<ApplyResponse>(`${BASE}/config/apply`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ recipes }),
+      body: JSON.stringify({ recipes, stacks: stacks || [] }),
     }),
+
+  configApplyPreview: async (text: string): Promise<ApplyPreviewResponse> => {
+    const res = await fetch(`${BASE}/config/apply/preview`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain' },
+      body: text,
+    });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.error || `HTTP ${res.status}`);
+    }
+    return res.json();
+  },
 
   authCheck: () => fetchJSON<{ authenticated: boolean; auth_required: boolean }>(`${BASE}/auth/check`),
 
