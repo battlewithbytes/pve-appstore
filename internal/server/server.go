@@ -12,18 +12,29 @@ import (
 
 	"github.com/battlewithbytes/pve-appstore/internal/catalog"
 	"github.com/battlewithbytes/pve-appstore/internal/config"
+	"github.com/battlewithbytes/pve-appstore/internal/devmode"
 	"github.com/battlewithbytes/pve-appstore/internal/engine"
 )
 
 // Server is the main HTTP server for the PVE App Store.
 type Server struct {
 	cfg          *config.Config
+	configPath   string
 	catalog      *catalog.Catalog
 	engine       *engine.Engine
+	devStore     *devmode.DevStore
 	http         *http.Server
 	spa          fs.FS // embedded or disk-based SPA assets
 	storageMetas []engine.StorageInfo
 	allowedPaths []string // browsable filesystem roots from configured storages
+}
+
+// Option configures the server.
+type Option func(*Server)
+
+// WithConfigPath sets the config file path for settings persistence.
+func WithConfigPath(path string) Option {
+	return func(s *Server) { s.configPath = path }
 }
 
 // isPathAllowed checks whether a filesystem path is under a configured storage root.
@@ -41,13 +52,20 @@ func (s *Server) isPathAllowed(requested string) bool {
 }
 
 // New creates a new Server.
-func New(cfg *config.Config, cat *catalog.Catalog, eng *engine.Engine, spaFS fs.FS) *Server {
+func New(cfg *config.Config, cat *catalog.Catalog, eng *engine.Engine, spaFS fs.FS, opts ...Option) *Server {
 	s := &Server{
-		cfg:     cfg,
-		catalog: cat,
-		engine:  eng,
-		spa:     spaFS,
+		cfg:        cfg,
+		configPath: config.DefaultConfigPath,
+		catalog:    cat,
+		engine:     eng,
+		spa:        spaFS,
 	}
+	for _, opt := range opts {
+		opt(s)
+	}
+
+	// Initialize dev store
+	s.devStore = devmode.NewDevStore(filepath.Join(config.DefaultDataDir, "dev-apps"))
 
 	// Resolve configured storages to filesystem paths via Proxmox API
 	if eng != nil {
@@ -86,6 +104,26 @@ func New(cfg *config.Config, cat *catalog.Catalog, eng *engine.Engine, spaFS fs.
 	mux.HandleFunc("GET /api/config/export/download", s.withAuth(s.handleConfigExportDownload))
 	mux.HandleFunc("POST /api/config/apply", s.withAuth(s.handleConfigApply))
 	mux.HandleFunc("POST /api/config/apply/preview", s.withAuth(s.handleConfigApplyPreview))
+
+	// API routes — settings
+	mux.HandleFunc("GET /api/settings", s.handleGetSettings)
+	mux.HandleFunc("PUT /api/settings", s.withAuth(s.handleUpdateSettings))
+
+	// API routes — developer mode
+	mux.HandleFunc("GET /api/dev/apps", s.withDevMode(s.withAuth(s.handleDevListApps)))
+	mux.HandleFunc("POST /api/dev/apps", s.withDevMode(s.withAuth(s.handleDevCreateApp)))
+	mux.HandleFunc("GET /api/dev/apps/{id}", s.withDevMode(s.withAuth(s.handleDevGetApp)))
+	mux.HandleFunc("PUT /api/dev/apps/{id}/manifest", s.withDevMode(s.withAuth(s.handleDevSaveManifest)))
+	mux.HandleFunc("PUT /api/dev/apps/{id}/script", s.withDevMode(s.withAuth(s.handleDevSaveScript)))
+	mux.HandleFunc("PUT /api/dev/apps/{id}/file", s.withDevMode(s.withAuth(s.handleDevSaveFile)))
+	mux.HandleFunc("DELETE /api/dev/apps/{id}", s.withDevMode(s.withAuth(s.handleDevDeleteApp)))
+	mux.HandleFunc("POST /api/dev/apps/{id}/validate", s.withDevMode(s.withAuth(s.handleDevValidate)))
+	mux.HandleFunc("POST /api/dev/apps/{id}/deploy", s.withDevMode(s.withAuth(s.handleDevDeploy)))
+	mux.HandleFunc("POST /api/dev/apps/{id}/undeploy", s.withDevMode(s.withAuth(s.handleDevUndeploy)))
+	mux.HandleFunc("POST /api/dev/apps/{id}/export", s.withDevMode(s.withAuth(s.handleDevExport)))
+	mux.HandleFunc("POST /api/dev/import/unraid", s.withDevMode(s.withAuth(s.handleDevImportUnraid)))
+	mux.HandleFunc("POST /api/dev/import/dockerfile", s.withDevMode(s.withAuth(s.handleDevImportDockerfile)))
+	mux.HandleFunc("GET /api/dev/templates", s.withDevMode(s.handleDevListTemplates))
 
 	// API routes — filesystem browser
 	mux.HandleFunc("GET /api/browse/paths", s.withAuth(s.handleBrowsePaths))
@@ -206,7 +244,7 @@ func corsMiddleware(next http.Handler) http.Handler {
 				w.Header().Set("Access-Control-Allow-Credentials", "true")
 			}
 		}
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Upgrade, Connection")
 		if r.Method == "OPTIONS" {
 			w.WriteHeader(http.StatusOK)
@@ -228,6 +266,17 @@ func (s *Server) allowedOriginPatterns(r *http.Request) []string {
 		patterns = append(patterns, h+":*", host)
 	}
 	return patterns
+}
+
+// withDevMode gates a handler on developer mode being enabled.
+func (s *Server) withDevMode(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if !s.cfg.Developer.Enabled {
+			writeJSON(w, http.StatusForbidden, map[string]string{"error": "developer mode is not enabled"})
+			return
+		}
+		next(w, r)
+	}
 }
 
 // spaHandler serves static files from the SPA filesystem, falling back to index.html.

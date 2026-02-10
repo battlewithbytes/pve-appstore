@@ -4,7 +4,8 @@ import { FitAddon } from '@xterm/addon-fit'
 import { WebLinksAddon } from '@xterm/addon-web-links'
 import '@xterm/xterm/css/xterm.css'
 import { api } from './api'
-import type { AppSummary, AppDetail, AppInput, HealthResponse, Job, LogEntry, InstallDetail, InstallListItem, ContainerLiveStatus, ConfigDefaultsResponse, MountPoint, MountInfo, BrowseEntry, ExportResponse, ApplyPreviewResponse, InstallRequest, EditRequest, DevicePassthrough, AppStatusResponse, StackListItem, StackDetail, StackCreateRequest, StackValidateResponse, StackApp } from './types'
+import { CodeEditor } from './CodeEditor'
+import type { AppSummary, AppDetail, AppInput, HealthResponse, Job, LogEntry, InstallDetail, InstallListItem, ContainerLiveStatus, ConfigDefaultsResponse, MountPoint, MountInfo, BrowseEntry, ExportResponse, ApplyPreviewResponse, InstallRequest, EditRequest, DevicePassthrough, AppStatusResponse, StackListItem, StackDetail, StackCreateRequest, StackValidateResponse, StackApp, Settings, SettingsUpdate, DevAppMeta, DevApp, DevTemplate, ValidationResult, ValidationMsg } from './types'
 
 function useHash() {
   const [hash, setHash] = useState(window.location.hash)
@@ -23,8 +24,10 @@ function App() {
   const [authRequired, setAuthRequired] = useState(false)
   const [showLogin, setShowLogin] = useState(false)
   const [loginCallback, setLoginCallback] = useState<(() => void) | null>(null)
+  const [devMode, setDevMode] = useState(false)
 
   useEffect(() => { api.health().then(setHealth).catch(() => {}) }, [])
+  useEffect(() => { api.settings().then(s => setDevMode(s.developer.enabled)).catch(() => {}) }, [])
   useEffect(() => {
     api.authCheck().then(d => {
       setAuthed(d.authenticated)
@@ -58,6 +61,9 @@ function App() {
   const isCreateStack = hash === '#/create-stack'
   const isJobs = hash === '#/jobs'
   const isConfig = hash === '#/config'
+  const isSettings = hash === '#/settings'
+  const isDeveloper = hash === '#/developer' || hash.startsWith('#/dev/')
+  const devAppMatch = hash.match(/^#\/dev\/(.+)$/)
 
   let content
   if (jobMatch) content = <JobView id={jobMatch[1]} />
@@ -69,11 +75,14 @@ function App() {
   else if (isCreateStack) content = <StackCreateWizard requireAuth={requireAuth} />
   else if (isJobs) content = <JobsList />
   else if (isConfig) content = <ConfigView requireAuth={requireAuth} />
+  else if (isSettings) content = <SettingsView requireAuth={requireAuth} />
+  else if (devAppMatch) content = <DevAppEditor id={devAppMatch[1]} requireAuth={requireAuth} />
+  else if (isDeveloper) content = <DeveloperDashboard requireAuth={requireAuth} />
   else content = <AppList />
 
   return (
     <div className="min-h-screen flex flex-col bg-bg-primary">
-      <Header health={health} authed={authed} authRequired={authRequired} onLogout={handleLogout} onLogin={() => setShowLogin(true)} />
+      <Header health={health} authed={authed} authRequired={authRequired} devMode={devMode} onLogout={handleLogout} onLogin={() => setShowLogin(true)} />
       <main className="flex-1 max-w-[1200px] mx-auto px-4 py-6 w-full">
         {content}
       </main>
@@ -83,7 +92,7 @@ function App() {
   )
 }
 
-function Header({ health, authed, authRequired, onLogout, onLogin }: { health: HealthResponse | null; authed: boolean; authRequired: boolean; onLogout: () => void; onLogin: () => void }) {
+function Header({ health, authed, authRequired, devMode, onLogout, onLogin }: { health: HealthResponse | null; authed: boolean; authRequired: boolean; devMode: boolean; onLogout: () => void; onLogin: () => void }) {
   return (
     <header className="bg-bg-primary border-b border-border px-6 py-3 flex items-center justify-between">
       <div className="flex items-center gap-6">
@@ -96,7 +105,9 @@ function Header({ health, authed, authRequired, onLogout, onLogin }: { health: H
           <a href="#/installs" className="text-text-secondary hover:text-primary no-underline text-sm font-mono uppercase tracking-wider transition-colors">Installed</a>
           <a href="#/stacks" className="text-text-secondary hover:text-primary no-underline text-sm font-mono uppercase tracking-wider transition-colors">Stacks</a>
           <a href="#/jobs" className="text-text-secondary hover:text-primary no-underline text-sm font-mono uppercase tracking-wider transition-colors">Jobs</a>
+          {devMode && <a href="#/developer" className="text-yellow-400 hover:text-yellow-300 no-underline text-sm font-mono uppercase tracking-wider transition-colors">Developer</a>}
           <a href="#/config" className="text-text-secondary hover:text-primary no-underline text-sm font-mono uppercase tracking-wider transition-colors">Config</a>
+          <a href="#/settings" className="text-text-secondary hover:text-primary no-underline text-sm font-mono uppercase tracking-wider transition-colors">Settings</a>
         </nav>
       </div>
       <div className="flex items-center gap-4 text-xs text-text-muted font-mono">
@@ -184,6 +195,7 @@ function AppCard({ app }: { app: AppSummary }) {
             <h3 className="text-base font-semibold text-text-primary group-hover:text-primary transition-colors">{app.name}</h3>
             <span className="text-xs text-text-muted font-mono">v{app.version}</span>
             {app.official && <Badge className="bg-primary/10 text-primary">official</Badge>}
+            {app.source === 'developer' && <Badge className="bg-yellow-400/10 text-yellow-400">DEV</Badge>}
           </div>
           <p className="text-sm text-text-secondary mt-1 overflow-hidden text-ellipsis line-clamp-2">{app.description}</p>
           <div className="flex gap-1.5 mt-2 flex-wrap">
@@ -3675,6 +3687,835 @@ function formatBytesShort(bytes: number): string {
   const units = ['B', 'K', 'M', 'G', 'T']
   const i = Math.floor(Math.log(bytes) / Math.log(1024))
   return `${(bytes / Math.pow(1024, i)).toFixed(1)}${units[i]}`
+}
+
+// --- Settings View ---
+
+function SettingsView({ requireAuth }: { requireAuth: (cb: () => void) => void }) {
+  const [settings, setSettings] = useState<Settings | null>(null)
+  const [saving, setSaving] = useState(false)
+  const [msg, setMsg] = useState('')
+
+  useEffect(() => { api.settings().then(setSettings).catch(() => {}) }, [])
+
+  const save = (update: SettingsUpdate) => {
+    requireAuth(async () => {
+      setSaving(true)
+      setMsg('')
+      try {
+        const updated = await api.updateSettings(update)
+        setSettings(updated)
+        setMsg('Settings saved')
+        setTimeout(() => setMsg(''), 2000)
+      } catch (e: unknown) {
+        setMsg(`Error: ${e instanceof Error ? e.message : 'unknown'}`)
+      }
+      setSaving(false)
+    })
+  }
+
+  if (!settings) return <Center className="py-16"><span className="text-text-muted font-mono">Loading settings...</span></Center>
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between">
+        <h2 className="text-xl font-bold text-text-primary font-mono">Settings</h2>
+        {msg && <span className={`text-sm font-mono ${msg.startsWith('Error') ? 'text-red-400' : 'text-primary'}`}>{msg}</span>}
+      </div>
+
+      {/* Developer Mode */}
+      <InfoCard title="Developer Mode">
+        <div className="flex items-center justify-between">
+          <div>
+            <p className="text-sm text-text-secondary">Enable developer mode to create, edit, and test custom apps.</p>
+            <p className="text-xs text-text-muted mt-1">When enabled, a Developer tab appears in the navigation bar.</p>
+          </div>
+          <button
+            onClick={() => save({ developer: { enabled: !settings.developer.enabled } })}
+            disabled={saving}
+            className={`relative w-12 h-6 rounded-full transition-colors ${settings.developer.enabled ? 'bg-primary' : 'bg-border'} cursor-pointer`}
+          >
+            <span className={`absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white transition-transform ${settings.developer.enabled ? 'translate-x-6' : ''}`} />
+          </button>
+        </div>
+      </InfoCard>
+
+      {/* Resource Defaults */}
+      <InfoCard title="Resource Defaults">
+        <div className="grid grid-cols-3 gap-4">
+          <SettingsNumberField label="CPU Cores" value={settings.defaults.cores} onSave={(v) => save({ defaults: { cores: v } })} min={1} max={64} />
+          <SettingsNumberField label="Memory (MB)" value={settings.defaults.memory_mb} onSave={(v) => save({ defaults: { memory_mb: v } })} min={128} max={131072} step={128} />
+          <SettingsNumberField label="Disk (GB)" value={settings.defaults.disk_gb} onSave={(v) => save({ defaults: { disk_gb: v } })} min={1} max={10000} />
+        </div>
+      </InfoCard>
+
+      {/* Storage & Network */}
+      <InfoCard title="Storage & Network">
+        <div className="grid grid-cols-2 gap-4">
+          <div>
+            <label className="text-xs text-text-muted font-mono uppercase">Storages</label>
+            <div className="flex flex-wrap gap-1 mt-1">{settings.storages.map(s => <Badge key={s}>{s}</Badge>)}</div>
+          </div>
+          <div>
+            <label className="text-xs text-text-muted font-mono uppercase">Bridges</label>
+            <div className="flex flex-wrap gap-1 mt-1">{settings.bridges.map(b => <Badge key={b}>{b}</Badge>)}</div>
+          </div>
+        </div>
+        <p className="text-xs text-text-muted mt-3">Storages and bridges are configured via the TUI installer.</p>
+      </InfoCard>
+
+      {/* Catalog */}
+      <InfoCard title="Catalog">
+        <div className="flex items-center gap-4">
+          <label className="text-xs text-text-muted font-mono uppercase w-20">Refresh</label>
+          <select
+            value={settings.catalog.refresh}
+            onChange={(e) => save({ catalog: { refresh: e.target.value } })}
+            className="bg-bg-primary border border-border rounded px-3 py-1.5 text-sm font-mono text-text-primary"
+          >
+            <option value="daily">Daily</option>
+            <option value="weekly">Weekly</option>
+            <option value="manual">Manual</option>
+          </select>
+        </div>
+      </InfoCard>
+
+      {/* GPU */}
+      <InfoCard title="GPU Passthrough">
+        <div className="flex items-center justify-between mb-3">
+          <div>
+            <p className="text-sm text-text-secondary">Enable GPU passthrough for containers.</p>
+          </div>
+          <button
+            onClick={() => save({ gpu: { enabled: !settings.gpu.enabled, policy: settings.gpu.policy } })}
+            disabled={saving}
+            className={`relative w-12 h-6 rounded-full transition-colors ${settings.gpu.enabled ? 'bg-primary' : 'bg-border'} cursor-pointer`}
+          >
+            <span className={`absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white transition-transform ${settings.gpu.enabled ? 'translate-x-6' : ''}`} />
+          </button>
+        </div>
+        {settings.gpu.enabled && (
+          <div className="flex items-center gap-4">
+            <label className="text-xs text-text-muted font-mono uppercase w-20">Policy</label>
+            <select
+              value={settings.gpu.policy}
+              onChange={(e) => save({ gpu: { enabled: settings.gpu.enabled, policy: e.target.value } })}
+              className="bg-bg-primary border border-border rounded px-3 py-1.5 text-sm font-mono text-text-primary"
+            >
+              <option value="none">None</option>
+              <option value="allow">Allow</option>
+              <option value="allowlist">Allowlist</option>
+            </select>
+          </div>
+        )}
+      </InfoCard>
+
+      {/* Service Info */}
+      <InfoCard title="Service">
+        <div className="grid grid-cols-2 gap-4 text-sm font-mono">
+          <div><span className="text-text-muted">Port:</span> <span className="text-text-primary">{settings.service.port}</span></div>
+          <div><span className="text-text-muted">Auth:</span> <span className="text-text-primary">{settings.auth.mode}</span></div>
+        </div>
+        <p className="text-xs text-text-muted mt-3">Port and auth mode are configured via the TUI installer.</p>
+      </InfoCard>
+    </div>
+  )
+}
+
+function SettingsNumberField({ label, value, onSave, min, max, step }: { label: string; value: number; onSave: (v: number) => void; min?: number; max?: number; step?: number }) {
+  const [val, setVal] = useState(String(value))
+  const [editing, setEditing] = useState(false)
+
+  useEffect(() => { setVal(String(value)) }, [value])
+
+  const commit = () => {
+    const n = parseInt(val, 10)
+    if (!isNaN(n) && n !== value) onSave(n)
+    setEditing(false)
+  }
+
+  return (
+    <div>
+      <label className="text-xs text-text-muted font-mono uppercase">{label}</label>
+      {editing ? (
+        <input
+          type="number"
+          value={val}
+          onChange={(e) => setVal(e.target.value)}
+          onBlur={commit}
+          onKeyDown={(e) => e.key === 'Enter' && commit()}
+          min={min}
+          max={max}
+          step={step || 1}
+          className="w-full bg-bg-primary border border-primary rounded px-3 py-1.5 text-sm font-mono text-text-primary mt-1"
+          autoFocus
+        />
+      ) : (
+        <div
+          onClick={() => setEditing(true)}
+          className="w-full border border-border rounded px-3 py-1.5 text-sm font-mono text-text-primary mt-1 cursor-pointer hover:border-primary transition-colors"
+        >{value}</div>
+      )}
+    </div>
+  )
+}
+
+// --- Developer Dashboard ---
+
+function DeveloperDashboard({ requireAuth }: { requireAuth: (cb: () => void) => void }) {
+  const [apps, setApps] = useState<DevAppMeta[]>([])
+  const [loading, setLoading] = useState(true)
+  const [showCreate, setShowCreate] = useState(false)
+  const [showUnraid, setShowUnraid] = useState(false)
+  const [showDockerfile, setShowDockerfile] = useState(false)
+
+  const fetchApps = useCallback(async () => {
+    try {
+      const data = await api.devApps()
+      setApps(data.apps || [])
+    } catch { setApps([]) }
+    setLoading(false)
+  }, [])
+
+  useEffect(() => { fetchApps() }, [fetchApps])
+
+  const handleDelete = (id: string, name: string) => {
+    requireAuth(async () => {
+      if (!confirm(`Delete dev app "${name}"? This cannot be undone.`)) return
+      try {
+        await api.devDeleteApp(id)
+        fetchApps()
+      } catch (e: unknown) { alert(e instanceof Error ? e.message : 'Failed') }
+    })
+  }
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-6">
+        <h2 className="text-xl font-bold text-text-primary font-mono">Developer Dashboard</h2>
+        <div className="flex gap-2">
+          <button onClick={() => setShowDockerfile(true)} className="bg-transparent border border-border rounded px-4 py-2 text-sm font-mono text-text-secondary hover:border-primary hover:text-primary cursor-pointer transition-colors">Import Dockerfile</button>
+          <button onClick={() => setShowUnraid(true)} className="bg-transparent border border-border rounded px-4 py-2 text-sm font-mono text-text-secondary hover:border-primary hover:text-primary cursor-pointer transition-colors">Import Unraid XML</button>
+          <button onClick={() => setShowCreate(true)} className="bg-primary text-bg-primary rounded px-4 py-2 text-sm font-mono font-bold cursor-pointer hover:opacity-90 transition-opacity">+ New App</button>
+        </div>
+      </div>
+
+      {loading ? (
+        <Center className="py-16"><span className="text-text-muted font-mono">Loading...</span></Center>
+      ) : apps.length === 0 ? (
+        <div className="border border-dashed border-border rounded-lg p-12 text-center">
+          <p className="text-text-muted font-mono mb-4">No dev apps yet. Create your first app to get started.</p>
+          <button onClick={() => setShowCreate(true)} className="bg-primary text-bg-primary rounded px-6 py-2 text-sm font-mono font-bold cursor-pointer hover:opacity-90">Create App</button>
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+          {apps.map(app => (
+            <a key={app.id} href={`#/dev/${app.id}`} className="no-underline">
+              <div className="border border-border rounded-lg p-4 hover:border-primary/50 transition-colors cursor-pointer bg-bg-card">
+                <div className="flex items-start justify-between mb-2">
+                  <div className="flex-1 min-w-0">
+                    <h3 className="text-sm font-bold text-text-primary font-mono truncate">{app.name || app.id}</h3>
+                    <p className="text-xs text-text-muted font-mono mt-0.5">v{app.version || '0.0.0'}</p>
+                  </div>
+                  <DevStatusBadge status={app.status} />
+                </div>
+                <p className="text-xs text-text-secondary line-clamp-2 mb-3">{app.description || 'No description'}</p>
+                <div className="flex items-center gap-2 text-xs text-text-muted font-mono">
+                  {app.has_icon && <span title="Has icon">icon</span>}
+                  {app.has_readme && <span title="Has README">readme</span>}
+                  <span className="ml-auto" onClick={(e) => { e.preventDefault(); handleDelete(app.id, app.name) }}>delete</span>
+                </div>
+              </div>
+            </a>
+          ))}
+        </div>
+      )}
+
+      {showCreate && <DevCreateWizard onClose={() => setShowCreate(false)} onCreated={(id) => { setShowCreate(false); window.location.hash = `#/dev/${id}` }} requireAuth={requireAuth} />}
+      {showUnraid && <DevUnraidImport onClose={() => setShowUnraid(false)} onCreated={(id) => { setShowUnraid(false); window.location.hash = `#/dev/${id}` }} requireAuth={requireAuth} />}
+      {showDockerfile && <DevDockerfileImport onClose={() => setShowDockerfile(false)} onCreated={(id) => { setShowDockerfile(false); window.location.hash = `#/dev/${id}` }} requireAuth={requireAuth} />}
+    </div>
+  )
+}
+
+function DevStatusBadge({ status }: { status: string }) {
+  const colors: Record<string, string> = {
+    draft: 'border-text-muted text-text-muted',
+    validated: 'border-blue-400 text-blue-400',
+    deployed: 'border-primary text-primary',
+  }
+  return <span className={`text-xs font-mono px-2 py-0.5 border rounded ${colors[status] || colors.draft}`}>{status}</span>
+}
+
+function DevCreateWizard({ onClose, onCreated, requireAuth }: { onClose: () => void; onCreated: (id: string) => void; requireAuth: (cb: () => void) => void }) {
+  const [templates, setTemplates] = useState<DevTemplate[]>([])
+  const [appId, setAppId] = useState('')
+  const [selectedTemplate, setSelectedTemplate] = useState('blank')
+  const [creating, setCreating] = useState(false)
+  const [error, setError] = useState('')
+
+  useEffect(() => { api.devTemplates().then(d => setTemplates(d.templates || [])).catch(() => {}) }, [])
+
+  const handleCreate = () => {
+    requireAuth(async () => {
+      if (!appId) { setError('App ID is required'); return }
+      setCreating(true)
+      setError('')
+      try {
+        await api.devCreateApp(appId, selectedTemplate)
+        onCreated(appId)
+      } catch (e: unknown) {
+        setError(e instanceof Error ? e.message : 'Failed to create')
+      }
+      setCreating(false)
+    })
+  }
+
+  return (
+    <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50" onClick={onClose}>
+      <div className="bg-bg-card border border-border rounded-lg p-6 w-full max-w-lg" onClick={(e) => e.stopPropagation()}>
+        <h3 className="text-lg font-bold text-text-primary font-mono mb-4">Create New App</h3>
+
+        <div className="mb-4">
+          <label className="text-xs text-text-muted font-mono uppercase block mb-1">App ID (kebab-case)</label>
+          <input
+            value={appId}
+            onChange={(e) => setAppId(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ''))}
+            placeholder="my-awesome-app"
+            className="w-full bg-bg-primary border border-border rounded px-3 py-2 text-sm font-mono text-text-primary"
+            autoFocus
+          />
+        </div>
+
+        <div className="mb-4">
+          <label className="text-xs text-text-muted font-mono uppercase block mb-2">Template</label>
+          <div className="grid grid-cols-1 gap-2">
+            {templates.map(t => (
+              <label key={t.id} className={`flex items-start gap-3 p-3 border rounded cursor-pointer transition-colors ${selectedTemplate === t.id ? 'border-primary bg-primary/5' : 'border-border hover:border-primary/50'}`}>
+                <input type="radio" name="template" value={t.id} checked={selectedTemplate === t.id} onChange={() => setSelectedTemplate(t.id)} className="mt-1" />
+                <div>
+                  <span className="text-sm font-mono text-text-primary font-bold">{t.name}</span>
+                  <p className="text-xs text-text-muted mt-0.5">{t.description}</p>
+                </div>
+              </label>
+            ))}
+          </div>
+        </div>
+
+        {error && <p className="text-red-400 text-sm font-mono mb-3">{error}</p>}
+
+        <div className="flex justify-end gap-2">
+          <button onClick={onClose} className="bg-transparent border border-border rounded px-4 py-2 text-sm font-mono text-text-secondary cursor-pointer hover:border-primary transition-colors">Cancel</button>
+          <button onClick={handleCreate} disabled={creating || !appId} className="bg-primary text-bg-primary rounded px-4 py-2 text-sm font-mono font-bold cursor-pointer hover:opacity-90 disabled:opacity-50">{creating ? 'Creating...' : 'Create'}</button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function DevUnraidImport({ onClose, onCreated, requireAuth }: { onClose: () => void; onCreated: (id: string) => void; requireAuth: (cb: () => void) => void }) {
+  const [mode, setMode] = useState<'url' | 'xml'>('url')
+  const [url, setUrl] = useState('')
+  const [xml, setXml] = useState('')
+  const [importing, setImporting] = useState(false)
+  const [error, setError] = useState('')
+
+  const canImport = mode === 'url' ? url.trim().length > 0 : xml.trim().length > 0
+
+  const handleImport = () => {
+    requireAuth(async () => {
+      if (!canImport) { setError(mode === 'url' ? 'URL is required' : 'XML content is required'); return }
+      setImporting(true)
+      setError('')
+      try {
+        const payload = mode === 'url' ? { url: url.trim() } : { xml: xml.trim() }
+        const app = await api.devImportUnraid(payload)
+        onCreated(app.id)
+      } catch (e: unknown) {
+        setError(e instanceof Error ? e.message : 'Failed to import')
+      }
+      setImporting(false)
+    })
+  }
+
+  return (
+    <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50" onClick={onClose}>
+      <div className="bg-bg-card border border-border rounded-lg p-6 w-full max-w-2xl" onClick={(e) => e.stopPropagation()}>
+        <h3 className="text-lg font-bold text-text-primary font-mono mb-4">Import Unraid XML Template</h3>
+        <p className="text-xs text-text-muted mb-3">Import an Unraid Docker template to create a scaffold app. Ports, volumes, and environment variables will be converted to inputs.</p>
+
+        <div className="flex gap-2 mb-3">
+          <button onClick={() => setMode('url')} className={`px-3 py-1 text-xs font-mono rounded border cursor-pointer transition-colors ${mode === 'url' ? 'border-primary text-primary bg-primary/10' : 'border-border text-text-secondary bg-transparent hover:border-primary'}`}>From URL</button>
+          <button onClick={() => setMode('xml')} className={`px-3 py-1 text-xs font-mono rounded border cursor-pointer transition-colors ${mode === 'xml' ? 'border-primary text-primary bg-primary/10' : 'border-border text-text-secondary bg-transparent hover:border-primary'}`}>Paste XML</button>
+        </div>
+
+        {mode === 'url' ? (
+          <div>
+            <input
+              type="text"
+              value={url}
+              onChange={(e) => setUrl(e.target.value)}
+              placeholder="https://raw.githubusercontent.com/linuxserver/templates/main/unraid/app.xml"
+              className="w-full bg-bg-primary border border-border rounded px-3 py-2 text-sm font-mono text-text-primary"
+            />
+            <p className="text-xs text-text-muted mt-2">Paste a direct link to an Unraid XML template file (e.g. from the linuxserver/templates repo on GitHub).</p>
+          </div>
+        ) : (
+          <textarea
+            value={xml}
+            onChange={(e) => setXml(e.target.value)}
+            placeholder={"<?xml version='1.0'?>\n<Container>\n  <Name>MyApp</Name>\n  ..."}
+            className="w-full h-64 bg-bg-primary border border-border rounded px-3 py-2 text-sm font-mono text-text-primary resize-none"
+          />
+        )}
+
+        {error && <p className="text-red-400 text-sm font-mono mt-2">{error}</p>}
+
+        <div className="flex justify-end gap-2 mt-4">
+          <button onClick={onClose} className="bg-transparent border border-border rounded px-4 py-2 text-sm font-mono text-text-secondary cursor-pointer hover:border-primary transition-colors">Cancel</button>
+          <button onClick={handleImport} disabled={importing || !canImport} className="bg-primary text-bg-primary rounded px-4 py-2 text-sm font-mono font-bold cursor-pointer hover:opacity-90 disabled:opacity-50">{importing ? 'Importing...' : 'Import'}</button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function DevDockerfileImport({ onClose, onCreated, requireAuth }: { onClose: () => void; onCreated: (id: string) => void; requireAuth: (cb: () => void) => void }) {
+  const [mode, setMode] = useState<'url' | 'dockerfile'>('url')
+  const [url, setUrl] = useState('')
+  const [dockerfile, setDockerfile] = useState('')
+  const [name, setName] = useState('')
+  const [importing, setImporting] = useState(false)
+  const [error, setError] = useState('')
+
+  const canImport = name.trim().length > 0 && (mode === 'url' ? url.trim().length > 0 : dockerfile.trim().length > 0)
+
+  const handleImport = () => {
+    requireAuth(async () => {
+      if (!canImport) { setError('App name and Dockerfile content are required'); return }
+      setImporting(true)
+      setError('')
+      try {
+        const payload: { name: string; url?: string; dockerfile?: string } = { name: name.trim() }
+        if (mode === 'url') payload.url = url.trim()
+        else payload.dockerfile = dockerfile.trim()
+        const app = await api.devImportDockerfile(payload)
+        onCreated(app.id)
+      } catch (e: unknown) {
+        setError(e instanceof Error ? e.message : 'Failed to import')
+      }
+      setImporting(false)
+    })
+  }
+
+  return (
+    <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50" onClick={onClose}>
+      <div className="bg-bg-card border border-border rounded-lg p-6 w-full max-w-2xl" onClick={(e) => e.stopPropagation()}>
+        <h3 className="text-lg font-bold text-text-primary font-mono mb-4">Import from Dockerfile</h3>
+        <p className="text-xs text-text-muted mb-3">Parse a Dockerfile to generate an LXC app scaffold. Packages, ports, and volumes will be extracted automatically.</p>
+
+        <div className="mb-3">
+          <label className="text-xs text-text-muted font-mono uppercase block mb-1">App Name *</label>
+          <input
+            type="text"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder="My App"
+            className="w-full bg-bg-primary border border-border rounded px-3 py-2 text-sm font-mono text-text-primary"
+            autoFocus
+          />
+        </div>
+
+        <div className="flex gap-2 mb-3">
+          <button onClick={() => setMode('url')} className={`px-3 py-1 text-xs font-mono rounded border cursor-pointer transition-colors ${mode === 'url' ? 'border-primary text-primary bg-primary/10' : 'border-border text-text-secondary bg-transparent hover:border-primary'}`}>From URL</button>
+          <button onClick={() => setMode('dockerfile')} className={`px-3 py-1 text-xs font-mono rounded border cursor-pointer transition-colors ${mode === 'dockerfile' ? 'border-primary text-primary bg-primary/10' : 'border-border text-text-secondary bg-transparent hover:border-primary'}`}>Paste Dockerfile</button>
+        </div>
+
+        {mode === 'url' ? (
+          <div>
+            <input
+              type="text"
+              value={url}
+              onChange={(e) => setUrl(e.target.value)}
+              placeholder="https://raw.githubusercontent.com/owner/repo/main/Dockerfile"
+              className="w-full bg-bg-primary border border-border rounded px-3 py-2 text-sm font-mono text-text-primary"
+            />
+            <p className="text-xs text-text-muted mt-2">Paste a direct link to a Dockerfile, or a GitHub repo URL (the Dockerfile will be auto-detected).</p>
+          </div>
+        ) : (
+          <textarea
+            value={dockerfile}
+            onChange={(e) => setDockerfile(e.target.value)}
+            placeholder={"FROM ubuntu:22.04\nRUN apt-get update && apt-get install -y nginx\nEXPOSE 80"}
+            className="w-full h-64 bg-bg-primary border border-border rounded px-3 py-2 text-sm font-mono text-text-primary resize-none"
+          />
+        )}
+
+        {error && <p className="text-red-400 text-sm font-mono mt-2">{error}</p>}
+
+        <div className="flex justify-end gap-2 mt-4">
+          <button onClick={onClose} className="bg-transparent border border-border rounded px-4 py-2 text-sm font-mono text-text-secondary cursor-pointer hover:border-primary transition-colors">Cancel</button>
+          <button onClick={handleImport} disabled={importing || !canImport} className="bg-primary text-bg-primary rounded px-4 py-2 text-sm font-mono font-bold cursor-pointer hover:opacity-90 disabled:opacity-50">{importing ? 'Importing...' : 'Import'}</button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// --- Dev App Editor ---
+
+function DevAppEditor({ id, requireAuth }: { id: string; requireAuth: (cb: () => void) => void }) {
+  const [app, setApp] = useState<DevApp | null>(null)
+  const [activeFile, setActiveFile] = useState('app.yml')
+  const [manifest, setManifest] = useState('')
+  const [script, setScript] = useState('')
+  const [readme, setReadme] = useState('')
+  const [saving, setSaving] = useState(false)
+  const [saveMsg, setSaveMsg] = useState('')
+  const [validation, setValidation] = useState<ValidationResult | null>(null)
+  const [deploying, setDeploying] = useState(false)
+  const [showSubmit, setShowSubmit] = useState(false)
+  const [showSdkRef, setShowSdkRef] = useState(false)
+
+  const fetchApp = useCallback(async () => {
+    try {
+      const data = await api.devGetApp(id)
+      setApp(data)
+      setManifest(data.manifest)
+      setScript(data.script)
+      setReadme(data.readme)
+    } catch { /* ignore */ }
+  }, [id])
+
+  useEffect(() => { fetchApp() }, [fetchApp])
+
+  const saveFile = useCallback((file: string, content: string) => {
+    requireAuth(async () => {
+      setSaving(true)
+      setSaveMsg('')
+      try {
+        if (file === 'app.yml') await api.devSaveManifest(id, content)
+        else if (file === 'provision/install.py') await api.devSaveScript(id, content)
+        else await api.devSaveFile(id, file, content)
+        setSaveMsg('Saved')
+        setTimeout(() => setSaveMsg(''), 1500)
+      } catch (e: unknown) {
+        setSaveMsg(`Error: ${e instanceof Error ? e.message : 'unknown'}`)
+      }
+      setSaving(false)
+    })
+  }, [id, requireAuth])
+
+  const handleValidate = () => {
+    requireAuth(async () => {
+      try {
+        const result = await api.devValidate(id)
+        setValidation(result)
+      } catch (e: unknown) {
+        alert(e instanceof Error ? e.message : 'Validation failed')
+      }
+    })
+  }
+
+  const handleDeploy = () => {
+    requireAuth(async () => {
+      setDeploying(true)
+      try {
+        const result = await api.devDeploy(id)
+        alert(result.message)
+        fetchApp()
+      } catch (e: unknown) {
+        alert(e instanceof Error ? e.message : 'Deploy failed')
+      }
+      setDeploying(false)
+    })
+  }
+
+  const handleUndeploy = () => {
+    requireAuth(async () => {
+      try {
+        await api.devUndeploy(id)
+        fetchApp()
+      } catch (e: unknown) {
+        alert(e instanceof Error ? e.message : 'Undeploy failed')
+      }
+    })
+  }
+
+  const handleExport = () => {
+    requireAuth(() => {
+      const form = document.createElement('form')
+      form.method = 'POST'
+      form.action = api.devExportUrl(id)
+      form.target = '_blank'
+      document.body.appendChild(form)
+      form.submit()
+      document.body.removeChild(form)
+    })
+  }
+
+  if (!app) return <Center className="py-16"><span className="text-text-muted font-mono">Loading...</span></Center>
+
+  const currentContent = activeFile === 'app.yml' ? manifest : activeFile === 'provision/install.py' ? script : readme
+  const setCurrentContent = activeFile === 'app.yml' ? setManifest : activeFile === 'provision/install.py' ? setScript : setReadme
+
+  return (
+    <div>
+      <BackLink href="#/developer" label="Back to dashboard" />
+
+      {/* Header */}
+      <div className="flex items-center justify-between mt-4 mb-4">
+        <div>
+          <h2 className="text-xl font-bold text-text-primary font-mono">{app.name || app.id}</h2>
+          <div className="flex items-center gap-3 mt-1">
+            <span className="text-xs text-text-muted font-mono">v{app.version}</span>
+            <DevStatusBadge status={app.status} />
+          </div>
+        </div>
+        <div className="flex gap-2">
+          <button onClick={handleValidate} className="bg-transparent border border-border rounded px-3 py-1.5 text-xs font-mono text-text-secondary cursor-pointer hover:border-blue-400 hover:text-blue-400 transition-colors">Validate</button>
+          {app.status === 'deployed' ? (
+            <button onClick={handleUndeploy} className="bg-transparent border border-yellow-400 rounded px-3 py-1.5 text-xs font-mono text-yellow-400 cursor-pointer hover:bg-yellow-400/10 transition-colors">Undeploy</button>
+          ) : (
+            <button onClick={handleDeploy} disabled={deploying} className="bg-primary text-bg-primary rounded px-3 py-1.5 text-xs font-mono font-bold cursor-pointer hover:opacity-90 disabled:opacity-50">{deploying ? 'Deploying...' : 'Deploy'}</button>
+          )}
+          <button onClick={handleExport} className="bg-transparent border border-border rounded px-3 py-1.5 text-xs font-mono text-text-secondary cursor-pointer hover:border-primary hover:text-primary transition-colors">Export</button>
+          <button onClick={() => setShowSdkRef(!showSdkRef)} className={`bg-transparent border rounded px-3 py-1.5 text-xs font-mono cursor-pointer transition-colors ${showSdkRef ? 'border-primary text-primary' : 'border-border text-text-secondary hover:border-primary hover:text-primary'}`}>SDK Ref</button>
+          <button onClick={() => setShowSubmit(true)} className="bg-transparent border border-border rounded px-3 py-1.5 text-xs font-mono text-text-secondary cursor-pointer hover:border-primary hover:text-primary transition-colors">Submit</button>
+          {app.status === 'deployed' && <a href={`#/app/${app.id}`} className="bg-transparent border border-primary rounded px-3 py-1.5 text-xs font-mono text-primary no-underline hover:bg-primary/10 transition-colors">Test Install</a>}
+        </div>
+      </div>
+
+      {/* Main editor area */}
+      <div className="flex gap-4" style={{ height: 'calc(100vh - 280px)' }}>
+        {/* File tree */}
+        <div className="w-48 border border-border rounded-lg overflow-hidden shrink-0">
+          <div className="bg-bg-card px-3 py-2 border-b border-border text-xs text-text-muted font-mono uppercase">Files</div>
+          <div className="p-1">
+            {['app.yml', 'provision/install.py', 'README.md'].map(f => (
+              <button
+                key={f}
+                onClick={() => setActiveFile(f)}
+                className={`w-full text-left px-3 py-1.5 text-xs font-mono rounded cursor-pointer transition-colors ${activeFile === f ? 'bg-primary/10 text-primary' : 'text-text-secondary hover:text-text-primary hover:bg-white/5'}`}
+              >
+                {f}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Editor */}
+        <div className="flex-1 flex flex-col border border-border rounded-lg overflow-hidden">
+          <div className="bg-bg-card px-4 py-2 border-b border-border flex items-center justify-between">
+            <span className="text-xs font-mono text-text-muted">{activeFile}</span>
+            <div className="flex items-center gap-2">
+              {saveMsg && <span className={`text-xs font-mono ${saveMsg.startsWith('Error') ? 'text-red-400' : 'text-primary'}`}>{saveMsg}</span>}
+              <button
+                onClick={() => saveFile(activeFile, currentContent)}
+                disabled={saving}
+                className="bg-primary text-bg-primary rounded px-3 py-1 text-xs font-mono font-bold cursor-pointer hover:opacity-90 disabled:opacity-50"
+              >{saving ? 'Saving...' : 'Save'}</button>
+            </div>
+          </div>
+          <div className="flex-1 overflow-hidden">
+            <CodeEditor
+              value={currentContent}
+              onChange={setCurrentContent}
+              filename={activeFile}
+              onSave={() => saveFile(activeFile, currentContent)}
+            />
+          </div>
+        </div>
+
+        {/* Validation panel */}
+        {validation && (
+          <div className="w-72 border border-border rounded-lg overflow-hidden shrink-0">
+            <div className="bg-bg-card px-3 py-2 border-b border-border flex items-center justify-between">
+              <span className="text-xs text-text-muted font-mono uppercase">Validation</span>
+              <span className={`text-xs font-mono font-bold ${validation.valid ? 'text-primary' : 'text-red-400'}`}>{validation.valid ? 'PASS' : 'FAIL'}</span>
+            </div>
+            <div className="p-2 overflow-y-auto" style={{ maxHeight: 'calc(100vh - 340px)' }}>
+              {validation.errors.length > 0 && (
+                <div className="mb-3">
+                  <span className="text-xs font-mono text-red-400 font-bold px-1">Errors ({validation.errors.length})</span>
+                  {validation.errors.map((e, i) => <DevValidationMsg key={i} msg={e} type="error" />)}
+                </div>
+              )}
+              {validation.warnings.length > 0 && (
+                <div className="mb-3">
+                  <span className="text-xs font-mono text-yellow-400 font-bold px-1">Warnings ({validation.warnings.length})</span>
+                  {validation.warnings.map((e, i) => <DevValidationMsg key={i} msg={e} type="warning" />)}
+                </div>
+              )}
+              <div>
+                <span className="text-xs font-mono text-text-muted font-bold px-1">Checklist</span>
+                {validation.checklist.map((c, i) => (
+                  <div key={i} className="flex items-center gap-2 px-1 py-1 text-xs font-mono">
+                    <span className={c.passed ? 'text-primary' : 'text-text-muted'}>{c.passed ? '[x]' : '[ ]'}</span>
+                    <span className={c.passed ? 'text-text-secondary' : 'text-text-muted'}>{c.label}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+      {showSdkRef && <SdkReferencePanel />}
+      {showSubmit && <DevSubmitDialog id={id} appName={app.name || app.id} onClose={() => setShowSubmit(false)} requireAuth={requireAuth} />}
+    </div>
+  )
+}
+
+const sdkReference = [
+  { group: 'Package Management', methods: [
+    { name: 'self.apt_install(packages)', desc: 'Install apt packages. packages: list[str]' },
+    { name: 'self.pip_install(packages)', desc: 'Install pip packages. packages: list[str]' },
+    { name: 'self.add_apt_key(url, keyring)', desc: 'Download GPG key and save to keyring path' },
+    { name: 'self.add_apt_repo(line, file)', desc: 'Add APT repository source line to file' },
+  ]},
+  { group: 'File Operations', methods: [
+    { name: 'self.write_config(path, content)', desc: 'Write content to a file, creating dirs as needed' },
+    { name: 'self.create_dir(path, owner?, mode?)', desc: 'Create a directory with optional owner and mode' },
+    { name: 'self.chown(path, user, group)', desc: 'Change ownership of a file or directory' },
+    { name: 'self.download(url, dest)', desc: 'Download a file from URL to destination path' },
+  ]},
+  { group: 'Service Management', methods: [
+    { name: 'self.enable_service(name)', desc: 'Enable and start a systemd service' },
+    { name: 'self.restart_service(name)', desc: 'Restart a systemd service' },
+  ]},
+  { group: 'Commands', methods: [
+    { name: 'self.run_command(cmd)', desc: 'Run a shell command, raises on non-zero exit' },
+    { name: 'self.run_installer_script(url)', desc: 'Download and execute an installer script' },
+  ]},
+  { group: 'User Management', methods: [
+    { name: 'self.create_user(username, ...)', desc: 'Create a system user with optional home dir, shell, groups' },
+  ]},
+  { group: 'Inputs', methods: [
+    { name: 'self.inputs.string(key, default?)', desc: 'Get string input value' },
+    { name: 'self.inputs.integer(key, default?)', desc: 'Get integer input value' },
+    { name: 'self.inputs.boolean(key, default?)', desc: 'Get boolean input value' },
+    { name: 'self.inputs.secret(key)', desc: 'Get secret input value (not logged)' },
+  ]},
+  { group: 'Logging', methods: [
+    { name: 'self.log(message)', desc: 'Log a message to the job output' },
+  ]},
+]
+
+function SdkReferencePanel() {
+  return (
+    <div className="border border-border rounded-lg mt-4 overflow-hidden">
+      <div className="bg-bg-card px-4 py-2 border-b border-border">
+        <span className="text-xs text-text-muted font-mono uppercase">Python SDK Reference</span>
+      </div>
+      <div className="p-4 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 max-h-64 overflow-y-auto">
+        {sdkReference.map(group => (
+          <div key={group.group}>
+            <h4 className="text-xs font-mono text-primary font-bold mb-1">{group.group}</h4>
+            {group.methods.map(m => (
+              <div key={m.name} className="mb-1.5">
+                <code className="text-xs font-mono text-text-primary">{m.name}</code>
+                <p className="text-xs text-text-muted mt-0.5">{m.desc}</p>
+              </div>
+            ))}
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+function DevSubmitDialog({ id, appName, onClose, requireAuth }: { id: string; appName: string; onClose: () => void; requireAuth: (cb: () => void) => void }) {
+  const [validation, setValidation] = useState<ValidationResult | null>(null)
+  const [validating, setValidating] = useState(true)
+
+  useEffect(() => {
+    api.devValidate(id).then(v => { setValidation(v); setValidating(false) }).catch(() => setValidating(false))
+  }, [id])
+
+  const handleSubmit = () => {
+    requireAuth(() => {
+      // Download zip
+      const form = document.createElement('form')
+      form.method = 'POST'
+      form.action = api.devExportUrl(id)
+      form.target = '_blank'
+      document.body.appendChild(form)
+      form.submit()
+      document.body.removeChild(form)
+
+      // Open GitHub issue
+      const title = encodeURIComponent(`New App: ${appName}`)
+      const body = encodeURIComponent(`## App Submission\n\n**App ID:** ${id}\n**App Name:** ${appName}\n\nPlease attach the exported zip file to this issue.\n\n### Checklist\n- [ ] App has been tested locally\n- [ ] Manifest validates without errors\n- [ ] README is included\n- [ ] Icon is included\n`)
+      window.open(`https://github.com/battlewithbytes/pve-appstore-catalog/issues/new?title=${title}&body=${body}`, '_blank')
+      onClose()
+    })
+  }
+
+  const allChecksPassed = validation && validation.valid && validation.checklist.every(c => c.passed)
+
+  return (
+    <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50" onClick={onClose}>
+      <div className="bg-bg-card border border-border rounded-lg p-6 w-full max-w-lg" onClick={(e) => e.stopPropagation()}>
+        <h3 className="text-lg font-bold text-text-primary font-mono mb-4">Submit to Catalog</h3>
+
+        {validating ? (
+          <p className="text-text-muted font-mono text-sm">Validating app...</p>
+        ) : validation ? (
+          <div>
+            <div className="mb-4">
+              <span className={`text-sm font-mono font-bold ${validation.valid ? 'text-primary' : 'text-red-400'}`}>
+                {validation.valid ? 'Validation passed' : 'Validation failed'}
+              </span>
+              {validation.errors.length > 0 && (
+                <div className="mt-2">
+                  {validation.errors.map((e, i) => (
+                    <p key={i} className="text-xs text-red-300 font-mono">{e.message}</p>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <div className="mb-4">
+              <span className="text-xs text-text-muted font-mono uppercase">Submission Checklist</span>
+              {validation.checklist.map((c, i) => (
+                <div key={i} className="flex items-center gap-2 py-0.5 text-xs font-mono">
+                  <span className={c.passed ? 'text-primary' : 'text-red-400'}>{c.passed ? '[x]' : '[ ]'}</span>
+                  <span className="text-text-secondary">{c.label}</span>
+                </div>
+              ))}
+            </div>
+
+            <p className="text-xs text-text-muted mb-4">
+              Submitting will export a zip file and open a GitHub issue where you can attach it.
+            </p>
+          </div>
+        ) : (
+          <p className="text-red-400 font-mono text-sm">Could not validate app.</p>
+        )}
+
+        <div className="flex justify-end gap-2">
+          <button onClick={onClose} className="bg-transparent border border-border rounded px-4 py-2 text-sm font-mono text-text-secondary cursor-pointer hover:border-primary transition-colors">Cancel</button>
+          <button
+            onClick={handleSubmit}
+            disabled={validating || !validation?.valid}
+            className="bg-primary text-bg-primary rounded px-4 py-2 text-sm font-mono font-bold cursor-pointer hover:opacity-90 disabled:opacity-50"
+          >
+            {allChecksPassed ? 'Submit' : 'Submit Anyway'}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function DevValidationMsg({ msg, type }: { msg: ValidationMsg; type: 'error' | 'warning' }) {
+  const color = type === 'error' ? 'border-red-400/30' : 'border-yellow-400/30'
+  return (
+    <div className={`border-l-2 ${color} px-2 py-1.5 my-1 text-xs font-mono`}>
+      <div className="text-text-muted">{msg.file}{msg.line ? `:${msg.line}` : ''}</div>
+      <div className={type === 'error' ? 'text-red-300' : 'text-yellow-300'}>{msg.message}</div>
+    </div>
+  )
 }
 
 export default App

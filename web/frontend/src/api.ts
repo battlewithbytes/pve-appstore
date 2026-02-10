@@ -1,4 +1,4 @@
-import type { AppsResponse, AppDetail, CategoriesResponse, HealthResponse, JobsResponse, LogsResponse, InstallsResponse, InstallRequest, InstallDetail, Job, ConfigDefaultsResponse, BrowseResponse, MountInfo, ExportResponse, ApplyResponse, ApplyPreviewResponse, AppStatusResponse, StacksResponse, StackDetail, StackCreateRequest, StackValidateResponse, EditRequest } from './types';
+import type { AppsResponse, AppDetail, CategoriesResponse, HealthResponse, JobsResponse, LogsResponse, InstallsResponse, InstallRequest, InstallDetail, Job, ConfigDefaultsResponse, BrowseResponse, MountInfo, ExportResponse, ApplyResponse, ApplyPreviewResponse, AppStatusResponse, StacksResponse, StackDetail, StackCreateRequest, StackValidateResponse, EditRequest, Settings, SettingsUpdate, DevAppsResponse, DevApp, DevTemplate, ValidationResult } from './types';
 
 const BASE = '/api';
 
@@ -217,4 +217,79 @@ export const api = {
     const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     return `${proto}//${window.location.host}${BASE}/stacks/${id}/logs?token=${encodeURIComponent(token)}`;
   },
+
+  // --- Settings ---
+
+  settings: () => fetchJSON<Settings>(`${BASE}/settings`),
+
+  updateSettings: (update: SettingsUpdate) =>
+    fetchJSON<Settings>(`${BASE}/settings`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(update),
+    }),
+
+  // --- Developer Mode ---
+
+  devApps: () => fetchJSON<DevAppsResponse>(`${BASE}/dev/apps`),
+
+  devCreateApp: (id: string, template?: string) =>
+    fetchJSON<DevApp>(`${BASE}/dev/apps`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id, template }),
+    }),
+
+  devGetApp: (id: string) => fetchJSON<DevApp>(`${BASE}/dev/apps/${id}`),
+
+  devSaveManifest: (id: string, content: string) =>
+    fetchJSON<{ status: string }>(`${BASE}/dev/apps/${id}/manifest`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'text/plain' },
+      body: content,
+    }),
+
+  devSaveScript: (id: string, content: string) =>
+    fetchJSON<{ status: string }>(`${BASE}/dev/apps/${id}/script`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'text/plain' },
+      body: content,
+    }),
+
+  devSaveFile: (id: string, path: string, content: string) =>
+    fetchJSON<{ status: string }>(`${BASE}/dev/apps/${id}/file`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path, content }),
+    }),
+
+  devDeleteApp: (id: string) =>
+    fetchJSON<{ status: string }>(`${BASE}/dev/apps/${id}`, { method: 'DELETE' }),
+
+  devValidate: (id: string) =>
+    fetchJSON<ValidationResult>(`${BASE}/dev/apps/${id}/validate`, { method: 'POST' }),
+
+  devDeploy: (id: string) =>
+    fetchJSON<{ status: string; app_id: string; message: string }>(`${BASE}/dev/apps/${id}/deploy`, { method: 'POST' }),
+
+  devUndeploy: (id: string) =>
+    fetchJSON<{ status: string }>(`${BASE}/dev/apps/${id}/undeploy`, { method: 'POST' }),
+
+  devExportUrl: (id: string) => `${BASE}/dev/apps/${id}/export`,
+
+  devImportUnraid: (payload: { xml?: string; url?: string }) =>
+    fetchJSON<DevApp>(`${BASE}/dev/import/unraid`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    }),
+
+  devImportDockerfile: (payload: { name: string; dockerfile?: string; url?: string }) =>
+    fetchJSON<DevApp>(`${BASE}/dev/import/dockerfile`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    }),
+
+  devTemplates: () => fetchJSON<{ templates: DevTemplate[] }>(`${BASE}/dev/templates`),
 };
