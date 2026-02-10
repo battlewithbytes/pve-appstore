@@ -16,15 +16,18 @@ type Store struct {
 
 // NewStore opens (or creates) the SQLite database at the given path.
 func NewStore(dbPath string) (*Store, error) {
-	db, err := sql.Open("sqlite", dbPath)
+	// Set pragmas via DSN so EVERY connection in the pool gets them.
+	// database/sql pools connections — a PRAGMA run via db.Exec only
+	// applies to one connection, leaving others without busy_timeout.
+	dsn := fmt.Sprintf("file:%s?_pragma=busy_timeout(10000)&_pragma=journal_mode(WAL)", dbPath)
+	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("opening database: %w", err)
 	}
 
-	// Enable WAL mode for better concurrent reads
-	if _, err := db.Exec("PRAGMA journal_mode=WAL"); err != nil {
-		return nil, fmt.Errorf("setting WAL mode: %w", err)
-	}
+	// SQLite supports only one writer at a time. Limit the pool so
+	// goroutines queue at the Go level instead of fighting over the lock.
+	db.SetMaxOpenConns(4)
 
 	s := &Store{db: db}
 	if err := s.migrate(); err != nil {

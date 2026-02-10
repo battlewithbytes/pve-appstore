@@ -146,7 +146,7 @@ func (m *Manager) MountHostPath(ctid int, mpIndex int, hostPath, containerPath s
 }
 
 func (m *Manager) AppendLXCConfig(ctid int, lines []string) error {
-	return pct.Set(ctid, lines...)
+	return pct.AppendConf(ctid, lines)
 }
 
 func (m *Manager) GetStorageInfo(ctx context.Context, storageID string) (*engine.StorageInfo, error) {

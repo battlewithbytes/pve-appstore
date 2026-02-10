@@ -92,6 +92,9 @@ export const api = {
       body: JSON.stringify({ keep_volumes: keepVolumes }),
     }),
 
+  purgeInstall: (id: string) =>
+    fetchJSON<{ status: string }>(`${BASE}/installs/${id}`, { method: 'DELETE' }),
+
   reinstall: (id: string, overrides?: { cores?: number; memory_mb?: number; disk_gb?: number; storage?: string; bridge?: string; inputs?: Record<string, string> }) =>
     fetchJSON<Job>(`${BASE}/installs/${id}/reinstall`, {
       method: 'POST',

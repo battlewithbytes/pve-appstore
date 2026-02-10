@@ -107,6 +107,7 @@ func New(cfg *config.Config, cat *catalog.Catalog, eng *engine.Engine, spaFS fs.
 	mux.HandleFunc("POST /api/installs/{id}/stop", s.withAuth(s.handleStopContainer))
 	mux.HandleFunc("POST /api/installs/{id}/restart", s.withAuth(s.handleRestartContainer))
 	mux.HandleFunc("POST /api/installs/{id}/uninstall", s.withAuth(s.handleUninstall))
+	mux.HandleFunc("DELETE /api/installs/{id}", s.withAuth(s.handlePurgeInstall))
 	mux.HandleFunc("POST /api/installs/{id}/reinstall", s.withAuth(s.handleReinstall))
 	mux.HandleFunc("POST /api/installs/{id}/update", s.withAuth(s.handleUpdate))
 	mux.HandleFunc("POST /api/installs/{id}/edit", s.withAuth(s.handleEditInstall))

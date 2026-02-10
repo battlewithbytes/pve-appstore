@@ -489,6 +489,22 @@ func (s *Server) handleUninstall(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusAccepted, job)
 }
 
+func (s *Server) handlePurgeInstall(w http.ResponseWriter, r *http.Request) {
+	installID := r.PathValue("id")
+
+	if s.engine == nil {
+		writeError(w, http.StatusServiceUnavailable, "engine not available")
+		return
+	}
+
+	if err := s.engine.PurgeInstall(installID); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "purged"})
+}
+
 // exportRecipe is a portable install recipe suitable for apply/restore.
 type exportRecipe struct {
 	AppID          string                      `json:"app_id" yaml:"app_id"`

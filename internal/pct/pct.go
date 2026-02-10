@@ -175,6 +175,19 @@ func Push(ctid int, src, dst string, perms string) error {
 	return nil
 }
 
+// AppendConf appends raw LXC config lines to /etc/pve/lxc/<ctid>.conf
+// using sudo tee -a through the nsenter wrapper.
+func AppendConf(ctid int, lines []string) error {
+	confPath := fmt.Sprintf("/etc/pve/lxc/%d.conf", ctid)
+	cmd := SudoNsenterCmd("/usr/bin/tee", "-a", confPath)
+	cmd.Stdin = strings.NewReader(strings.Join(lines, "\n") + "\n")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("tee -a %s: %s: %w", confPath, strings.TrimSpace(string(out)), err)
+	}
+	return nil
+}
+
 // GetIP attempts to get the IP address of a running container.
 func GetIP(ctid int) (string, error) {
 	result, err := Exec(ctid, []string{"hostname", "-I"})

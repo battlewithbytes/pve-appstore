@@ -358,10 +358,12 @@ func (e *Engine) runStackInstall(bgCtx context.Context, job *Job, stackID, osTem
 	}
 	ctx.info("All %d manifests validated", len(manifests))
 
-	// Step 2: Allocate CTID
+	// Step 2: Allocate CTID (under lock to prevent races with concurrent installs)
 	ctx.transition(StateAllocateCTID)
+	e.ctidMu.Lock()
 	ctid, err := e.cm.AllocateCTID(bgCtx)
 	if err != nil {
+		e.ctidMu.Unlock()
 		ctx.failJob("allocate_ctid: %v", err)
 		return
 	}
@@ -370,7 +372,7 @@ func (e *Engine) runStackInstall(bgCtx context.Context, job *Job, stackID, osTem
 	e.store.UpdateJob(ctx.job)
 	ctx.info("Allocated CTID: %d", ctid)
 
-	// Step 3: Resolve template and create container
+	// Step 3: Resolve template and create container (ctidMu released after Create)
 	ctx.transition(StateCreateContainer)
 	template := osTemplate
 	if !strings.Contains(template, ":") {
@@ -427,9 +429,11 @@ func (e *Engine) runStackInstall(bgCtx context.Context, job *Job, stackID, osTem
 
 	ctx.info("Creating container %d (template=%s, %d cores, %d MB, %d GB)", ctid, template, opts.Cores, opts.MemoryMB, opts.RootFSSize)
 	if err := e.cm.Create(bgCtx, opts); err != nil {
+		e.ctidMu.Unlock()
 		ctx.failJob("create_container: %v", err)
 		return
 	}
+	e.ctidMu.Unlock()
 	ctx.info("Container %d created", ctid)
 
 	// Configure device passthrough via pct set (bypasses API root@pam restriction)

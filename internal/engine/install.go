@@ -42,11 +42,12 @@ var installSteps = []struct {
 
 // installContext carries state through the install pipeline.
 type installContext struct {
-	ctx      context.Context
-	engine   *Engine
-	job      *Job
-	manifest *catalog.AppManifest
-	hwAddr   string // MAC address to preserve across recreates
+	ctx        context.Context
+	engine     *Engine
+	job        *Job
+	manifest   *catalog.AppManifest
+	hwAddr     string // MAC address to preserve across recreates
+	ctidLocked bool   // true when ctidMu is held between allocate→create
 }
 
 func (ctx *installContext) log(level, msg string, args ...interface{}) {
@@ -96,10 +97,20 @@ func (e *Engine) runInstall(bgCtx context.Context, job *Job) {
 
 	ctx.info("Starting install of %s (%s)", app.Name, app.ID)
 
+	// releaseCTIDLock ensures the CTID mutex is released if the pipeline
+	// exits between stepAllocateCTID and stepCreateContainer (cancel/panic).
+	releaseCTIDLock := func() {
+		if ctx.ctidLocked {
+			ctx.engine.ctidMu.Unlock()
+			ctx.ctidLocked = false
+		}
+	}
+
 	for _, step := range installSteps {
 		// Check for cancellation between steps
 		select {
 		case <-bgCtx.Done():
+			releaseCTIDLock()
 			ctx.warn("Job cancelled by user")
 			e.cleanupCancelledJob(ctx)
 			return
@@ -109,6 +120,7 @@ func (e *Engine) runInstall(bgCtx context.Context, job *Job) {
 		ctx.transition(step.state)
 
 		if err := step.fn(ctx); err != nil {
+			releaseCTIDLock()
 			// Check if the error was due to cancellation
 			if bgCtx.Err() != nil {
 				ctx.warn("Job cancelled by user during %s", step.state)
@@ -191,8 +203,16 @@ func stepValidatePlacement(ctx *installContext) error {
 }
 
 func stepAllocateCTID(ctx *installContext) error {
+	// Lock to serialize CTID allocation + container creation across concurrent jobs.
+	// Proxmox /cluster/nextid returns the same ID until a container is actually created,
+	// so we must hold the lock until Create() completes in the next step.
+	ctx.engine.ctidMu.Lock()
+	ctx.ctidLocked = true
+
 	ctid, err := ctx.engine.cm.AllocateCTID(context.Background())
 	if err != nil {
+		ctx.engine.ctidMu.Unlock()
+		ctx.ctidLocked = false
 		return fmt.Errorf("allocating CTID: %w", err)
 	}
 	ctx.job.CTID = ctid
@@ -203,6 +223,12 @@ func stepAllocateCTID(ctx *installContext) error {
 }
 
 func stepCreateContainer(ctx *installContext) error {
+	// Unlock ctidMu when done — acquired in stepAllocateCTID.
+	defer func() {
+		ctx.engine.ctidMu.Unlock()
+		ctx.ctidLocked = false
+	}()
+
 	// Resolve OS template
 	template := ctx.manifest.LXC.OSTemplate
 	if !strings.Contains(template, ":") {

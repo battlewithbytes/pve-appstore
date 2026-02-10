@@ -115,6 +115,7 @@ type Engine struct {
 	store   *Store
 	cm      ContainerManager
 	mu      sync.Mutex
+	ctidMu  sync.Mutex // serializes CTID allocation → container creation
 	cancels map[string]context.CancelFunc
 }
 
@@ -480,6 +481,20 @@ func (e *Engine) StartInstall(req InstallRequest) (*Job, error) {
 }
 
 // Uninstall stops and destroys a container for an installed app.
+// PurgeInstall deletes an "uninstalled" install record from the database.
+// Only works on installs with status "uninstalled" (container already destroyed).
+func (e *Engine) PurgeInstall(installID string) error {
+	inst, err := e.store.GetInstall(installID)
+	if err != nil {
+		return fmt.Errorf("install %q not found", installID)
+	}
+	if inst.Status != "uninstalled" {
+		return fmt.Errorf("can only purge uninstalled records (status is %q)", inst.Status)
+	}
+	_, err = e.store.db.Exec("DELETE FROM installs WHERE id=?", inst.ID)
+	return err
+}
+
 // If keepVolumes is true, mount point volumes are detached before destroy and preserved.
 func (e *Engine) Uninstall(installID string, keepVolumes bool) (*Job, error) {
 	// Find the install
@@ -516,23 +531,37 @@ func (e *Engine) runUninstall(job *Job, inst *Install, keepVolumes bool) {
 
 	ctx.info("Starting uninstall of %s (CTID %d, keepVolumes=%v)", inst.AppName, inst.CTID, keepVolumes)
 
+	bgCtx := context.Background()
+	ctGone := false // set when we detect the container no longer exists
+
 	// Stop container
 	ctx.transition("stopping")
 	ctx.info("Stopping container %d...", inst.CTID)
-	bgCtx := context.Background()
 
 	// Try graceful shutdown first, then force stop
 	ctx.info("Attempting graceful shutdown of container %d (timeout 30s)...", inst.CTID)
 	if err := e.cm.Shutdown(bgCtx, inst.CTID, 30); err != nil {
-		ctx.warn("Graceful shutdown failed: %v — forcing stop", err)
-		if err := e.cm.Stop(bgCtx, inst.CTID); err != nil {
-			ctx.warn("Force stop error: %v", err)
+		if isContainerGone(err) {
+			ctx.info("Container %d already removed — skipping stop/destroy", inst.CTID)
+			ctGone = true
+		} else {
+			ctx.warn("Graceful shutdown failed: %v — forcing stop", err)
+			if err := e.cm.Stop(bgCtx, inst.CTID); err != nil {
+				if isContainerGone(err) {
+					ctx.info("Container %d already removed — skipping destroy", inst.CTID)
+					ctGone = true
+				} else {
+					ctx.warn("Force stop error: %v", err)
+				}
+			}
 		}
 	}
-	ctx.info("Shutdown/stop command completed for container %d", inst.CTID)
+	if !ctGone {
+		ctx.info("Shutdown/stop command completed for container %d", inst.CTID)
+	}
 
 	// If keeping volumes, detach managed volumes before destroy (bind mounts don't need detaching)
-	if keepVolumes && len(inst.MountPoints) > 0 {
+	if !ctGone && keepVolumes && len(inst.MountPoints) > 0 {
 		var managedIndexes []int
 		for _, mp := range inst.MountPoints {
 			if mp.Type == "volume" {
@@ -568,34 +597,46 @@ func (e *Engine) runUninstall(job *Job, inst *Install, keepVolumes bool) {
 				}
 			}
 			if err := e.cm.DetachMountPoints(bgCtx, inst.CTID, managedIndexes); err != nil {
-				ctx.warn("Failed to detach mount points: %v — volumes may be destroyed", err)
+				if isContainerGone(err) {
+					ctx.info("Container %d config already removed — skipping detach", inst.CTID)
+					ctGone = true
+				} else {
+					ctx.warn("Failed to detach mount points: %v — volumes may be destroyed", err)
+				}
 			}
 		}
 	}
 
 	// Destroy container with retries (container may need a moment to fully stop)
-	ctx.transition("destroying")
-	ctx.info("Destroying container %d...", inst.CTID)
-	var destroyErr error
-	for attempt := 0; attempt < 5; attempt++ {
-		if attempt > 0 {
-			time.Sleep(5 * time.Second)
+	if !ctGone {
+		ctx.transition("destroying")
+		ctx.info("Destroying container %d...", inst.CTID)
+		var destroyErr error
+		for attempt := 0; attempt < 5; attempt++ {
+			if attempt > 0 {
+				time.Sleep(5 * time.Second)
+			}
+			destroyErr = e.cm.Destroy(bgCtx, inst.CTID, keepVolumes)
+			if destroyErr == nil {
+				break
+			}
+			if isContainerGone(destroyErr) {
+				ctx.info("Container %d already removed", inst.CTID)
+				destroyErr = nil
+				break
+			}
+			ctx.warn("Destroy attempt %d failed: %v", attempt+1, destroyErr)
 		}
-		destroyErr = e.cm.Destroy(bgCtx, inst.CTID, keepVolumes)
-		if destroyErr == nil {
-			break
+		if destroyErr != nil {
+			ctx.log("error", "Failed to destroy container after retries: %v", destroyErr)
+			job.State = StateFailed
+			job.Error = fmt.Sprintf("destroy: %v", destroyErr)
+			now := time.Now()
+			job.UpdatedAt = now
+			job.CompletedAt = &now
+			e.store.UpdateJob(job)
+			return
 		}
-		ctx.warn("Destroy attempt %d failed: %v", attempt+1, destroyErr)
-	}
-	if destroyErr != nil {
-		ctx.log("error", "Failed to destroy container after retries: %v", destroyErr)
-		job.State = StateFailed
-		job.Error = fmt.Sprintf("destroy: %v", destroyErr)
-		now := time.Now()
-		job.UpdatedAt = now
-		job.CompletedAt = &now
-		e.store.UpdateJob(job)
-		return
 	}
 
 	// Only preserve install record if there are managed volumes worth keeping
@@ -1500,36 +1541,54 @@ func (e *Engine) runStackUninstall(job *Job, stack *Stack) {
 	ctx.info("Starting uninstall of stack %s (CTID %d)", stack.Name, stack.CTID)
 
 	bgCtx := context.Background()
+	ctGone := false
 
 	// Stop container
 	ctx.transition("stopping")
 	if err := e.cm.Shutdown(bgCtx, stack.CTID, 30); err != nil {
-		ctx.warn("Graceful shutdown failed: %v — forcing stop", err)
-		_ = e.cm.Stop(bgCtx, stack.CTID)
+		if isContainerGone(err) {
+			ctx.info("Container %d already removed — skipping stop/destroy", stack.CTID)
+			ctGone = true
+		} else {
+			ctx.warn("Graceful shutdown failed: %v — forcing stop", err)
+			if err := e.cm.Stop(bgCtx, stack.CTID); err != nil {
+				if isContainerGone(err) {
+					ctx.info("Container %d already removed — skipping destroy", stack.CTID)
+					ctGone = true
+				}
+			}
+		}
 	}
 
 	// Destroy container with retries
-	ctx.transition("destroying")
-	var destroyErr error
-	for attempt := 0; attempt < 5; attempt++ {
-		if attempt > 0 {
-			time.Sleep(5 * time.Second)
+	if !ctGone {
+		ctx.transition("destroying")
+		var destroyErr error
+		for attempt := 0; attempt < 5; attempt++ {
+			if attempt > 0 {
+				time.Sleep(5 * time.Second)
+			}
+			destroyErr = e.cm.Destroy(bgCtx, stack.CTID)
+			if destroyErr == nil {
+				break
+			}
+			if isContainerGone(destroyErr) {
+				ctx.info("Container %d already removed", stack.CTID)
+				destroyErr = nil
+				break
+			}
+			ctx.warn("Destroy attempt %d failed: %v", attempt+1, destroyErr)
 		}
-		destroyErr = e.cm.Destroy(bgCtx, stack.CTID)
-		if destroyErr == nil {
-			break
+		if destroyErr != nil {
+			ctx.log("error", "Failed to destroy container: %v", destroyErr)
+			job.State = StateFailed
+			job.Error = fmt.Sprintf("destroy: %v", destroyErr)
+			now := time.Now()
+			job.UpdatedAt = now
+			job.CompletedAt = &now
+			e.store.UpdateJob(job)
+			return
 		}
-		ctx.warn("Destroy attempt %d failed: %v", attempt+1, destroyErr)
-	}
-	if destroyErr != nil {
-		ctx.log("error", "Failed to destroy container: %v", destroyErr)
-		job.State = StateFailed
-		job.Error = fmt.Sprintf("destroy: %v", destroyErr)
-		now := time.Now()
-		job.UpdatedAt = now
-		job.CompletedAt = &now
-		e.store.UpdateJob(job)
-		return
 	}
 
 	// Remove stack record
@@ -1752,10 +1811,12 @@ func (e *Engine) runStackInstallWithHWAddr(bgCtx context.Context, job *Job, stac
 		}
 	}
 
-	// Step 2: Allocate CTID
+	// Step 2: Allocate CTID (under lock to prevent races with concurrent installs)
 	ctx.transition(StateAllocateCTID)
+	e.ctidMu.Lock()
 	ctid, err := e.cm.AllocateCTID(bgCtx)
 	if err != nil {
+		e.ctidMu.Unlock()
 		ctx.failJob("allocate_ctid: %v", err)
 		return
 	}
@@ -1764,7 +1825,7 @@ func (e *Engine) runStackInstallWithHWAddr(bgCtx context.Context, job *Job, stac
 	e.store.UpdateJob(ctx.job)
 	ctx.info("Allocated CTID: %d", ctid)
 
-	// Step 3: Create container with preserved MAC
+	// Step 3: Create container with preserved MAC (ctidMu released after Create)
 	ctx.transition(StateCreateContainer)
 	template := stack.OSTemplate
 	if !strings.Contains(template, ":") {
@@ -1817,9 +1878,11 @@ func (e *Engine) runStackInstallWithHWAddr(bgCtx context.Context, job *Job, stac
 		ctx.info("Using preserved MAC address: %s", hwAddr)
 	}
 	if err := e.cm.Create(bgCtx, opts); err != nil {
+		e.ctidMu.Unlock()
 		ctx.failJob("create_container: %v", err)
 		return
 	}
+	e.ctidMu.Unlock()
 
 	// Aggregate GPU devices from all app manifests in the stack
 	var allStackDevices []DevicePassthrough
@@ -2088,4 +2151,16 @@ func generateID() string {
 	b := make([]byte, 8)
 	rand.Read(b)
 	return hex.EncodeToString(b)
+}
+
+// isContainerGone returns true if the error indicates the container or its
+// config no longer exists on the Proxmox node (already destroyed externally).
+func isContainerGone(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "does not exist") ||
+		strings.Contains(msg, "no such container") ||
+		strings.Contains(msg, "not found")
 }

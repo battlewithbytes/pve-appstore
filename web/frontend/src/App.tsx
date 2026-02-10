@@ -1043,6 +1043,19 @@ function InstallDetailView({ id, requireAuth }: { id: string; requireAuth: (cb: 
     })
   }
 
+  const handlePurge = () => {
+    requireAuth(async () => {
+      if (!detail) return
+      if (!confirm('Delete this install record? Any preserved volumes will NOT be removed from storage.')) return
+      try {
+        await api.purgeInstall(detail.id)
+        window.location.hash = '#/installs'
+      } catch (e: unknown) {
+        alert(e instanceof Error ? e.message : 'Delete failed')
+      }
+    })
+  }
+
   const handleUpdate = () => {
     requireAuth(async () => {
       if (!detail) return
@@ -1124,6 +1137,11 @@ function InstallDetailView({ id, requireAuth }: { id: string; requireAuth: (cb: 
           {isUninstalled && hasVolumes && (
             <button onClick={handleReinstall} disabled={reinstalling} className="px-4 py-2 text-sm font-mono border-none rounded-lg cursor-pointer text-bg-primary bg-primary hover:shadow-[0_0_20px_rgba(0,255,157,0.3)] transition-all disabled:opacity-50 font-semibold">
               {reinstalling ? 'Reinstalling...' : 'Reinstall'}
+            </button>
+          )}
+          {isUninstalled && (
+            <button onClick={handlePurge} className="px-4 py-2 text-sm font-mono border border-status-stopped/30 rounded-lg cursor-pointer text-status-stopped bg-status-stopped/10 hover:bg-status-stopped/20 transition-colors">
+              Delete Record
             </button>
           )}
           {!isUninstalled && (
@@ -1626,6 +1644,11 @@ function InstallsList({ requireAuth }: { requireAuth: (cb: () => void) => void }
           window.location.hash = `#/job/${job.id}`
           return
         }
+        case 'purge': {
+          if (!confirm('Delete this install record? Any preserved volumes will NOT be removed from storage.')) break
+          await api.purgeInstall(installId)
+          break
+        }
       }
       setTimeout(fetchInstalls, 1000)
       setTimeout(fetchInstalls, 4000)
@@ -1951,6 +1974,12 @@ function InstallContextMenu({ install, x, y, onClose, onAction, onShell, onLogs 
           <>
             <div className="border-t border-border my-1" />
             <CtxMenuItem label="Remove" danger onClick={() => onAction('uninstall', install.id)} />
+          </>
+        )}
+        {isUninstalled && (
+          <>
+            <div className="border-t border-border my-1" />
+            <CtxMenuItem label="Delete Record" danger onClick={() => onAction('purge', install.id)} />
           </>
         )}
       </div>

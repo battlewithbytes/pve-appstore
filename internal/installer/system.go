@@ -227,6 +227,7 @@ func createDirectories() error {
 	}{
 		{"/etc/pve-appstore", "root", 0750},
 		{config.DefaultDataDir, config.ServiceUser, 0750},
+		{config.DefaultDataDir + "/tmp", config.ServiceUser, 0750},
 		{config.DefaultLogDir, config.ServiceUser, 0750},
 		{config.DefaultInstallDir, "root", 0755},
 	}
