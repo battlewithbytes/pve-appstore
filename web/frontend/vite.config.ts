@@ -9,4 +9,23 @@ export default defineConfig({
       '/api': 'http://localhost:8088',
     },
   },
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          codemirror: [
+            '@codemirror/view',
+            '@codemirror/state',
+            '@codemirror/lang-yaml',
+            '@codemirror/lang-python',
+            '@codemirror/theme-one-dark',
+            '@codemirror/autocomplete',
+            '@codemirror/commands',
+            '@codemirror/language',
+            '@codemirror/search',
+          ],
+        },
+      },
+    },
+  },
 })

@@ -11,25 +11,6 @@ http:
   server_port: $http_port
 """
 
-SYSTEMD_UNIT = """\
-[Unit]
-Description=Home Assistant Core
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-Type=simple
-User=homeassistant
-Environment="PATH=/opt/homeassistant/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
-ExecStart=/opt/homeassistant/venv/bin/hass -c $config_path
-Restart=on-failure
-RestartSec=10
-WorkingDirectory=/opt/homeassistant
-
-[Install]
-WantedBy=multi-user.target
-"""
-
 MQTT_HA_CONFIG = """\
 
 mqtt:
@@ -88,13 +69,15 @@ class HomeAssistantApp(BaseApp):
         self.chown(config_path, "homeassistant:homeassistant", recursive=True)
 
         # Create systemd service
-        self.write_config(
-            "/etc/systemd/system/homeassistant.service",
-            SYSTEMD_UNIT,
-            config_path=config_path,
+        self.create_service("homeassistant",
+            exec_start=f"/opt/homeassistant/venv/bin/hass -c {config_path}",
+            description="Home Assistant Core",
+            user="homeassistant",
+            working_directory="/opt/homeassistant",
+            environment={"PATH": "/opt/homeassistant/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"},
+            restart="on-failure",
+            restart_sec=10,
         )
-
-        self.enable_service("homeassistant")
         self.log.info("Home Assistant installed successfully")
 
 

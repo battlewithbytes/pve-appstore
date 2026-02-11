@@ -3,6 +3,7 @@ package proxmox
 import (
 	"context"
 	"fmt"
+	"log"
 	"net/url"
 	"strings"
 )
@@ -57,6 +58,21 @@ func (c *Client) DownloadTemplate(ctx context.Context, storage, template string)
 	return c.WaitForTask(ctx, upid, defaultTaskTimeout)
 }
 
+// templateSuffixes are the naming conventions for LXC templates in Proxmox.
+// Debian/Ubuntu use "-standard", Alpine and most others use "-default".
+var templateSuffixes = []string{"-standard", "-default"}
+
+// matchesTemplate checks if a volid or template name matches the given short name.
+func matchesTemplate(candidate, name string) bool {
+	lower := strings.ToLower(candidate)
+	for _, suffix := range templateSuffixes {
+		if strings.Contains(lower, name+suffix) {
+			return true
+		}
+	}
+	return false
+}
+
 // ResolveTemplate finds a template matching the short name (e.g., "debian-12")
 // from the available templates on the given storage. If not found locally,
 // it searches the Proxmox appliance list and downloads it automatically.
@@ -65,7 +81,7 @@ func (c *Client) ResolveTemplate(ctx context.Context, name, storage string) stri
 	templates, err := c.ListTemplates(ctx, storage)
 	if err == nil {
 		for _, t := range templates {
-			if strings.Contains(strings.ToLower(t.Volid), name+"-standard") {
+			if matchesTemplate(t.Volid, name) {
 				return t.Volid
 			}
 		}
@@ -76,7 +92,7 @@ func (c *Client) ResolveTemplate(ctx context.Context, name, storage string) stri
 		templates, err = c.ListTemplates(ctx, "local")
 		if err == nil {
 			for _, t := range templates {
-				if strings.Contains(strings.ToLower(t.Volid), name+"-standard") {
+				if matchesTemplate(t.Volid, name) {
 					return t.Volid
 				}
 			}
@@ -85,17 +101,31 @@ func (c *Client) ResolveTemplate(ctx context.Context, name, storage string) stri
 
 	// 2. Not found locally — search appliance list and download
 	available, err := c.ListAvailableTemplates(ctx)
-	if err == nil {
+	if err != nil {
+		log.Printf("[template] failed to list available templates: %v", err)
+	} else {
+		log.Printf("[template] searching %d available templates for %q", len(available), name)
 		for _, a := range available {
-			if strings.Contains(strings.ToLower(a.Template), name+"-standard") {
-				if dlErr := c.DownloadTemplate(ctx, "local", a.Template); dlErr == nil {
-					return "local:vztmpl/" + a.Template
+			if matchesTemplate(a.Template, name) {
+				// Try downloading to "local" storage first (default), fall back to target storage
+				for _, dlStorage := range []string{"local", storage} {
+					log.Printf("[template] found match: %s — downloading to %s", a.Template, dlStorage)
+					if dlErr := c.DownloadTemplate(ctx, dlStorage, a.Template); dlErr != nil {
+						log.Printf("[template] download to %s failed: %v", dlStorage, dlErr)
+						continue
+					}
+					return dlStorage + ":vztmpl/" + a.Template
 				}
 				break
 			}
 		}
 	}
 
-	// 3. Fallback: standard pattern (will likely fail, but gives a clear error)
+	// 3. Fallback: try common naming patterns (will likely fail, but gives a clear error)
+	// Debian/Ubuntu use "-standard", Alpine and others use "-default"
+	lower := strings.ToLower(name)
+	if strings.HasPrefix(lower, "alpine") || strings.HasPrefix(lower, "fedora") || strings.HasPrefix(lower, "arch") || strings.HasPrefix(lower, "rocky") || strings.HasPrefix(lower, "opensuse") {
+		return fmt.Sprintf("local:vztmpl/%s-default_amd64.tar.xz", name)
+	}
 	return fmt.Sprintf("local:vztmpl/%s-standard_amd64.tar.zst", name)
 }

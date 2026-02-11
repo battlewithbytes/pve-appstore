@@ -7,7 +7,7 @@ LDFLAGS   := -X $(MODULE)/internal/version.Version=$(VERSION) \
              -X $(MODULE)/internal/version.Commit=$(COMMIT) \
              -X $(MODULE)/internal/version.Date=$(DATE)
 
-.PHONY: build test test-apps vet fmt lint install run-install run-serve clean deps tidy release frontend
+.PHONY: build test test-apps vet fmt lint install deploy run-install run-serve clean deps tidy release frontend
 
 build:
 	go build -ldflags "$(LDFLAGS)" -o $(BINARY) ./cmd/pve-appstore/
@@ -29,6 +29,13 @@ frontend:
 install: build
 	cp $(BINARY) /opt/pve-appstore/$(BINARY)
 	chmod 0755 /opt/pve-appstore/$(BINARY)
+
+deploy: frontend build
+	systemctl stop pve-appstore
+	cp $(BINARY) /opt/pve-appstore/$(BINARY)
+	chmod 0755 /opt/pve-appstore/$(BINARY)
+	systemctl start pve-appstore
+	@echo "Deployed $$(/opt/pve-appstore/pve-appstore version 2>&1 | head -1)"
 
 run-install: build
 	./$(BINARY) install

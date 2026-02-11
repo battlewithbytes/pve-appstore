@@ -1,0 +1,135 @@
+# Base image to OS family mappings for Dockerfile → LXC conversion.
+# "contains" patterns are matched as substrings of the image name.
+# "prefix" patterns are matched against the start of the image name.
+#
+# To add support for a new base image, add it to the appropriate section below.
+
+debian:
+  contains:
+    - debian
+    - ubuntu
+    - jammy
+    - noble
+    - focal
+    - bookworm
+    - bullseye
+    - bionic
+    - buster
+  # Language runtime images that are Debian-based by default
+  prefix:
+    - "python:"
+    - "node:"
+    - "ruby:"
+    - "golang:"
+    - "rust:"
+    - "php:"
+    - "openjdk:"
+    - "eclipse-temurin:"
+    - "gradle:"
+    - "maven:"
+    - "dotnet:"
+    - "mcr.microsoft.com/dotnet:"
+    - "perl:"
+    - "elixir:"
+    - "erlang:"
+    - "haskell:"
+    - "julia:"
+    - "swift:"
+    - "buildpack-deps:"
+    - "wordpress:"
+    - "postgres:"
+    - "mysql:"
+    - "mariadb:"
+    - "mongo:"
+    - "redis:"
+    - "nginx:"
+    - "httpd:"
+    - "haproxy:"
+    - "memcached:"
+    - "rabbitmq:"
+    - "ghost:"
+
+alpine:
+  contains:
+    - alpine
+  prefix:
+    - "alpine:"
+
+# OS profiles: centralized OS-specific settings for scaffold generation.
+# To add a new OS, add detection rules above and a profile entry here.
+profiles:
+  debian:
+    display_name: "Debian/Ubuntu"
+    os_template: "debian-12"
+    pkg_manager: apt
+    service_init: systemd
+    pip_prereqs:
+      - python3
+      - python3-pip
+  alpine:
+    display_name: "Alpine"
+    os_template: "alpine-3.22"
+    pkg_manager: apk
+    service_init: openrc
+    pip_prereqs:
+      - python3
+      - py3-pip
+  unknown:
+    display_name: "Unknown"
+    os_template: "debian-12"
+    pkg_manager: apt
+    service_init: systemd
+    pip_prereqs:
+      - python3
+      - python3-pip
+
+# Implied services: package name prefixes that indicate a parent service
+# should be enabled. For example, "nginx-mod-http-brotli" implies nginx.
+# The scaffold generator uses these to auto-enable services that are
+# transitive dependencies of module/plugin packages.
+implied_services:
+  nginx-mod-: nginx
+  apache2-mod-: apache2
+  apache-mod-: apache2
+  php-fpm: php-fpm
+  postgresql-: postgresql
+  mysql-: mysql
+  mariadb-: mariadb
+  redis-: redis
+  memcached: memcached
+  mosquitto-: mosquitto
+  postfix-: postfix
+
+# Known service names to detect in base image names and package lists.
+# If any of these appear as a substring of the FROM image name
+# (e.g. "baseimage-alpine-nginx"), that service is auto-enabled.
+known_services:
+  - nginx
+  - apache2
+  - httpd
+  - postgresql
+  - postgres
+  - mysql
+  - mariadb
+  - redis
+  - memcached
+  - mosquitto
+  - postfix
+  - haproxy
+  - rabbitmq
+  - mongodb
+  - mongod
+  - grafana
+  - prometheus
+  - jellyfin
+  - plex
+  - sonarr
+  - radarr
+  - jackett
+  - transmission
+  - qbittorrent
+  - wireguard
+  - openvpn
+  - squid
+  - samba
+  - nfs

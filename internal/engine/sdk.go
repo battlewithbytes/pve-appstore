@@ -40,27 +40,64 @@ var basePackages = []string{
 	"zstd",
 }
 
-// stepInstallBasePackages runs apt-get update and installs the common base
-// utilities that nearly every app needs. This runs once per container, before
-// the SDK and provision scripts are pushed.
-func stepInstallBasePackages(ctx *installContext) error {
-	ctx.info("Updating package lists...")
-	result, err := ctx.engine.cm.Exec(ctx.job.CTID, []string{"apt-get", "update", "-qq"})
-	if err != nil {
-		return fmt.Errorf("apt-get update: %w", err)
+// detectContainerOS probes /etc/os-release inside the container to determine
+// the OS family. Returns "alpine", "debian", or "unknown".
+func detectContainerOS(ctid int, cm ContainerManager) string {
+	result, err := cm.Exec(ctid, []string{"cat", "/etc/os-release"})
+	if err != nil || result.ExitCode != 0 {
+		return "unknown"
 	}
-	if result.ExitCode != 0 {
-		ctx.warn("apt-get update exited %d (continuing): %s", result.ExitCode, result.Output)
+	lower := strings.ToLower(result.Output)
+	for _, line := range strings.Split(lower, "\n") {
+		if strings.HasPrefix(line, "id=") {
+			val := strings.Trim(strings.TrimPrefix(line, "id="), `"' `)
+			switch val {
+			case "alpine":
+				return "alpine"
+			case "debian", "ubuntu":
+				return "debian"
+			}
+		}
 	}
+	return "unknown"
+}
 
-	cmd := append([]string{"apt-get", "install", "-y", "--no-install-recommends"}, basePackages...)
-	ctx.info("Installing base packages: %s", strings.Join(basePackages, ", "))
-	result, err = ctx.engine.cm.Exec(ctx.job.CTID, cmd)
-	if err != nil {
-		return fmt.Errorf("installing base packages: %w", err)
-	}
-	if result.ExitCode != 0 {
-		return fmt.Errorf("apt-get install base packages exited with %d: %s", result.ExitCode, result.Output)
+// stepInstallBasePackages installs the common base utilities that nearly every
+// app needs. Uses apk on Alpine, apt-get on Debian/Ubuntu. This runs once per
+// container, before the SDK and provision scripts are pushed.
+func stepInstallBasePackages(ctx *installContext) error {
+	osFamily := detectContainerOS(ctx.job.CTID, ctx.engine.cm)
+	ctx.info("Detected container OS: %s", osFamily)
+
+	if osFamily == "alpine" {
+		cmd := append([]string{"apk", "add", "--no-cache"}, basePackages...)
+		ctx.info("Installing base packages (apk): %s", strings.Join(basePackages, ", "))
+		result, err := ctx.engine.cm.Exec(ctx.job.CTID, cmd)
+		if err != nil {
+			return fmt.Errorf("installing base packages: %w", err)
+		}
+		if result.ExitCode != 0 {
+			return fmt.Errorf("apk add base packages exited with %d: %s", result.ExitCode, result.Output)
+		}
+	} else {
+		ctx.info("Updating package lists...")
+		result, err := ctx.engine.cm.Exec(ctx.job.CTID, []string{"apt-get", "update", "-qq"})
+		if err != nil {
+			return fmt.Errorf("apt-get update: %w", err)
+		}
+		if result.ExitCode != 0 {
+			ctx.warn("apt-get update exited %d (continuing): %s", result.ExitCode, result.Output)
+		}
+
+		cmd := append([]string{"apt-get", "install", "-y", "--no-install-recommends"}, basePackages...)
+		ctx.info("Installing base packages (apt): %s", strings.Join(basePackages, ", "))
+		result, err = ctx.engine.cm.Exec(ctx.job.CTID, cmd)
+		if err != nil {
+			return fmt.Errorf("installing base packages: %w", err)
+		}
+		if result.ExitCode != 0 {
+			return fmt.Errorf("apt-get install base packages exited with %d: %s", result.ExitCode, result.Output)
+		}
 	}
 
 	ctx.info("Base packages installed")
@@ -68,21 +105,25 @@ func stepInstallBasePackages(ctx *installContext) error {
 }
 
 // ensurePython verifies python3 is available in the container.
-// If missing (e.g., non-Debian base image), it attempts to install it.
-// Note: apt-get update has already been run by stepInstallBasePackages.
+// If missing, it installs it using the appropriate package manager.
 func ensurePython(ctid int, cm ContainerManager) error {
 	result, err := cm.Exec(ctid, []string{"which", "python3"})
 	if err == nil && result.ExitCode == 0 {
 		return nil // python3 already available
 	}
 
-	// apt-get update already ran in stepInstallBasePackages, just install
-	result, err = cm.Exec(ctid, []string{"apt-get", "install", "-y", "python3"})
+	osFamily := detectContainerOS(ctid, cm)
+	if osFamily == "alpine" {
+		result, err = cm.Exec(ctid, []string{"apk", "add", "--no-cache", "python3"})
+	} else {
+		// apt-get update already ran in stepInstallBasePackages
+		result, err = cm.Exec(ctid, []string{"apt-get", "install", "-y", "python3"})
+	}
 	if err != nil {
 		return fmt.Errorf("installing python3: %w", err)
 	}
 	if result.ExitCode != 0 {
-		return fmt.Errorf("apt-get install python3 exited with %d: %s", result.ExitCode, result.Output)
+		return fmt.Errorf("install python3 exited with %d: %s", result.ExitCode, result.Output)
 	}
 	return nil
 }

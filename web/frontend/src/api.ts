@@ -1,4 +1,4 @@
-import type { AppsResponse, AppDetail, CategoriesResponse, HealthResponse, JobsResponse, LogsResponse, InstallsResponse, InstallRequest, InstallDetail, Job, ConfigDefaultsResponse, BrowseResponse, MountInfo, ExportResponse, ApplyResponse, ApplyPreviewResponse, AppStatusResponse, StacksResponse, StackDetail, StackCreateRequest, StackValidateResponse, EditRequest, Settings, SettingsUpdate, DevAppsResponse, DevApp, DevTemplate, ValidationResult } from './types';
+import type { AppsResponse, AppDetail, CategoriesResponse, HealthResponse, JobsResponse, LogsResponse, InstallsResponse, InstallRequest, InstallDetail, Install, Job, ConfigDefaultsResponse, BrowseResponse, MountInfo, ExportResponse, ApplyResponse, ApplyPreviewResponse, AppStatusResponse, StacksResponse, StackDetail, StackCreateRequest, StackValidateResponse, EditRequest, ReconfigureRequest, Settings, SettingsUpdate, DevAppsResponse, DevApp, DevTemplate, ValidationResult, DockerfileChainEvent } from './types';
 
 const BASE = '/api';
 
@@ -113,6 +113,13 @@ export const api = {
 
   editInstall: (id: string, req: EditRequest) =>
     fetchJSON<Job>(`${BASE}/installs/${id}/edit`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(req),
+    }),
+
+  reconfigure: (id: string, req: ReconfigureRequest) =>
+    fetchJSON<Install>(`${BASE}/installs/${id}/reconfigure`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(req),
@@ -275,6 +282,15 @@ export const api = {
   devUndeploy: (id: string) =>
     fetchJSON<{ status: string }>(`${BASE}/dev/apps/${id}/undeploy`, { method: 'POST' }),
 
+  devIconUrl: (id: string) => `${BASE}/dev/apps/${id}/icon`,
+
+  devSetIcon: (id: string, url: string) =>
+    fetchJSON<{ status: string }>(`${BASE}/dev/apps/${id}/icon`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url }),
+    }),
+
   devExportUrl: (id: string) => `${BASE}/dev/apps/${id}/export`,
 
   devImportUnraid: (payload: { xml?: string; url?: string }) =>
@@ -292,4 +308,42 @@ export const api = {
     }),
 
   devTemplates: () => fetchJSON<{ templates: DevTemplate[] }>(`${BASE}/dev/templates`),
+
+  devImportDockerfileStream: async (
+    payload: { name: string; url?: string; dockerfile?: string },
+    onEvent: (e: DockerfileChainEvent) => void,
+    signal?: AbortSignal,
+  ): Promise<string> => {
+    const resp = await fetch(`${BASE}/dev/import/dockerfile/stream`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+      signal,
+    });
+    if (!resp.ok) {
+      const body = await resp.json().catch(() => ({}));
+      throw new Error(body.error || `HTTP ${resp.status}`);
+    }
+    const reader = resp.body!.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let appId = '';
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop()!;
+      for (const line of lines) {
+        if (line.startsWith('data: ')) {
+          try {
+            const event: DockerfileChainEvent = JSON.parse(line.slice(6));
+            onEvent(event);
+            if (event.type === 'complete' && event.app_id) appId = event.app_id;
+          } catch { /* skip malformed */ }
+        }
+      }
+    }
+    return appId;
+  },
 };

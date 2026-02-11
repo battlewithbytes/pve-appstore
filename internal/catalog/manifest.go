@@ -22,6 +22,7 @@ type AppManifest struct {
 	Tags        []string `yaml:"tags" json:"tags"`
 	Homepage    string   `yaml:"homepage,omitempty" json:"homepage,omitempty"`
 	License     string   `yaml:"license,omitempty" json:"license,omitempty"`
+	Icon        string   `yaml:"icon,omitempty" json:"icon,omitempty"` // URL to app icon
 	Official    bool     `yaml:"official,omitempty" json:"official"`
 	Maintainers []string `yaml:"maintainers,omitempty" json:"maintainers,omitempty"`
 
@@ -37,6 +38,7 @@ type AppManifest struct {
 	IconPath   string `yaml:"-" json:"icon_path,omitempty"`
 	ReadmePath string `yaml:"-" json:"readme_path,omitempty"`
 	DirPath    string `yaml:"-" json:"dir_path,omitempty"`
+	Source     string `yaml:"-" json:"source,omitempty"` // "official", "community", "developer"
 }
 
 type LXCConfig struct {
@@ -57,16 +59,17 @@ type LXCDefaults struct {
 }
 
 type InputSpec struct {
-	Key         string          `yaml:"key" json:"key"`
-	Label       string          `yaml:"label" json:"label"`
-	Type        string          `yaml:"type" json:"type"`
-	Default     interface{}     `yaml:"default,omitempty" json:"default,omitempty"`
-	Required    bool            `yaml:"required" json:"required"`
-	Validation  *InputValidation `yaml:"validation,omitempty" json:"validation,omitempty"`
-	Help        string          `yaml:"help,omitempty" json:"help,omitempty"`
-	Description string          `yaml:"description,omitempty" json:"description,omitempty"`
-	Group       string          `yaml:"group,omitempty" json:"group,omitempty"`
-	ShowWhen    *ShowWhenSpec   `yaml:"show_when,omitempty" json:"show_when,omitempty"`
+	Key            string          `yaml:"key" json:"key"`
+	Label          string          `yaml:"label" json:"label"`
+	Type           string          `yaml:"type" json:"type"`
+	Default        interface{}     `yaml:"default,omitempty" json:"default,omitempty"`
+	Required       bool            `yaml:"required" json:"required"`
+	Reconfigurable bool            `yaml:"reconfigurable,omitempty" json:"reconfigurable,omitempty"`
+	Validation     *InputValidation `yaml:"validation,omitempty" json:"validation,omitempty"`
+	Help           string          `yaml:"help,omitempty" json:"help,omitempty"`
+	Description    string          `yaml:"description,omitempty" json:"description,omitempty"`
+	Group          string          `yaml:"group,omitempty" json:"group,omitempty"`
+	ShowWhen       *ShowWhenSpec   `yaml:"show_when,omitempty" json:"show_when,omitempty"`
 }
 
 // ShowWhenSpec controls conditional visibility of an input.

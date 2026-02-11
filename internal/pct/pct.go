@@ -189,15 +189,39 @@ func AppendConf(ctid int, lines []string) error {
 }
 
 // GetIP attempts to get the IP address of a running container.
+// Uses "hostname -I" (GNU/Debian) first, falls back to parsing "ip addr" output
+// for Alpine/BusyBox where hostname -I is not available.
 func GetIP(ctid int) (string, error) {
+	// Try GNU hostname -I first (works on Debian/Ubuntu)
 	result, err := Exec(ctid, []string{"hostname", "-I"})
+	if err == nil && result.ExitCode == 0 {
+		if ip := ParseIPOutput(result.Output); ip != "" {
+			return ip, nil
+		}
+	}
+	// Fallback: parse ip addr show eth0 (works on Alpine and all Linux)
+	result, err = Exec(ctid, []string{"ip", "-4", "-o", "addr", "show", "eth0"})
 	if err != nil {
 		return "", err
 	}
 	if result.ExitCode != 0 {
-		return "", fmt.Errorf("hostname -I exited with %d", result.ExitCode)
+		return "", fmt.Errorf("ip addr exited with %d", result.ExitCode)
 	}
-	return ParseIPOutput(result.Output), nil
+	return parseIPAddrOutput(result.Output), nil
+}
+
+// parseIPAddrOutput extracts the IP from "ip -4 -o addr show" output.
+// Example: "2: eth0    inet 192.168.1.159/24 brd ..." -> "192.168.1.159"
+func parseIPAddrOutput(output string) string {
+	for _, field := range strings.Fields(output) {
+		if strings.Contains(field, "/") {
+			ip := strings.SplitN(field, "/", 2)[0]
+			if ip != "" && ip != "127.0.0.1" {
+				return ip
+			}
+		}
+	}
+	return ""
 }
 
 // ParseIPOutput extracts the first IP from "hostname -I" output.

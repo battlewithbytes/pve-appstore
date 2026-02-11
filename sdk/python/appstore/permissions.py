@@ -72,10 +72,13 @@ class AppPermissions:
             f"URL '{url}' does not match any allowed URL pattern: {self.urls}"
         )
 
+    # Paths implicitly allowed as scratch space (no manifest entry needed)
+    _implicit_paths = ["/tmp", "/opt/venv"]
+
     def check_path(self, path: str) -> None:
         """Verify a filesystem path is under an allowed prefix."""
         normalized = os.path.normpath(path)
-        for allowed in self.paths:
+        for allowed in self._implicit_paths + self.paths:
             allowed_norm = os.path.normpath(allowed)
             if normalized == allowed_norm or normalized.startswith(allowed_norm + "/"):
                 return
@@ -113,23 +116,37 @@ class AppPermissions:
                 f"installer script '{url}' is not in the allowed installer scripts: {self.installer_scripts}"
             )
 
+    @staticmethod
+    def _extract_repo_url(line: str) -> str:
+        """Extract the URL from a deb repo line (e.g. 'deb [opts] URL suite component')."""
+        for token in line.split():
+            if token.startswith("http://") or token.startswith("https://"):
+                return token.rstrip("/")
+        return ""
+
     def check_apt_repo(self, repo_line: str) -> None:
         """Verify an APT repository line is in the allowlist.
 
-        First tries exact match (with whitespace normalization), then falls
-        back to fnmatch for wildcard patterns. This two-pass approach handles
-        literal square brackets in apt repo lines (e.g. [signed-by=...]) which
-        fnmatch would otherwise interpret as glob character classes.
+        Matches are checked in order:
+        1. URL extraction — the repo URL from the deb line is matched against
+           allowed entries (which can be bare URLs or fnmatch patterns).
+        2. Full-line exact match (legacy, with whitespace normalization).
         """
-        normalized = " ".join(repo_line.split())
+        repo_url = self._extract_repo_url(repo_line)
         for allowed in self.apt_repos:
+            allowed_clean = allowed.rstrip("/")
+            # URL-based match: allowed is a URL or URL pattern
+            if repo_url and (
+                repo_url == allowed_clean
+                or repo_url.startswith(allowed_clean + "/")
+                or fnmatch.fnmatch(repo_url, allowed_clean)
+            ):
+                return
+            # Legacy: full-line exact match for backwards compatibility
+            normalized = " ".join(repo_line.split())
             norm_allowed = " ".join(allowed.split())
-            # Exact match handles lines with literal brackets
             if normalized == norm_allowed:
                 return
-            # fnmatch handles wildcard patterns (*, ?)
-            if fnmatch.fnmatch(normalized, norm_allowed):
-                return
         raise PermissionDeniedError(
-            f"APT repo '{repo_line}' is not in the allowed apt repos: {self.apt_repos}"
+            f"APT repo URL '{repo_url or repo_line}' is not in the allowed apt repos: {self.apt_repos}"
         )

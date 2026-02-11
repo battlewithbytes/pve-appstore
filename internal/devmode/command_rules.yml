@@ -1,0 +1,83 @@
+# Command categorization rules for Dockerfile → LXC scaffold generation.
+#
+# When a RUN command is parsed from a Dockerfile, it's checked against these
+# rules in order: noise → already_handled → types → unknown.
+#
+# To handle a new command pattern, add it to the appropriate section below.
+# No Go code changes needed for simple prefix/contains matching.
+
+# Noise: commands that should be completely skipped (Docker build artifacts).
+# These never appear in the generated install.py.
+noise:
+  # Exact matches (after trimming whitespace)
+  exact:
+    - "true"
+    - ":"
+    - "cd"
+  # Prefix matches (command starts with this)
+  prefixes:
+    - "set "   # set -e, set -x, etc.
+    - "cd "    # directory changes don't persist
+  # Contains matches (checked against lowercased command)
+  contains:
+    - "rm -rf /var/lib/apt"
+    - "rm -rf /var/cache"
+    - "rm -rf /tmp/"
+    - "rm -rf /tmp"
+    - "rm -rf /var/tmp"
+    - "rm -rf /var/log"
+    - "rm -rf /root/.cache"
+    - "rm -rf $home/.cache"
+    - "rm -rf $home/.cargo"
+    - "apt-get clean"
+    - "apt-get autoremove"
+    - "apt-get -y autoremove"
+    - "apt-get update"
+    - "apk update"
+    - "/root-out/"          # Docker rootfs-builder paths
+  # Echo lines with "****" are linuxserver section markers
+  skip_echo_markers: true
+  # printf with "build" in it is version info stamping
+  skip_printf_build: true
+
+# Command type detection: maps prefix patterns to types.
+# Checked in order — first match wins.
+# Types listed here produce self.run_command() calls in the install script.
+#
+# Complex patterns (download via curl/wget, symlinks via ln -s) are handled
+# in Go code because they need regex extraction of URLs, paths, etc.
+command_types:
+  - type: mkdir
+    prefix: "mkdir "
+  - type: sed
+    prefix: "sed "
+  - type: chmod
+    prefix: "chmod "
+  - type: chown
+    prefix: "chown "
+  - type: mv
+    prefix: "mv "
+  - type: tar
+    prefix: "tar "
+  - type: rm
+    prefix: "rm "
+    # Note: "rm" of relative paths only (no leading /) is filtered in Go code
+    # as Docker build-time cleanup (e.g. "rm composer-setup.php").
+
+# Types handled by dedicated SDK methods — NOT emitted as run_command().
+# Their parsed data feeds into create_dir(), create_user(), download(), etc.
+sdk_handled:
+  - mkdir      # → self.create_dir()
+  - useradd    # → self.create_user()
+  - download   # → self.download()
+  - symlink    # → self.run_command(["ln", ...]) in symlinks section
+  - chown      # → self.chown() — emitted in dedicated section
+  - skip       # noise-filtered
+
+# Commands containing shell operators (>>, >, |, $()) cannot be converted
+# to subprocess calls. They must be wrapped: self.run_command(["sh", "-c", "..."])
+shell_operators:
+  - ">>"
+  - "> /"
+  - " | "
+  - "$("

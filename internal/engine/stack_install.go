@@ -603,6 +603,7 @@ func (e *Engine) runStackInstall(bgCtx context.Context, job *Job, stackID, osTem
 		cmd := buildStackProvisionCommand(app.AppID, manifest.Provisioning.Script, "install", envVars)
 
 		appOutputs := make(map[string]string)
+		var lastError string
 		result, err := e.cm.ExecStream(ctid, cmd, func(line string) {
 			line = strings.TrimSpace(line)
 			if line == "" {
@@ -620,6 +621,9 @@ func (e *Engine) runStackInstall(bgCtx context.Context, job *Job, stackID, osTem
 					}
 				} else if msg != "" {
 					ctx.log(level, "[%s] %s", app.AppID, msg)
+					if level == "error" {
+						lastError = msg
+					}
 				}
 			} else {
 				ctx.info("[%s] %s", app.AppID, line)
@@ -635,7 +639,11 @@ func (e *Engine) runStackInstall(bgCtx context.Context, job *Job, stackID, osTem
 
 		if result.ExitCode != 0 {
 			apps[i].Status = "failed"
-			apps[i].Error = fmt.Sprintf("exit code %d", result.ExitCode)
+			if lastError != "" {
+				apps[i].Error = lastError
+			} else {
+				apps[i].Error = fmt.Sprintf("exit code %d", result.ExitCode)
+			}
 			ctx.warn("[%d/%d] %s: provisioning failed (exit %d) — continuing", i+1, len(apps), app.AppName, result.ExitCode)
 			continue
 		}
@@ -655,6 +663,7 @@ func (e *Engine) runStackInstall(bgCtx context.Context, job *Job, stackID, osTem
 		manifest := manifests[i]
 		for _, out := range manifest.Outputs {
 			value := out.Value
+			value = strings.ReplaceAll(value, "{{IP}}", ip)
 			value = strings.ReplaceAll(value, "{{ip}}", ip)
 			for k, v := range app.Inputs {
 				value = strings.ReplaceAll(value, "{{"+k+"}}", v)
@@ -722,6 +731,18 @@ func (ctx *installContext) failJob(format string, args ...interface{}) {
 	ctx.job.UpdatedAt = now
 	ctx.job.CompletedAt = &now
 	ctx.engine.store.UpdateJob(ctx.job)
+	// Destroy the container if one was created
+	if ctx.job.CTID > 0 {
+		ctx.info("Cleaning up container %d after failure...", ctx.job.CTID)
+		cleanCtx := context.Background()
+		_ = ctx.engine.cm.Stop(cleanCtx, ctx.job.CTID)
+		time.Sleep(2 * time.Second)
+		if dErr := ctx.engine.cm.Destroy(cleanCtx, ctx.job.CTID); dErr != nil {
+			ctx.warn("Failed to destroy container %d: %v", ctx.job.CTID, dErr)
+		} else {
+			ctx.info("Container %d destroyed", ctx.job.CTID)
+		}
+	}
 }
 
 // mergeAllPermissions computes the union of all apps' permission specs.

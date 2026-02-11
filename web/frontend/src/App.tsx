@@ -3,9 +3,11 @@ import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { WebLinksAddon } from '@xterm/addon-web-links'
 import '@xterm/xterm/css/xterm.css'
+import Markdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
 import { api } from './api'
 import { CodeEditor } from './CodeEditor'
-import type { AppSummary, AppDetail, AppInput, HealthResponse, Job, LogEntry, InstallDetail, InstallListItem, ContainerLiveStatus, ConfigDefaultsResponse, MountPoint, MountInfo, BrowseEntry, ExportResponse, ApplyPreviewResponse, InstallRequest, EditRequest, DevicePassthrough, AppStatusResponse, StackListItem, StackDetail, StackCreateRequest, StackValidateResponse, StackApp, Settings, SettingsUpdate, DevAppMeta, DevApp, DevTemplate, ValidationResult, ValidationMsg } from './types'
+import type { AppSummary, AppDetail, AppInput, HealthResponse, Job, LogEntry, InstallDetail, InstallListItem, ContainerLiveStatus, ConfigDefaultsResponse, MountPoint, MountInfo, BrowseEntry, ExportResponse, ApplyPreviewResponse, InstallRequest, EditRequest, ReconfigureRequest, DevicePassthrough, AppStatusResponse, StackListItem, StackDetail, StackCreateRequest, StackValidateResponse, StackApp, Settings, SettingsUpdate, DevAppMeta, DevApp, DevTemplate, ValidationResult, ValidationMsg, DockerfileChainEvent } from './types'
 
 function useHash() {
   const [hash, setHash] = useState(window.location.hash)
@@ -319,7 +321,15 @@ function AppDetailView({ id, requireAuth }: { id: string; requireAuth: (cb: () =
         )}
         {app.outputs && app.outputs.length > 0 && (
           <InfoCard title="Outputs">
-            {app.outputs.map(out => <InfoRow key={out.key} label={out.label} value={out.value} />)}
+            {app.outputs.map(out => {
+              const display = out.value
+                .replace(/\{\{IP\}\}/gi, '<container-ip>')
+                .replace(/\{\{(\w+)\}\}/g, (_, k) => {
+                  const inp = app.inputs?.find((i: AppInput) => i.key === k)
+                  return inp ? `<${inp.label.toLowerCase()}>` : `<${k}>`
+                })
+              return <InfoRow key={out.key} label={out.label} value={display} />
+            })}
           </InfoCard>
         )}
       </div>
@@ -354,7 +364,21 @@ function AppDetailView({ id, requireAuth }: { id: string; requireAuth: (cb: () =
       {readme && (
         <div className="mt-6 bg-bg-card border border-border rounded-lg p-6">
           <h3 className="text-base font-semibold text-text-primary mb-3">README</h3>
-          <pre className="text-sm text-text-secondary whitespace-pre-wrap leading-relaxed font-mono">{readme}</pre>
+          <div className="prose prose-invert prose-sm max-w-none
+            prose-headings:text-text-primary prose-headings:font-semibold prose-headings:mt-4 prose-headings:mb-2
+            prose-p:text-text-secondary prose-p:leading-relaxed
+            prose-a:text-accent prose-a:no-underline hover:prose-a:underline
+            prose-strong:text-text-primary
+            prose-code:text-accent prose-code:bg-bg-secondary prose-code:px-1.5 prose-code:py-0.5 prose-code:rounded prose-code:text-xs prose-code:font-mono
+            prose-pre:bg-bg-secondary prose-pre:border prose-pre:border-border prose-pre:rounded-lg
+            prose-table:border-collapse
+            prose-th:border prose-th:border-border prose-th:px-3 prose-th:py-2 prose-th:bg-bg-secondary prose-th:text-text-primary prose-th:text-left prose-th:text-sm
+            prose-td:border prose-td:border-border prose-td:px-3 prose-td:py-2 prose-td:text-text-secondary prose-td:text-sm
+            prose-li:text-text-secondary prose-li:marker:text-text-muted
+            prose-hr:border-border
+          ">
+            <Markdown remarkPlugins={[remarkGfm]}>{readme}</Markdown>
+          </div>
         </div>
       )}
     </div>
@@ -903,6 +927,8 @@ function JobView({ id }: { id: string }) {
   const [cancelError, setCancelError] = useState('')
   const lastLogId = useRef(0)
   const logEndRef = useRef<HTMLDivElement>(null)
+  const logContainerRef = useRef<HTMLDivElement>(null)
+  const userScrolledUp = useRef(false)
 
   const refreshJob = useCallback(async () => {
     try {
@@ -926,7 +952,9 @@ function JobView({ id }: { id: string }) {
     return () => clearInterval(interval)
   }, [id, job?.state, refreshJob])
 
-  useEffect(() => { logEndRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [logs])
+  useEffect(() => {
+    if (!userScrolledUp.current) logEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+  }, [logs])
 
   const handleCancel = async () => {
     setCancelling(true)
@@ -979,7 +1007,12 @@ function JobView({ id }: { id: string }) {
 
       {job.error && <div className="mt-4 p-4 bg-status-stopped/10 border border-status-stopped/30 rounded-lg text-status-stopped text-sm font-mono">{job.error}</div>}
 
-      <div className="mt-5 bg-bg-card border border-border rounded-lg p-4 max-h-[400px] overflow-auto">
+      <div ref={logContainerRef} className="mt-5 bg-bg-card border border-border rounded-lg p-4 max-h-[400px] overflow-auto" onScroll={() => {
+        const el = logContainerRef.current
+        if (!el) return
+        const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 40
+        userScrolledUp.current = !atBottom
+      }}>
         <h4 className="text-xs text-text-muted mb-2 uppercase font-mono tracking-wider">Logs</h4>
         {logs.length === 0 ? <div className="text-text-muted text-sm font-mono">Waiting for logs...</div> : logs.map((l, i) => (
           <div key={i} className={`text-xs font-mono py-0.5 ${l.level === 'error' ? 'text-status-stopped' : l.level === 'warn' ? 'text-status-warning' : 'text-text-secondary'}`}>
@@ -1010,6 +1043,8 @@ function InstallDetailView({ id, requireAuth }: { id: string; requireAuth: (cb: 
   const [updating, setUpdating] = useState(false)
   const [showEditDialog, setShowEditDialog] = useState(false)
   const [editing, setEditing] = useState(false)
+  const [showReconfigureDialog, setShowReconfigureDialog] = useState(false)
+  const [reconfiguring, setReconfiguring] = useState(false)
 
   const fetchDetail = useCallback(() => {
     api.installDetail(id).then(d => {
@@ -1098,6 +1133,22 @@ function InstallDetailView({ id, requireAuth }: { id: string; requireAuth: (cb: 
     })
   }
 
+  const handleReconfigure = (req: ReconfigureRequest) => {
+    requireAuth(async () => {
+      if (!detail) return
+      setReconfiguring(true)
+      setShowReconfigureDialog(false)
+      try {
+        await api.reconfigure(detail.id, req)
+        fetchDetail()
+      } catch (e: unknown) {
+        alert(e instanceof Error ? e.message : 'Reconfigure failed')
+      } finally {
+        setReconfiguring(false)
+      }
+    })
+  }
+
   if (error) return <div><BackLink href="#/installs" label="Back to installed" /><Center className="text-status-stopped">{error}</Center></div>
   if (!detail) return <Center>Loading...</Center>
 
@@ -1157,6 +1208,11 @@ function InstallDetailView({ id, requireAuth }: { id: string; requireAuth: (cb: 
             </button>
           )}
           {!isUninstalled && (
+            <button onClick={() => setShowReconfigureDialog(true)} disabled={reconfiguring} className="px-4 py-2 text-sm font-mono border border-border rounded-lg cursor-pointer text-text-primary bg-transparent hover:border-primary hover:text-primary transition-colors disabled:opacity-50">
+              {reconfiguring ? 'Applying...' : 'Reconfigure'}
+            </button>
+          )}
+          {!isUninstalled && (
             <button onClick={() => setShowEditDialog(true)} disabled={editing} className="px-4 py-2 text-sm font-mono border border-border rounded-lg cursor-pointer text-text-primary bg-transparent hover:border-primary hover:text-primary transition-colors disabled:opacity-50">
               {editing ? 'Editing...' : 'Edit'}
             </button>
@@ -1207,6 +1263,16 @@ function InstallDetailView({ id, requireAuth }: { id: string; requireAuth: (cb: 
           isRunning={isRunning}
           onConfirm={handleEdit}
           onCancel={() => setShowEditDialog(false)}
+        />
+      )}
+
+      {/* Reconfigure dialog */}
+      {showReconfigureDialog && detail && (
+        <ReconfigureDialog
+          detail={detail}
+          appInfo={appInfo}
+          onConfirm={handleReconfigure}
+          onCancel={() => setShowReconfigureDialog(false)}
         />
       )}
 
@@ -1521,6 +1587,114 @@ function EditDialog({ detail, appInfo, isRunning, onConfirm, onCancel }: {
           <button onClick={onCancel} className="px-5 py-2.5 text-sm font-semibold border border-border rounded-lg cursor-pointer text-text-secondary bg-transparent hover:border-text-secondary transition-colors font-mono">Cancel</button>
           <button onClick={() => onConfirm(buildRequest())} disabled={!hasChanges()} className="px-5 py-2.5 text-sm font-semibold border-none rounded-lg cursor-pointer bg-primary text-bg-primary hover:shadow-[0_0_20px_rgba(0,255,157,0.3)] transition-all font-mono disabled:opacity-50 disabled:cursor-not-allowed">
             Apply Changes
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// --- Reconfigure Dialog ---
+
+function ReconfigureDialog({ detail, appInfo, onConfirm, onCancel }: {
+  detail: InstallDetail; appInfo: AppDetail | null;
+  onConfirm: (req: ReconfigureRequest) => void; onCancel: () => void;
+}) {
+  const [cores, setCores] = useState(String(detail.cores))
+  const [memoryMB, setMemoryMB] = useState(String(detail.memory_mb))
+  const [inputs, setInputs] = useState<Record<string, string>>({ ...(detail.inputs || {}) })
+
+  const reconfigurableInputs = (appInfo?.inputs || []).filter(inp => inp.reconfigurable)
+
+  const hasChanges = () => {
+    if (Number(cores) !== detail.cores) return true
+    if (Number(memoryMB) !== detail.memory_mb) return true
+    for (const inp of reconfigurableInputs) {
+      if (inputs[inp.key] !== (detail.inputs?.[inp.key] || '')) return true
+    }
+    return false
+  }
+
+  const buildRequest = (): ReconfigureRequest => {
+    const req: ReconfigureRequest = {}
+    if (Number(cores) !== detail.cores) req.cores = Number(cores)
+    if (Number(memoryMB) !== detail.memory_mb) req.memory_mb = Number(memoryMB)
+    const changedInputs: Record<string, string> = {}
+    let hasInputChanges = false
+    for (const inp of reconfigurableInputs) {
+      if (inputs[inp.key] !== (detail.inputs?.[inp.key] || '')) {
+        changedInputs[inp.key] = inputs[inp.key]
+        hasInputChanges = true
+      }
+    }
+    if (hasInputChanges) req.inputs = changedInputs
+    return req
+  }
+
+  return (
+    <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-[100]" onClick={onCancel}>
+      <div className="bg-bg-card border border-border rounded-xl p-8 w-full max-w-[520px] max-h-[80vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+        <h2 className="text-lg font-bold text-text-primary mb-2 font-mono">Reconfigure {detail.app_name}</h2>
+        <p className="text-sm text-text-secondary mb-4">
+          Apply changes in-place without recreating the container.
+        </p>
+
+        <div className="mb-4 p-2.5 bg-primary/10 border border-primary/30 rounded text-primary text-xs font-mono">
+          Changes are applied live — no downtime or container rebuild required.
+        </div>
+
+        {/* Resource fields */}
+        <div className="space-y-3 mb-4">
+          <div>
+            <label className="block text-xs text-text-muted font-mono mb-1">CPU Cores</label>
+            <input type="number" min={1} value={cores} onChange={e => setCores(e.target.value)}
+              className="w-full bg-bg-secondary border border-border rounded-lg px-3 py-2 text-sm text-text-primary font-mono focus:border-primary outline-none" />
+          </div>
+          <div>
+            <label className="block text-xs text-text-muted font-mono mb-1">Memory (MB)</label>
+            <input type="number" min={128} step={128} value={memoryMB} onChange={e => setMemoryMB(e.target.value)}
+              className="w-full bg-bg-secondary border border-border rounded-lg px-3 py-2 text-sm text-text-primary font-mono focus:border-primary outline-none" />
+          </div>
+        </div>
+
+        {/* Reconfigurable app inputs */}
+        {reconfigurableInputs.length > 0 && (
+          <div className="mb-4">
+            <h3 className="text-xs font-semibold text-text-muted mb-2 uppercase tracking-wider font-mono">App Settings</h3>
+            <div className="space-y-3">
+              {reconfigurableInputs.map(inp => (
+                <div key={inp.key}>
+                  <label className="block text-xs text-text-muted font-mono mb-1">{inp.label || inp.key}</label>
+                  {inp.type === 'select' && inp.validation?.enum ? (
+                    <select value={inputs[inp.key] || ''} onChange={e => setInputs({ ...inputs, [inp.key]: e.target.value })}
+                      className="w-full bg-bg-secondary border border-border rounded-lg px-3 py-2 text-sm text-text-primary font-mono focus:border-primary outline-none">
+                      {inp.validation.enum.map(v => <option key={v} value={v}>{v}</option>)}
+                    </select>
+                  ) : inp.type === 'boolean' ? (
+                    <select value={inputs[inp.key] || 'false'} onChange={e => setInputs({ ...inputs, [inp.key]: e.target.value })}
+                      className="w-full bg-bg-secondary border border-border rounded-lg px-3 py-2 text-sm text-text-primary font-mono focus:border-primary outline-none">
+                      <option value="true">true</option>
+                      <option value="false">false</option>
+                    </select>
+                  ) : (
+                    <input
+                      type={inp.type === 'number' ? 'number' : inp.type === 'secret' ? 'password' : 'text'}
+                      value={inputs[inp.key] || ''}
+                      onChange={e => setInputs({ ...inputs, [inp.key]: e.target.value })}
+                      className="w-full bg-bg-secondary border border-border rounded-lg px-3 py-2 text-sm text-text-primary font-mono focus:border-primary outline-none"
+                    />
+                  )}
+                  {inp.help && <p className="text-xs text-text-muted mt-0.5">{inp.help}</p>}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        <div className="flex gap-3 justify-end">
+          <button onClick={onCancel} className="px-5 py-2.5 text-sm font-semibold border border-border rounded-lg cursor-pointer text-text-secondary bg-transparent hover:border-text-secondary transition-colors font-mono">Cancel</button>
+          <button onClick={() => onConfirm(buildRequest())} disabled={!hasChanges()} className="px-5 py-2.5 text-sm font-semibold border-none rounded-lg cursor-pointer bg-primary text-bg-primary hover:shadow-[0_0_20px_rgba(0,255,157,0.3)] transition-all font-mono disabled:opacity-50 disabled:cursor-not-allowed">
+            Apply
           </button>
         </div>
       </div>
@@ -3912,16 +4086,18 @@ function DeveloperDashboard({ requireAuth }: { requireAuth: (cb: () => void) => 
           {apps.map(app => (
             <a key={app.id} href={`#/dev/${app.id}`} className="no-underline">
               <div className="border border-border rounded-lg p-4 hover:border-primary/50 transition-colors cursor-pointer bg-bg-card">
-                <div className="flex items-start justify-between mb-2">
-                  <div className="flex-1 min-w-0">
-                    <h3 className="text-sm font-bold text-text-primary font-mono truncate">{app.name || app.id}</h3>
-                    <p className="text-xs text-text-muted font-mono mt-0.5">v{app.version || '0.0.0'}</p>
+                <div className="flex items-start gap-3 mb-2">
+                  <img src={api.devIconUrl(app.id)} alt="" className="w-10 h-10 rounded-lg flex-shrink-0" onError={e => { (e.target as HTMLImageElement).style.display = 'none' }} />
+                  <div className="flex-1 min-w-0 flex items-start justify-between">
+                    <div className="min-w-0">
+                      <h3 className="text-sm font-bold text-text-primary font-mono truncate">{app.name || app.id}</h3>
+                      <p className="text-xs text-text-muted font-mono mt-0.5">v{app.version || '0.0.0'}</p>
+                    </div>
+                    <DevStatusBadge status={app.status} />
                   </div>
-                  <DevStatusBadge status={app.status} />
                 </div>
                 <p className="text-xs text-text-secondary line-clamp-2 mb-3">{app.description || 'No description'}</p>
                 <div className="flex items-center gap-2 text-xs text-text-muted font-mono">
-                  {app.has_icon && <span title="Has icon">icon</span>}
                   {app.has_readme && <span title="Has README">readme</span>}
                   <span className="ml-auto" onClick={(e) => { e.preventDefault(); handleDelete(app.id, app.name) }}>delete</span>
                 </div>
@@ -4085,78 +4261,188 @@ function DevDockerfileImport({ onClose, onCreated, requireAuth }: { onClose: () 
   const [url, setUrl] = useState('')
   const [dockerfile, setDockerfile] = useState('')
   const [name, setName] = useState('')
-  const [importing, setImporting] = useState(false)
   const [error, setError] = useState('')
+  const [phase, setPhase] = useState<'input' | 'resolving' | 'done' | 'error'>('input')
+  const [events, setEvents] = useState<DockerfileChainEvent[]>([])
+  const [completedAppId, setCompletedAppId] = useState('')
+  const abortRef = useRef<AbortController | null>(null)
+  const progressRef = useRef<HTMLDivElement>(null)
+
+  // Auto-scroll progress to bottom
+  useEffect(() => {
+    if (progressRef.current) {
+      progressRef.current.scrollTop = progressRef.current.scrollHeight
+    }
+  }, [events])
 
   const canImport = name.trim().length > 0 && (mode === 'url' ? url.trim().length > 0 : dockerfile.trim().length > 0)
 
   const handleImport = () => {
     requireAuth(async () => {
       if (!canImport) { setError('App name and Dockerfile content are required'); return }
-      setImporting(true)
+      setPhase('resolving')
+      setEvents([])
       setError('')
+
+      const controller = new AbortController()
+      abortRef.current = controller
+
       try {
         const payload: { name: string; url?: string; dockerfile?: string } = { name: name.trim() }
         if (mode === 'url') payload.url = url.trim()
         else payload.dockerfile = dockerfile.trim()
-        const app = await api.devImportDockerfile(payload)
-        onCreated(app.id)
+
+        const appId = await api.devImportDockerfileStream(
+          payload,
+          (event) => setEvents(prev => [...prev, event]),
+          controller.signal,
+        )
+
+        if (appId) {
+          setCompletedAppId(appId)
+          setPhase('done')
+        } else {
+          setPhase('error')
+          setError('Import completed but no app ID returned')
+        }
       } catch (e: unknown) {
+        if ((e as Error).name === 'AbortError') return
         setError(e instanceof Error ? e.message : 'Failed to import')
+        setPhase('error')
       }
-      setImporting(false)
     })
   }
 
+  const handleCancel = () => {
+    if (abortRef.current) abortRef.current.abort()
+    onClose()
+  }
+
+  const eventIcon = (type: string, index: number) => {
+    switch (type) {
+      case 'parsed': return <span className="text-primary">&#10003;</span>
+      case 'terminal': return <span className="text-blue-400">&#9632;</span>
+      case 'fetching': {
+        // Show spinner only if this is the last event and still resolving
+        const isLast = index === events.length - 1 && phase === 'resolving'
+        return isLast
+          ? <span className="text-yellow-400 animate-spin inline-block">&#9696;</span>
+          : <span className="text-yellow-400">&#8594;</span>
+      }
+      case 'error': return <span className="text-red-400">&#9888;</span>
+      case 'merged': return <span className="text-primary">&#9733;</span>
+      case 'complete': return <span className="text-primary">&#10003;</span>
+      default: return <span className="text-text-muted">&#8226;</span>
+    }
+  }
+
   return (
-    <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50" onClick={onClose}>
+    <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50" onClick={handleCancel}>
       <div className="bg-bg-card border border-border rounded-lg p-6 w-full max-w-2xl" onClick={(e) => e.stopPropagation()}>
         <h3 className="text-lg font-bold text-text-primary font-mono mb-4">Import from Dockerfile</h3>
-        <p className="text-xs text-text-muted mb-3">Parse a Dockerfile to generate an LXC app scaffold. Packages, ports, and volumes will be extracted automatically.</p>
 
-        <div className="mb-3">
-          <label className="text-xs text-text-muted font-mono uppercase block mb-1">App Name *</label>
-          <input
-            type="text"
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            placeholder="My App"
-            className="w-full bg-bg-primary border border-border rounded px-3 py-2 text-sm font-mono text-text-primary"
-            autoFocus
-          />
-        </div>
+        {phase === 'input' && (
+          <>
+            <p className="text-xs text-text-muted mb-3">Parse a Dockerfile and resolve its FROM chain to generate a complete LXC app scaffold. Parent base images are fetched automatically.</p>
 
-        <div className="flex gap-2 mb-3">
-          <button onClick={() => setMode('url')} className={`px-3 py-1 text-xs font-mono rounded border cursor-pointer transition-colors ${mode === 'url' ? 'border-primary text-primary bg-primary/10' : 'border-border text-text-secondary bg-transparent hover:border-primary'}`}>From URL</button>
-          <button onClick={() => setMode('dockerfile')} className={`px-3 py-1 text-xs font-mono rounded border cursor-pointer transition-colors ${mode === 'dockerfile' ? 'border-primary text-primary bg-primary/10' : 'border-border text-text-secondary bg-transparent hover:border-primary'}`}>Paste Dockerfile</button>
-        </div>
+            <div className="mb-3">
+              <label className="text-xs text-text-muted font-mono uppercase block mb-1">App Name *</label>
+              <input
+                type="text"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                placeholder="My App"
+                className="w-full bg-bg-primary border border-border rounded px-3 py-2 text-sm font-mono text-text-primary"
+                autoFocus
+              />
+            </div>
 
-        {mode === 'url' ? (
-          <div>
-            <input
-              type="text"
-              value={url}
-              onChange={(e) => setUrl(e.target.value)}
-              placeholder="https://raw.githubusercontent.com/owner/repo/main/Dockerfile"
-              className="w-full bg-bg-primary border border-border rounded px-3 py-2 text-sm font-mono text-text-primary"
-            />
-            <p className="text-xs text-text-muted mt-2">Paste a direct link to a Dockerfile, or a GitHub repo URL (the Dockerfile will be auto-detected).</p>
-          </div>
-        ) : (
-          <textarea
-            value={dockerfile}
-            onChange={(e) => setDockerfile(e.target.value)}
-            placeholder={"FROM ubuntu:22.04\nRUN apt-get update && apt-get install -y nginx\nEXPOSE 80"}
-            className="w-full h-64 bg-bg-primary border border-border rounded px-3 py-2 text-sm font-mono text-text-primary resize-none"
-          />
+            <div className="flex gap-2 mb-3">
+              <button onClick={() => setMode('url')} className={`px-3 py-1 text-xs font-mono rounded border cursor-pointer transition-colors ${mode === 'url' ? 'border-primary text-primary bg-primary/10' : 'border-border text-text-secondary bg-transparent hover:border-primary'}`}>From URL</button>
+              <button onClick={() => setMode('dockerfile')} className={`px-3 py-1 text-xs font-mono rounded border cursor-pointer transition-colors ${mode === 'dockerfile' ? 'border-primary text-primary bg-primary/10' : 'border-border text-text-secondary bg-transparent hover:border-primary'}`}>Paste Dockerfile</button>
+            </div>
+
+            {mode === 'url' ? (
+              <div>
+                <input
+                  type="text"
+                  value={url}
+                  onChange={(e) => setUrl(e.target.value)}
+                  placeholder="https://raw.githubusercontent.com/owner/repo/main/Dockerfile"
+                  className="w-full bg-bg-primary border border-border rounded px-3 py-2 text-sm font-mono text-text-primary"
+                />
+                <p className="text-xs text-text-muted mt-2">Paste a direct link to a Dockerfile, or a GitHub repo URL (the Dockerfile will be auto-detected).</p>
+              </div>
+            ) : (
+              <textarea
+                value={dockerfile}
+                onChange={(e) => setDockerfile(e.target.value)}
+                placeholder={"FROM ubuntu:22.04\nRUN apt-get update && apt-get install -y nginx\nEXPOSE 80"}
+                className="w-full h-64 bg-bg-primary border border-border rounded px-3 py-2 text-sm font-mono text-text-primary resize-none"
+              />
+            )}
+
+            {error && <p className="text-red-400 text-sm font-mono mt-2">{error}</p>}
+
+            <div className="flex justify-end gap-2 mt-4">
+              <button onClick={onClose} className="bg-transparent border border-border rounded px-4 py-2 text-sm font-mono text-text-secondary cursor-pointer hover:border-primary transition-colors">Cancel</button>
+              <button onClick={handleImport} disabled={!canImport} className="bg-primary text-bg-primary rounded px-4 py-2 text-sm font-mono font-bold cursor-pointer hover:opacity-90 disabled:opacity-50">Import</button>
+            </div>
+          </>
         )}
 
-        {error && <p className="text-red-400 text-sm font-mono mt-2">{error}</p>}
+        {(phase === 'resolving' || phase === 'done' || phase === 'error') && (
+          <>
+            <p className="text-sm text-text-secondary mb-3 font-mono">
+              Resolving Dockerfile chain for &quot;{name}&quot;{phase === 'resolving' ? '...' : ''}
+            </p>
 
-        <div className="flex justify-end gap-2 mt-4">
-          <button onClick={onClose} className="bg-transparent border border-border rounded px-4 py-2 text-sm font-mono text-text-secondary cursor-pointer hover:border-primary transition-colors">Cancel</button>
-          <button onClick={handleImport} disabled={importing || !canImport} className="bg-primary text-bg-primary rounded px-4 py-2 text-sm font-mono font-bold cursor-pointer hover:opacity-90 disabled:opacity-50">{importing ? 'Importing...' : 'Import'}</button>
-        </div>
+            <div ref={progressRef} className="overflow-y-auto max-h-[300px] bg-bg-primary border border-border rounded p-3 space-y-2 mb-4">
+              {events.filter(e => e.type !== 'complete').map((event, i) => (
+                <div key={i} className="flex items-start gap-2 text-sm font-mono">
+                  <span className="flex-shrink-0 w-5 text-center">{eventIcon(event.type, i)}</span>
+                  <div className="flex-1 min-w-0">
+                    <span className={`${event.type === 'error' ? 'text-red-400' : event.type === 'merged' ? 'text-primary' : 'text-text-secondary'}`}>
+                      {event.message}
+                    </span>
+                  </div>
+                </div>
+              ))}
+              {phase === 'resolving' && (
+                <div className="flex items-center gap-2 text-sm font-mono text-text-muted">
+                  <span className="animate-pulse">...</span>
+                </div>
+              )}
+            </div>
+
+            {phase === 'done' && (
+              <div className="flex items-center gap-2 mb-4 p-2 bg-primary/10 border border-primary/30 rounded">
+                <span className="text-primary">&#10003;</span>
+                <span className="text-sm font-mono text-primary">
+                  {events.find(e => e.type === 'complete')?.message || 'Import complete!'}
+                </span>
+              </div>
+            )}
+
+            {error && <p className="text-red-400 text-sm font-mono mb-3">{error}</p>}
+
+            <div className="flex justify-end gap-2">
+              <button onClick={handleCancel} className="bg-transparent border border-border rounded px-4 py-2 text-sm font-mono text-text-secondary cursor-pointer hover:border-primary transition-colors">
+                {phase === 'done' ? 'Close' : 'Cancel'}
+              </button>
+              {phase === 'done' && completedAppId && (
+                <button onClick={() => onCreated(completedAppId)} className="bg-primary text-bg-primary rounded px-4 py-2 text-sm font-mono font-bold cursor-pointer hover:opacity-90">
+                  Open App
+                </button>
+              )}
+              {phase === 'error' && (
+                <button onClick={() => { setPhase('input'); setEvents([]); setError('') }} className="bg-primary text-bg-primary rounded px-4 py-2 text-sm font-mono font-bold cursor-pointer hover:opacity-90">
+                  Try Again
+                </button>
+              )}
+            </div>
+          </>
+        )}
       </div>
     </div>
   )
@@ -4176,6 +4462,9 @@ function DevAppEditor({ id, requireAuth }: { id: string; requireAuth: (cb: () =>
   const [deploying, setDeploying] = useState(false)
   const [showSubmit, setShowSubmit] = useState(false)
   const [showSdkRef, setShowSdkRef] = useState(false)
+  const [iconUrl, setIconUrl] = useState('')
+  const [showIconInput, setShowIconInput] = useState(false)
+  const [iconKey, setIconKey] = useState(0)
 
   const fetchApp = useCallback(async () => {
     try {
@@ -4209,6 +4498,10 @@ function DevAppEditor({ id, requireAuth }: { id: string; requireAuth: (cb: () =>
   const handleValidate = () => {
     requireAuth(async () => {
       try {
+        // Save all files before validating
+        await api.devSaveManifest(id, manifest)
+        await api.devSaveScript(id, script)
+        if (readme) await api.devSaveFile(id, 'README.md', readme)
         const result = await api.devValidate(id)
         setValidation(result)
       } catch (e: unknown) {
@@ -4221,6 +4514,10 @@ function DevAppEditor({ id, requireAuth }: { id: string; requireAuth: (cb: () =>
     requireAuth(async () => {
       setDeploying(true)
       try {
+        // Save all files before deploying
+        await api.devSaveManifest(id, manifest)
+        await api.devSaveScript(id, script)
+        if (readme) await api.devSaveFile(id, 'README.md', readme)
         const result = await api.devDeploy(id)
         alert(result.message)
         fetchApp()
@@ -4254,6 +4551,20 @@ function DevAppEditor({ id, requireAuth }: { id: string; requireAuth: (cb: () =>
     })
   }
 
+  const handleSetIcon = () => {
+    if (!iconUrl.trim()) return
+    requireAuth(async () => {
+      try {
+        await api.devSetIcon(id, iconUrl.trim())
+        setIconUrl('')
+        setShowIconInput(false)
+        setIconKey(k => k + 1) // bust cache
+      } catch (e: unknown) {
+        alert(e instanceof Error ? e.message : 'Failed to set icon')
+      }
+    })
+  }
+
   if (!app) return <Center className="py-16"><span className="text-text-muted font-mono">Loading...</span></Center>
 
   const currentContent = activeFile === 'app.yml' ? manifest : activeFile === 'provision/install.py' ? script : readme
@@ -4265,11 +4576,19 @@ function DevAppEditor({ id, requireAuth }: { id: string; requireAuth: (cb: () =>
 
       {/* Header */}
       <div className="flex items-center justify-between mt-4 mb-4">
-        <div>
-          <h2 className="text-xl font-bold text-text-primary font-mono">{app.name || app.id}</h2>
-          <div className="flex items-center gap-3 mt-1">
-            <span className="text-xs text-text-muted font-mono">v{app.version}</span>
-            <DevStatusBadge status={app.status} />
+        <div className="flex items-center gap-3">
+          <div className="relative group cursor-pointer" onClick={() => setShowIconInput(!showIconInput)}>
+            <img key={iconKey} src={api.devIconUrl(id) + `?t=${iconKey}`} alt="" className="w-12 h-12 rounded-lg border border-border" onError={e => { (e.target as HTMLImageElement).style.display = 'none' }} />
+            <div className="absolute inset-0 bg-black/50 rounded-lg opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+              <span className="text-[10px] text-white font-mono">edit</span>
+            </div>
+          </div>
+          <div>
+            <h2 className="text-xl font-bold text-text-primary font-mono">{app.name || app.id}</h2>
+            <div className="flex items-center gap-3 mt-1">
+              <span className="text-xs text-text-muted font-mono">v{app.version}</span>
+              <DevStatusBadge status={app.status} />
+            </div>
           </div>
         </div>
         <div className="flex gap-2">
@@ -4283,8 +4602,25 @@ function DevAppEditor({ id, requireAuth }: { id: string; requireAuth: (cb: () =>
           <button onClick={() => setShowSdkRef(!showSdkRef)} className={`bg-transparent border rounded px-3 py-1.5 text-xs font-mono cursor-pointer transition-colors ${showSdkRef ? 'border-primary text-primary' : 'border-border text-text-secondary hover:border-primary hover:text-primary'}`}>SDK Ref</button>
           <button onClick={() => setShowSubmit(true)} className="bg-transparent border border-border rounded px-3 py-1.5 text-xs font-mono text-text-secondary cursor-pointer hover:border-primary hover:text-primary transition-colors">Submit</button>
           {app.status === 'deployed' && <a href={`#/app/${app.id}`} className="bg-transparent border border-primary rounded px-3 py-1.5 text-xs font-mono text-primary no-underline hover:bg-primary/10 transition-colors">Test Install</a>}
+          <button onClick={() => { requireAuth(async () => { if (!confirm(`Delete "${app.name || id}"? This cannot be undone.`)) return; try { await api.devDeleteApp(id); window.location.hash = '#/developer' } catch (e: unknown) { alert(e instanceof Error ? e.message : 'Failed') } }) }} className="bg-transparent border border-red-500/50 rounded px-3 py-1.5 text-xs font-mono text-red-400 cursor-pointer hover:border-red-500 hover:bg-red-500/10 transition-colors">Delete</button>
         </div>
       </div>
+
+      {showIconInput && (
+        <div className="mb-4 p-3 border border-border rounded-lg bg-bg-card flex items-center gap-2">
+          <span className="text-xs font-mono text-text-muted whitespace-nowrap">Icon URL:</span>
+          <input
+            type="text"
+            value={iconUrl}
+            onChange={e => setIconUrl(e.target.value)}
+            placeholder="https://example.com/icon.png"
+            className="flex-1 bg-bg-primary border border-border rounded px-2 py-1 text-xs font-mono text-text-primary outline-none focus:border-primary"
+            onKeyDown={e => e.key === 'Enter' && handleSetIcon()}
+          />
+          <button onClick={handleSetIcon} className="bg-primary text-bg-primary rounded px-3 py-1 text-xs font-mono font-bold cursor-pointer hover:opacity-90">Set</button>
+          <button onClick={() => setShowIconInput(false)} className="text-text-muted hover:text-text-secondary text-xs font-mono cursor-pointer">Cancel</button>
+        </div>
+      )}
 
       {/* Main editor area */}
       <div className="flex gap-4" style={{ height: 'calc(100vh - 280px)' }}>

@@ -378,7 +378,7 @@ func TestResolveTemplateFallback(t *testing.T) {
 
 	_, client := newTestServer(t, mux)
 	tmpl := client.ResolveTemplate(context.Background(), "alpine-3.19", "local")
-	if tmpl != "local:vztmpl/alpine-3.19-standard_amd64.tar.zst" {
+	if tmpl != "local:vztmpl/alpine-3.19-default_amd64.tar.xz" {
 		t.Errorf("fallback = %q", tmpl)
 	}
 }

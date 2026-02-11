@@ -254,6 +254,7 @@ permissions:
   urls:
     - "https://auth.docker.io/*"
     - "https://registry-1.docker.io/*"
+    - "http://127.0.0.1:*"
   paths:
     - "/"
     - "/usr/sbin/"

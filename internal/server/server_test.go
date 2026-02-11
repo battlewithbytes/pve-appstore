@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"strings"
 	"testing"
@@ -48,6 +49,9 @@ func (m *mockCM) Push(ctid int, src, dst, perms string) error { return nil }
 func (m *mockCM) GetIP(ctid int) (string, error) { return "10.0.0.1", nil }
 func (m *mockCM) GetConfig(ctx context.Context, ctid int) (map[string]interface{}, error) {
 	return map[string]interface{}{}, nil
+}
+func (m *mockCM) UpdateConfig(ctx context.Context, ctid int, params url.Values) error {
+	return nil
 }
 func (m *mockCM) DetachMountPoints(ctx context.Context, ctid int, indexes []int) error { return nil }
 func (m *mockCM) ConfigureDevices(ctid int, devices []engine.DevicePassthrough) error { return nil }
@@ -152,8 +156,8 @@ func TestHealthEndpoint(t *testing.T) {
 		t.Errorf("node = %v, want %q", body["node"], "testnode")
 	}
 	count := body["app_count"].(float64)
-	if count != 8 {
-		t.Errorf("app_count = %v, want 8", count)
+	if count != 9 {
+		t.Errorf("app_count = %v, want 9", count)
 	}
 }
 
@@ -169,12 +173,12 @@ func TestListAppsEndpoint(t *testing.T) {
 
 	body := decodeJSON(t, w)
 	total := body["total"].(float64)
-	if total != 8 {
-		t.Errorf("total = %v, want 8", total)
+	if total != 9 {
+		t.Errorf("total = %v, want 9", total)
 	}
 	apps := body["apps"].([]interface{})
-	if len(apps) != 8 {
-		t.Errorf("apps count = %d, want 8", len(apps))
+	if len(apps) != 9 {
+		t.Errorf("apps count = %d, want 9", len(apps))
 	}
 }
 
@@ -218,9 +222,9 @@ func TestListAppsCategoryFilter(t *testing.T) {
 
 	body := decodeJSON(t, w)
 	total := body["total"].(float64)
-	// jellyfin and plex are in "media"
-	if total != 2 {
-		t.Errorf("total = %v, want 2", total)
+	// jellyfin, plex, and qbittorrent are in "media"
+	if total != 3 {
+		t.Errorf("total = %v, want 3", total)
 	}
 }
 
@@ -1178,6 +1182,52 @@ func TestStackCreateAndList(t *testing.T) {
 		var job map[string]interface{}
 		json.NewDecoder(w.Body).Decode(&job)
 		t.Skipf("Stack job may have failed — no stacks in list")
+	}
+}
+
+func TestReconfigureInstall(t *testing.T) {
+	srv := testServer(t)
+
+	// Start an install first
+	w := doRequest(t, srv, "POST", "/api/apps/nginx/install", `{"cores":1,"memory_mb":512,"disk_gb":4}`)
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("install status = %d (body: %s)", w.Code, w.Body.String())
+	}
+
+	// Wait for async install to complete
+	time.Sleep(500 * time.Millisecond)
+
+	// Check if install exists
+	w2 := doRequest(t, srv, "GET", "/api/installs", "")
+	body := decodeJSON(t, w2)
+	installs := body["installs"].([]interface{})
+	if len(installs) == 0 {
+		t.Skip("Install job failed — skipping reconfigure test")
+	}
+
+	inst := installs[0].(map[string]interface{})
+	instID := inst["id"].(string)
+
+	// Reconfigure: change cores and memory
+	w3 := doRequest(t, srv, "POST", "/api/installs/"+instID+"/reconfigure", `{"cores":4,"memory_mb":2048}`)
+	if w3.Code != http.StatusOK {
+		t.Fatalf("reconfigure status = %d, want %d (body: %s)", w3.Code, http.StatusOK, w3.Body.String())
+	}
+
+	result := decodeJSON(t, w3)
+	if result["cores"].(float64) != 4 {
+		t.Errorf("cores = %v, want 4", result["cores"])
+	}
+	if result["memory_mb"].(float64) != 2048 {
+		t.Errorf("memory_mb = %v, want 2048", result["memory_mb"])
+	}
+}
+
+func TestReconfigureInstallNotFound(t *testing.T) {
+	srv := testServer(t)
+	w := doRequest(t, srv, "POST", "/api/installs/nonexistent/reconfigure", `{"cores":4}`)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d", w.Code, http.StatusBadRequest)
 	}
 }
 

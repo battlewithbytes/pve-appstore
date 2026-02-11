@@ -3,6 +3,7 @@ package proxmox
 import (
 	"context"
 	"fmt"
+	"net/url"
 
 	"github.com/battlewithbytes/pve-appstore/internal/engine"
 	"github.com/battlewithbytes/pve-appstore/internal/pct"
@@ -115,6 +116,10 @@ func (m *Manager) GetIP(ctid int) (string, error) {
 
 func (m *Manager) GetConfig(ctx context.Context, ctid int) (map[string]interface{}, error) {
 	return m.client.GetConfig(ctx, ctid)
+}
+
+func (m *Manager) UpdateConfig(ctx context.Context, ctid int, params url.Values) error {
+	return m.client.UpdateConfig(ctx, ctid, params)
 }
 
 func (m *Manager) DetachMountPoints(ctx context.Context, ctid int, indexes []int) error {

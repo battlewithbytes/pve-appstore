@@ -12,17 +12,22 @@ import (
 
 // Config represents the full application configuration written to config.yml.
 type Config struct {
-	NodeName string          `yaml:"node_name"`
-	Pool     string          `yaml:"pool"`
-	Storages []string        `yaml:"storages"`
-	Bridges  []string        `yaml:"bridges"`
-	Defaults ResourceConfig  `yaml:"defaults"`
-	Security SecurityConfig  `yaml:"security"`
-	Service  ServiceConfig   `yaml:"service"`
-	Auth     AuthConfig      `yaml:"auth"`
-	Proxmox  ProxmoxConfig   `yaml:"proxmox"`
-	Catalog  CatalogConfig   `yaml:"catalog"`
-	GPU      GPUConfig       `yaml:"gpu"`
+	NodeName  string          `yaml:"node_name"`
+	Pool      string          `yaml:"pool"`
+	Storages  []string        `yaml:"storages"`
+	Bridges   []string        `yaml:"bridges"`
+	Defaults  ResourceConfig  `yaml:"defaults"`
+	Security  SecurityConfig  `yaml:"security"`
+	Service   ServiceConfig   `yaml:"service"`
+	Auth      AuthConfig      `yaml:"auth"`
+	Proxmox   ProxmoxConfig   `yaml:"proxmox"`
+	Catalog   CatalogConfig   `yaml:"catalog"`
+	GPU       GPUConfig       `yaml:"gpu"`
+	Developer DeveloperConfig `yaml:"developer"`
+}
+
+type DeveloperConfig struct {
+	Enabled bool `yaml:"enabled"`
 }
 
 type ResourceConfig struct {
@@ -201,7 +206,7 @@ func (c *Config) Save(path string) error {
 		return fmt.Errorf("marshaling config: %w", err)
 	}
 
-	if err := os.WriteFile(path, data, 0640); err != nil {
+	if err := os.WriteFile(path, data, 0660); err != nil {
 		return fmt.Errorf("writing config: %w", err)
 	}
 

@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"log"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -64,8 +65,32 @@ func New(cfg *config.Config, cat *catalog.Catalog, eng *engine.Engine, spaFS fs.
 		opt(s)
 	}
 
-	// Initialize dev store
+	// Initialize dev store and restore deployed dev apps into catalog
 	s.devStore = devmode.NewDevStore(filepath.Join(config.DefaultDataDir, "dev-apps"))
+	if cfg.Developer.Enabled {
+		if apps, err := s.devStore.List(); err == nil {
+			for _, meta := range apps {
+				if meta.Status != "deployed" {
+					continue
+				}
+				m, err := s.devStore.ParseManifest(meta.ID)
+				if err != nil {
+					log.Printf("[dev] warning: could not restore deployed app %q: %v", meta.ID, err)
+					continue
+				}
+				appDir := s.devStore.AppDir(meta.ID)
+				m.DirPath = appDir
+				if _, err := os.Stat(filepath.Join(appDir, "icon.png")); err == nil {
+					m.IconPath = filepath.Join(appDir, "icon.png")
+				}
+				if _, err := os.Stat(filepath.Join(appDir, "README.md")); err == nil {
+					m.ReadmePath = filepath.Join(appDir, "README.md")
+				}
+				cat.MergeDevApp(m)
+				log.Printf("[dev] restored deployed app %q into catalog", meta.ID)
+			}
+		}
+	}
 
 	// Resolve configured storages to filesystem paths via Proxmox API
 	if eng != nil {
@@ -120,9 +145,12 @@ func New(cfg *config.Config, cat *catalog.Catalog, eng *engine.Engine, spaFS fs.
 	mux.HandleFunc("POST /api/dev/apps/{id}/validate", s.withDevMode(s.withAuth(s.handleDevValidate)))
 	mux.HandleFunc("POST /api/dev/apps/{id}/deploy", s.withDevMode(s.withAuth(s.handleDevDeploy)))
 	mux.HandleFunc("POST /api/dev/apps/{id}/undeploy", s.withDevMode(s.withAuth(s.handleDevUndeploy)))
+	mux.HandleFunc("GET /api/dev/apps/{id}/icon", s.withDevMode(s.handleDevGetIcon))
+	mux.HandleFunc("PUT /api/dev/apps/{id}/icon", s.withDevMode(s.withAuth(s.handleDevSetIcon)))
 	mux.HandleFunc("POST /api/dev/apps/{id}/export", s.withDevMode(s.withAuth(s.handleDevExport)))
 	mux.HandleFunc("POST /api/dev/import/unraid", s.withDevMode(s.withAuth(s.handleDevImportUnraid)))
 	mux.HandleFunc("POST /api/dev/import/dockerfile", s.withDevMode(s.withAuth(s.handleDevImportDockerfile)))
+	mux.HandleFunc("POST /api/dev/import/dockerfile/stream", s.withDevMode(s.withAuth(s.handleDevImportDockerfileStream)))
 	mux.HandleFunc("GET /api/dev/templates", s.withDevMode(s.handleDevListTemplates))
 
 	// API routes — filesystem browser
@@ -150,6 +178,7 @@ func New(cfg *config.Config, cat *catalog.Catalog, eng *engine.Engine, spaFS fs.
 	mux.HandleFunc("POST /api/installs/{id}/reinstall", s.withAuth(s.handleReinstall))
 	mux.HandleFunc("POST /api/installs/{id}/update", s.withAuth(s.handleUpdate))
 	mux.HandleFunc("POST /api/installs/{id}/edit", s.withAuth(s.handleEditInstall))
+	mux.HandleFunc("POST /api/installs/{id}/reconfigure", s.withAuth(s.handleReconfigure))
 
 	// API routes — stacks
 	mux.HandleFunc("POST /api/stacks", s.withAuth(s.handleCreateStack))

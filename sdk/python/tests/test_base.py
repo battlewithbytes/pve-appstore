@@ -185,6 +185,34 @@ class TestPipInstall:
         install_call = mock_popen.call_args_list[-1]
         assert install_call[0][0] == ["/opt/app/venv/bin/pip", "install", "--progress-bar", "off", "crawl4ai"]
 
+    @patch("os.path.isfile", return_value=False)
+    @patch("appstore.base.subprocess.Popen")
+    def test_auto_creates_default_venv(self, mock_popen, mock_isfile):
+        """pip_install() without venv= auto-creates /opt/venv."""
+        mock_popen.side_effect = mock_popen_factory()
+        app = make_app(pip=["requests"])
+        app.pip_install("requests")
+
+        # First call: python3 -m venv /opt/venv
+        venv_call = mock_popen.call_args_list[0]
+        assert venv_call[0][0] == ["python3", "-m", "venv", "/opt/venv"]
+        # Second call: pip install
+        pip_call = mock_popen.call_args_list[1]
+        assert pip_call[0][0] == ["/opt/venv/bin/pip", "install", "--progress-bar", "off", "requests"]
+
+    @patch("os.path.isfile", return_value=True)
+    @patch("appstore.base.subprocess.Popen")
+    def test_skips_venv_creation_if_exists(self, mock_popen, mock_isfile):
+        """pip_install() skips venv creation when /opt/venv/bin/pip exists."""
+        mock_popen.side_effect = mock_popen_factory()
+        app = make_app(pip=["requests"])
+        app.pip_install("requests")
+
+        # Only pip install call, no venv creation
+        assert mock_popen.call_count == 1
+        pip_call = mock_popen.call_args_list[0]
+        assert pip_call[0][0] == ["/opt/venv/bin/pip", "install", "--progress-bar", "off", "requests"]
+
     def test_rejects_disallowed_pip(self):
         app = make_app(pip=["crawl4ai"])
         with pytest.raises(PermissionDeniedError, match="pip package 'evil'"):

@@ -134,7 +134,7 @@ var serveCmd = &cobra.Command{
 		}
 
 		// Start server
-		srv := server.New(cfg, cat, eng, spaFS)
+		srv := server.New(cfg, cat, eng, spaFS, server.WithConfigPath(serveConfigPath))
 
 		// Graceful shutdown
 		sig := make(chan os.Signal, 1)

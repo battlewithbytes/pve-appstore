@@ -172,6 +172,16 @@ type EditRequest struct {
 	Inputs   map[string]string `json:"inputs,omitempty"`
 }
 
+// ReconfigureRequest is the input for in-place reconfiguration of an active install.
+// Unlike EditRequest, this does NOT destroy and recreate the container.
+// Resource changes (cores, memory) are applied via Proxmox API.
+// Input changes trigger the app's configure() lifecycle method.
+type ReconfigureRequest struct {
+	Cores    int               `json:"cores,omitempty"`
+	MemoryMB int               `json:"memory_mb,omitempty"`
+	Inputs   map[string]string `json:"inputs,omitempty"`
+}
+
 // StackApp represents a single app within a multi-app stack.
 type StackApp struct {
 	AppID      string            `json:"app_id"`

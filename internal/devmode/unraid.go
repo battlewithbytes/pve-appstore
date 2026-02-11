@@ -69,7 +69,7 @@ func ConvertUnraidToScaffold(c *UnraidContainer, df *DockerfileInfo) (id, manife
 		description = "Imported from Unraid: " + c.Name
 	}
 	// Strip HTML tags and markdown-style links like Name(url)
-	description = stripHTML(description)
+	description = StripHTML(description)
 	description = stripMarkdownLinks(description)
 	// Escape quotes for YAML
 	description = strings.ReplaceAll(description, `"`, `\"`)
@@ -171,6 +171,7 @@ categories:
 tags:
   - unraid-import`, id, c.Name, description))
 	sb.WriteString("\nmaintainers:\n  - \"Your Name\"\n")
+	sb.WriteString("icon: \"\"  # Paste icon URL or use icon editor in header\n")
 
 	// Add source info as comments
 	sb.WriteString(fmt.Sprintf("\n# Imported from Unraid template for %s\n", c.Name))
@@ -193,8 +194,8 @@ lxc:
 
 	// Build port input keys for use in outputs
 	type portInput struct {
-		key      string
-		port     portInfo
+		key  string
+		port portInfo
 	}
 	var portInputs []portInput
 
@@ -353,7 +354,7 @@ class %s(BaseApp):
         # TODO: Create a service unit for the application
         # self.enable_service("app-name")
 
-        self.log("Installation complete — configure the application manually")`)
+        self.log.info("Installation complete — configure the application manually")`)
 
 	scriptParts = append(scriptParts, fmt.Sprintf(`
 
@@ -365,6 +366,7 @@ run(%s)
 	return id, manifest, script
 }
 
+// convertWithDockerfile generates a manifest and script using both Unraid XML and Dockerfile data.
 func convertWithDockerfile(c *UnraidContainer, df *DockerfileInfo, id string) (string, string, string) {
 	description := c.Overview
 	if description == "" {
@@ -373,18 +375,19 @@ func convertWithDockerfile(c *UnraidContainer, df *DockerfileInfo, id string) (s
 	if description == "" {
 		description = "Converted from Unraid: " + c.Name
 	}
-	description = stripHTML(description)
+	description = StripHTML(description)
 	description = stripMarkdownLinks(description)
 	description = strings.ReplaceAll(description, `"`, `\"`)
 	if len(description) > 200 {
 		description = description[:200] + "..."
 	}
 
-	// Determine OS template
-	osTemplate := "debian-12"
-	if df.BaseOS == "alpine" {
-		osTemplate = "alpine-3.21"
-	}
+	// Ensure pip prerequisites are in the package list
+	ensurePipPrereqs(df)
+
+	// Determine OS template from profile
+	profile := ProfileFor(df.BaseOS)
+	osTemplate := profile.OSTemplate
 
 	// Determine unprivileged from XML Privileged field (inverted)
 	unprivileged := true
@@ -474,8 +477,8 @@ func convertWithDockerfile(c *UnraidContainer, df *DockerfileInfo, id string) (s
 		}
 	}
 
-	// Infer main service name from the largest package or app name
-	mainService := inferMainService(id, df.Packages)
+	// Infer main service name from the app layer packages only (not base layers)
+	mainService := inferMainService(id, appLayerPackages(df))
 
 	// Build manifest
 	var sb strings.Builder
@@ -488,6 +491,7 @@ categories:
 tags:
   - unraid-import`, id, c.Name, description))
 	sb.WriteString("\nmaintainers:\n  - \"Your Name\"\n")
+	sb.WriteString("icon: \"\"  # Paste icon URL or use icon editor in header\n")
 
 	if c.Project != "" {
 		sb.WriteString(fmt.Sprintf("\n# Project homepage: %s\n", c.Project))
@@ -510,7 +514,22 @@ lxc:
 		port portInfo
 	}
 	var portInputs []portInput
-	if len(vars) > 0 || len(ports) > 0 {
+
+	// Merge Dockerfile ENV vars with XML variables (XML takes precedence)
+	xmlVarKeys := make(map[string]bool)
+	for _, v := range vars {
+		xmlVarKeys[strings.ToUpper(v.key)] = true
+	}
+	var envOnlyVars []EnvVar
+	if df != nil {
+		for _, ev := range df.EnvVars {
+			if !xmlVarKeys[ev.Key] && !xmlVarKeys[strings.ToUpper(toSnakeCase(ev.Key))] {
+				envOnlyVars = append(envOnlyVars, ev)
+			}
+		}
+	}
+
+	if len(vars) > 0 || len(ports) > 0 || len(envOnlyVars) > 0 {
 		sb.WriteString("\ninputs:\n")
 		for _, p := range ports {
 			key := toSnakeCase(p.name)
@@ -549,6 +568,18 @@ lxc:
     help: "%s"
 `, v.key, v.name, inputType, v.defaultVal, reqStr, strings.ReplaceAll(v.desc, `"`, `\"`)))
 		}
+		// ENV vars from Dockerfile not covered by XML variables
+		for _, ev := range envOnlyVars {
+			key := toSnakeCase(ev.Key)
+			label := envKeyToLabel(ev.Key)
+			sb.WriteString(fmt.Sprintf(`  - key: %s
+    label: "%s"
+    type: string
+    default: "%s"
+    required: false
+    help: "Environment variable %s"
+`, key, label, strings.ReplaceAll(ev.Default, `"`, `\"`), ev.Key))
+		}
 	}
 
 	sb.WriteString(`
@@ -560,26 +591,40 @@ provisioning:
 
 	// Permissions section
 	sb.WriteString("permissions:\n")
-	if len(df.Packages) > 0 {
+	if len(df.PipPackages) > 0 {
+		sb.WriteString("  packages:\n")
+		for _, pkg := range df.Packages {
+			sb.WriteString(fmt.Sprintf("    - %s\n", pkg))
+		}
+		sb.WriteString("  pip:\n")
+		for _, pkg := range df.PipPackages {
+			sb.WriteString(fmt.Sprintf("    - %s\n", pkg))
+		}
+	} else if len(df.Packages) > 0 {
 		sb.WriteString("  packages:\n")
 		for _, pkg := range df.Packages {
 			sb.WriteString(fmt.Sprintf("    - %s\n", pkg))
 		}
 	}
-	// URLs from APT keys/repos
+	// URLs from APT keys/repos + downloads + repo URL
 	var urls []string
 	for _, k := range df.AptKeys {
 		urls = append(urls, k.URL)
 	}
 	for _, r := range df.AptRepos {
-		// Extract domain from repo line
 		if u := extractURLFromRepoLine(r.Line); u != "" {
 			urls = append(urls, u+"*")
 		}
 	}
+	for _, dl := range df.Downloads {
+		urls = append(urls, dl.URL)
+	}
+	if df.RepoURL != "" {
+		urls = append(urls, df.RepoURL+"*")
+	}
 	if len(urls) > 0 {
 		sb.WriteString("  urls:\n")
-		for _, u := range urls {
+		for _, u := range dedup(urls) {
 			sb.WriteString(fmt.Sprintf("    - \"%s\"\n", u))
 		}
 	}
@@ -588,6 +633,9 @@ provisioning:
 	for _, p := range paths {
 		permPaths = append(permPaths, p.target)
 	}
+	for _, d := range df.Directories {
+		permPaths = append(permPaths, d)
+	}
 	if len(df.AptRepos) > 0 {
 		permPaths = append(permPaths, "/etc/apt/sources.list.d/")
 	}
@@ -595,14 +643,33 @@ provisioning:
 		permPaths = append(permPaths, "/usr/share/keyrings/")
 	}
 	permPaths = append(permPaths, "/etc/systemd/system/")
+	// Extract paths referenced by run_command() calls (sed targets, mv destinations, etc.)
+	permPaths = append(permPaths, extractPathsFromRunCommands(df.RunCommands)...)
 	if len(permPaths) > 0 {
 		sb.WriteString("  paths:\n")
-		for _, p := range permPaths {
+		for _, p := range dedup(permPaths) {
 			sb.WriteString(fmt.Sprintf("    - %s\n", p))
 		}
 	}
-	// Services
+	// Commands — extract from what the script will actually call via run_command()
+	cmds := collectScriptCommands(df)
+	if len(cmds) > 0 {
+		sb.WriteString("  commands:\n")
+		for _, c := range cmds {
+			sb.WriteString(fmt.Sprintf("    - %s\n", c))
+		}
+	}
+	if len(df.Users) > 0 {
+		sb.WriteString("  users:\n")
+		for _, u := range df.Users {
+			sb.WriteString(fmt.Sprintf("    - %s\n", u))
+		}
+	}
+	// Services (main + implied from module packages and base image name)
 	sb.WriteString("  services:\n")
+	for _, svc := range inferImpliedServices(df.Packages, mainService, df.BaseImage) {
+		sb.WriteString(fmt.Sprintf("    - %s\n", svc))
+	}
 	sb.WriteString(fmt.Sprintf("    - %s\n", mainService))
 
 	sb.WriteString("\n")
@@ -637,626 +704,39 @@ provisioning:
 
 	manifest := sb.String()
 
-	// Build script with real SDK v2 calls
-	className := toPascalCase(id)
-	var sp strings.Builder
-	sp.WriteString(fmt.Sprintf(`#!/usr/bin/env python3
-"""
-Provisioning script for %s.
-Converted from Unraid template — original Docker image: %s
-Generated with Dockerfile analysis.
-"""
-from appstore import BaseApp, run
-
-
-class %s(BaseApp):
-    def install(self):`, c.Name, c.Repository, className))
-
-	// Read inputs
-	if len(portInputs) > 0 || len(vars) > 0 {
-		sp.WriteString("\n        # Read inputs\n")
-		for _, pi := range portInputs {
-			varName := toSnakeCase(pi.key)
-			sp.WriteString(fmt.Sprintf("        %s = self.inputs.integer(\"%s\", %s)\n", varName, pi.key, pi.port.defaultVal))
-		}
-		for _, v := range vars {
-			if v.mask {
-				sp.WriteString(fmt.Sprintf("        %s = self.inputs.secret(\"%s\")\n", v.key, v.key))
-			} else {
-				sp.WriteString(fmt.Sprintf("        %s = self.inputs.string(\"%s\", \"%s\")\n", v.key, v.key, v.defaultVal))
-			}
+	// Convert portInputs and vars to shared types
+	var scriptPortInputs []portInputInfo
+	for _, pi := range portInputs {
+		scriptPortInputs = append(scriptPortInputs, portInputInfo{
+			key: pi.key, port: pi.port.target, defaultVal: pi.port.defaultVal,
+		})
+	}
+	var secretVars []struct{ key, name string }
+	var stringVars []struct{ key, name, defaultVal string }
+	for _, v := range vars {
+		if v.mask {
+			secretVars = append(secretVars, struct{ key, name string }{v.key, v.name})
+		} else {
+			stringVars = append(stringVars, struct{ key, name, defaultVal string }{v.key, v.name, v.defaultVal})
 		}
 	}
-
-	sp.WriteString("\n")
-
-	// APT keys
-	for _, k := range df.AptKeys {
-		sp.WriteString(fmt.Sprintf("        self.add_apt_key(\"%s\",\n                         \"%s\")\n", k.URL, k.Keyring))
-	}
-
-	// APT repos
-	for _, r := range df.AptRepos {
-		filename := r.File
-		// Strip directory prefix for the filename parameter
-		if idx := strings.LastIndex(filename, "/"); idx >= 0 {
-			filename = filename[idx+1:]
-		}
-		sp.WriteString(fmt.Sprintf("        self.add_apt_repo(\"%s\",\n                          \"%s\")\n", r.Line, filename))
-	}
-
-	// Package install
-	if len(df.Packages) > 0 {
-		writePkgInstall(&sp, df.Packages)
-	}
-
-	// Create directories
-	if len(paths) > 0 {
-		sp.WriteString("\n        # Create data directories\n")
-		for _, p := range paths {
-			sp.WriteString(fmt.Sprintf("        self.create_dir(\"%s\")  # %s\n", p.target, p.name))
-		}
-	}
-
-	// Service management
-	sp.WriteString("\n")
-	if df.ExecCmd != "" {
-		// Use create_service with the parsed exec command
-		sp.WriteString(fmt.Sprintf("        self.create_service(\"%s\",\n                            exec_start=\"%s\")\n",
-			mainService, strings.ReplaceAll(df.ExecCmd, `"`, `\"`)))
-	} else {
-		// Just enable_service — assume the package provides its own unit
-		sp.WriteString(fmt.Sprintf("        self.enable_service(\"%s\")\n", mainService))
-	}
-
-	sp.WriteString(fmt.Sprintf("        self.log(\"%s installation complete\")\n", c.Name))
-
-	sp.WriteString(fmt.Sprintf("\n\nrun(%s)\n", className))
-
-	script := sp.String()
-	return id, manifest, script
-}
-
-// inferMainService guesses the main service name from the app ID and package list.
-func inferMainService(appID string, packages []string) string {
-	kebab := toKebabCase(appID)
-
-	// Tier 1: exact match — app ID matches a package name
-	for _, pkg := range packages {
-		if pkg == kebab {
-			return pkg
-		}
-	}
-
-	// Tier 2: partial match — package contains the app ID or vice versa
-	for _, pkg := range packages {
-		if strings.Contains(pkg, kebab) || strings.Contains(kebab, pkg) {
-			if !isUtilityPackage(pkg) {
-				return pkg
-			}
-		}
-	}
-
-	// Tier 3: first non-utility package
-	for _, pkg := range packages {
-		if isUtilityPackage(pkg) {
-			continue
-		}
-		return pkg
-	}
-	return kebab
-}
-
-// isUtilityPackage uses pattern-based heuristics to detect packages that are
-// build tools, libraries, or system utilities rather than application services.
-func isUtilityPackage(pkg string) bool {
-	// Prefix patterns: libraries and language toolchains
-	utilPrefixes := []string{
-		"lib",    // libssl3, libffi-dev, libasound2, etc.
-		"ca-",    // ca-certificates
-		"qt5-",   // Qt5 library deps
-		"qt6-",   // Qt6 library deps
-		"python", // python3, python3-dev, python3-pip
-		"php",    // php84-bcmath, php84-gd (modules, not services)
-	}
-	for _, pfx := range utilPrefixes {
-		if strings.HasPrefix(pkg, pfx) {
-			return true
-		}
-	}
-
-	// Suffix patterns: build deps, libraries
-	utilSuffixes := []string{
-		"-dev",     // build headers (openssl-dev, libffi-dev)
-		"-libs",    // library packages (icu-libs)
-		"-devel",   // RPM-style build deps
-		"-common",  // common/shared packages
-		"-utils",   // utility subpackages
-	}
-	for _, sfx := range utilSuffixes {
-		if strings.HasSuffix(pkg, sfx) {
-			return true
-		}
-	}
-
-	// Exact matches: common toolchain/utility packages found in many Dockerfiles
-	switch pkg {
-	case "curl", "wget", "gnupg", "gpg",
-		"build-essential", "build-base",
-		"make", "cmake", "gcc", "g++", "cargo", "git",
-		"apt-transport-https", "software-properties-common":
-		return true
-	}
-
-	return false
-}
-
-// writePkgInstall writes a self.pkg_install() call, wrapping to one package
-// per line when there are more than 3 packages for readability.
-func writePkgInstall(sp *strings.Builder, packages []string) {
-	if len(packages) <= 3 {
-		sp.WriteString("        self.pkg_install(")
-		for i, pkg := range packages {
-			if i > 0 {
-				sp.WriteString(", ")
-			}
-			sp.WriteString(fmt.Sprintf("\"%s\"", pkg))
-		}
-		sp.WriteString(")\n")
-		return
-	}
-	sp.WriteString("        self.pkg_install(\n")
-	for i, pkg := range packages {
-		sp.WriteString(fmt.Sprintf("            \"%s\"", pkg))
-		if i < len(packages)-1 {
-			sp.WriteString(",")
-		}
-		sp.WriteString("\n")
-	}
-	sp.WriteString("        )\n")
-}
-
-// extractURLFromRepoLine extracts the base URL from a deb repo line.
-func extractURLFromRepoLine(line string) string {
-	for _, tok := range strings.Fields(line) {
-		if strings.HasPrefix(tok, "http://") || strings.HasPrefix(tok, "https://") {
-			// Return up to the domain + first path segment
-			u := tok
-			if idx := strings.Index(u[8:], "/"); idx > 0 {
-				return u[:8+idx+1]
-			}
-			return u + "/"
-		}
-	}
-	return ""
-}
-
-func toKebabCase(s string) string {
-	s = strings.ToLower(s)
-	s = strings.Map(func(r rune) rune {
-		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
-			return r
-		}
-		return '-'
-	}, s)
-	// Collapse multiple dashes
-	for strings.Contains(s, "--") {
-		s = strings.ReplaceAll(s, "--", "-")
-	}
-	return strings.Trim(s, "-")
-}
-
-func toSnakeCase(s string) string {
-	s = strings.ToLower(s)
-	s = strings.Map(func(r rune) rune {
-		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
-			return r
-		}
-		return '_'
-	}, s)
-	for strings.Contains(s, "__") {
-		s = strings.ReplaceAll(s, "__", "_")
-	}
-	return strings.Trim(s, "_")
-}
-
-// stripMarkdownLinks removes markdown-style links like "Name(url)" → "Name"
-// Unraid templates often have inline links like "Qbittorrent(https://...)"
-func stripMarkdownLinks(s string) string {
-	var out strings.Builder
-	i := 0
-	for i < len(s) {
-		// Look for pattern: word(http...)
-		if s[i] == '(' && i > 0 && s[i-1] != ' ' {
-			// Check if content looks like a URL
-			end := strings.Index(s[i:], ")")
-			if end > 0 {
-				inner := s[i+1 : i+end]
-				if strings.HasPrefix(inner, "http://") || strings.HasPrefix(inner, "https://") {
-					i = i + end + 1
-					continue
-				}
-			}
-		}
-		out.WriteByte(s[i])
-		i++
-	}
-	return out.String()
-}
-
-func stripHTML(s string) string {
-	var out strings.Builder
-	inTag := false
-	for _, r := range s {
-		if r == '<' {
-			inTag = true
-			continue
-		}
-		if r == '>' {
-			inTag = false
-			continue
-		}
-		if !inTag {
-			out.WriteRune(r)
-		}
-	}
-	return strings.TrimSpace(out.String())
-}
-
-// ConvertDockerfileToScaffold generates an app ID, app.yml, and install.py from
-// a user-provided name and parsed DockerfileInfo (no Unraid XML required).
-func ConvertDockerfileToScaffold(name string, df *DockerfileInfo) (id, manifest, script string) {
-	id = toKebabCase(name)
-
-	description := "Imported from Dockerfile: " + name
-	if len(description) > 200 {
-		description = description[:200] + "..."
-	}
-
-	// Determine OS template
-	osTemplate := "debian-12"
-	if df != nil && df.BaseOS == "alpine" {
-		osTemplate = "alpine-3.21"
-	}
-
-	// If no Dockerfile data or empty packages, generate a simple scaffold
-	if df == nil || len(df.Packages) == 0 {
-		return convertDockerfileScaffold(id, name, description, osTemplate, df)
-	}
-
-	// Collect ports and volumes from Dockerfile
-	type portInput struct {
-		key        string
-		port       string
-		defaultVal string
-	}
-	var portInputs []portInput
-	for _, p := range df.Ports {
-		key := "port_" + p
-		portInputs = append(portInputs, portInput{key: key, port: p, defaultVal: p})
-	}
-
-	// Volumes
-	type pathInfo struct {
-		name, target string
-	}
-	var paths []pathInfo
-	for _, v := range df.Volumes {
-		paths = append(paths, pathInfo{name: "Data", target: v})
-	}
-
-	// Infer main service name
-	mainService := inferMainService(id, df.Packages)
-
-	// Build manifest
-	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf(`id: %s
-name: "%s"
-description: "%s"
-version: "0.1.0"
-categories:
-  - utilities
-tags:
-  - dockerfile-import`, id, name, description))
-	sb.WriteString("\nmaintainers:\n  - \"Your Name\"\n")
-
-	sb.WriteString(fmt.Sprintf(`
-lxc:
-  ostemplate: "%s"
-  defaults:
-    unprivileged: true
-    cores: 2
-    memory_mb: 1024
-    disk_gb: 8
-    onboot: true
-`, osTemplate))
-
-	// Inputs from ports
-	if len(portInputs) > 0 {
-		sb.WriteString("\ninputs:\n")
-		for _, p := range portInputs {
-			sb.WriteString(fmt.Sprintf(`  - key: %s
-    label: "Port %s"
-    type: number
-    default: %s
-    required: true
-    validation:
-      min: 1
-      max: 65535
-    help: "Container port %s"
-`, p.key, p.port, p.defaultVal, p.port))
-		}
-	}
-
-	sb.WriteString(`
-provisioning:
-  script: provision/install.py
-  timeout_sec: 600
-
-`)
-
-	// Permissions section
-	sb.WriteString("permissions:\n")
-	if len(df.Packages) > 0 {
-		sb.WriteString("  packages:\n")
-		for _, pkg := range df.Packages {
-			sb.WriteString(fmt.Sprintf("    - %s\n", pkg))
-		}
-	}
-	var urls []string
-	for _, k := range df.AptKeys {
-		urls = append(urls, k.URL)
-	}
-	for _, r := range df.AptRepos {
-		if u := extractURLFromRepoLine(r.Line); u != "" {
-			urls = append(urls, u+"*")
-		}
-	}
-	if len(urls) > 0 {
-		sb.WriteString("  urls:\n")
-		for _, u := range urls {
-			sb.WriteString(fmt.Sprintf("    - \"%s\"\n", u))
-		}
-	}
-	var permPaths []string
+	var volumePaths []volumePathInfo
 	for _, p := range paths {
-		permPaths = append(permPaths, p.target)
-	}
-	if len(df.AptRepos) > 0 {
-		permPaths = append(permPaths, "/etc/apt/sources.list.d/")
-	}
-	if len(df.AptKeys) > 0 {
-		permPaths = append(permPaths, "/usr/share/keyrings/")
-	}
-	permPaths = append(permPaths, "/etc/systemd/system/")
-	if len(permPaths) > 0 {
-		sb.WriteString("  paths:\n")
-		for _, p := range permPaths {
-			sb.WriteString(fmt.Sprintf("    - %s\n", p))
-		}
-	}
-	sb.WriteString("  services:\n")
-	sb.WriteString(fmt.Sprintf("    - %s\n", mainService))
-	sb.WriteString("\n")
-
-	// Outputs
-	if len(portInputs) > 0 {
-		sb.WriteString(fmt.Sprintf(`outputs:
-  - key: url
-    label: "Web UI"
-    value: "http://{{IP}}:{{%s}}"
-  - key: webui_port
-    label: "Web UI Port"
-    value: "{{%s}}"
-`, portInputs[0].key, portInputs[0].key))
-	} else {
-		sb.WriteString(`outputs:
-  - key: url
-    label: "Access URL"
-    value: "http://{{IP}}/"
-`)
+		volumePaths = append(volumePaths, volumePathInfo{name: p.name, target: p.target})
 	}
 
-	manifest = sb.String()
+	script := buildInstallScript(buildScriptParams{
+		name:        c.Name,
+		className:   toPascalCase(id),
+		docstring:   fmt.Sprintf("Provisioning script for %s.\nConverted from Unraid template — original Docker image: %s\nGenerated with Dockerfile analysis.", c.Name, c.Repository),
+		df:          df,
+		portInputs:  scriptPortInputs,
+		envInputs:   envOnlyVars,
+		secretVars:  secretVars,
+		stringVars:  stringVars,
+		volumePaths: volumePaths,
+		mainService: mainService,
+	})
 
-	// Build script with real SDK v2 calls
-	className := toPascalCase(id)
-	var sp strings.Builder
-	sp.WriteString(fmt.Sprintf(`#!/usr/bin/env python3
-"""
-Provisioning script for %s.
-Converted from Dockerfile analysis.
-"""
-from appstore import BaseApp, run
-
-
-class %s(BaseApp):
-    def install(self):`, name, className))
-
-	// Read inputs
-	if len(portInputs) > 0 {
-		sp.WriteString("\n        # Read inputs\n")
-		for _, pi := range portInputs {
-			varName := toSnakeCase(pi.key)
-			sp.WriteString(fmt.Sprintf("        %s = self.inputs.integer(\"%s\", %s)\n", varName, pi.key, pi.defaultVal))
-		}
-	}
-
-	sp.WriteString("\n")
-
-	// APT keys
-	for _, k := range df.AptKeys {
-		sp.WriteString(fmt.Sprintf("        self.add_apt_key(\"%s\",\n                         \"%s\")\n", k.URL, k.Keyring))
-	}
-
-	// APT repos
-	for _, r := range df.AptRepos {
-		filename := r.File
-		if idx := strings.LastIndex(filename, "/"); idx >= 0 {
-			filename = filename[idx+1:]
-		}
-		sp.WriteString(fmt.Sprintf("        self.add_apt_repo(\"%s\",\n                          \"%s\")\n", r.Line, filename))
-	}
-
-	// Package install
-	if len(df.Packages) > 0 {
-		writePkgInstall(&sp, df.Packages)
-	}
-
-	// Create directories
-	if len(paths) > 0 {
-		sp.WriteString("\n        # Create data directories\n")
-		for _, p := range paths {
-			sp.WriteString(fmt.Sprintf("        self.create_dir(\"%s\")  # %s\n", p.target, p.name))
-		}
-	}
-
-	// Service management
-	sp.WriteString("\n")
-	if df.ExecCmd != "" {
-		sp.WriteString(fmt.Sprintf("        self.create_service(\"%s\",\n                            exec_start=\"%s\")\n",
-			mainService, strings.ReplaceAll(df.ExecCmd, `"`, `\"`)))
-	} else {
-		sp.WriteString(fmt.Sprintf("        self.enable_service(\"%s\")\n", mainService))
-	}
-
-	sp.WriteString(fmt.Sprintf("        self.log(\"%s installation complete\")\n", name))
-	sp.WriteString(fmt.Sprintf("\n\nrun(%s)\n", className))
-
-	script = sp.String()
-	return id, manifest, script
-}
-
-// convertDockerfileScaffold generates a simple scaffold when Dockerfile has no packages.
-func convertDockerfileScaffold(id, name, description, osTemplate string, df *DockerfileInfo) (string, string, string) {
-	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf(`id: %s
-name: "%s"
-description: "%s"
-version: "0.1.0"
-categories:
-  - utilities
-tags:
-  - dockerfile-import`, id, name, description))
-	sb.WriteString("\nmaintainers:\n  - \"Your Name\"\n")
-	sb.WriteString("# This is a SCAFFOLD — you must implement the provisioning logic.\n")
-
-	sb.WriteString(fmt.Sprintf(`
-lxc:
-  ostemplate: "%s"
-  defaults:
-    unprivileged: true
-    cores: 2
-    memory_mb: 1024
-    disk_gb: 8
-    onboot: true
-`, osTemplate))
-
-	// Inputs from ports
-	if df != nil && len(df.Ports) > 0 {
-		sb.WriteString("\ninputs:\n")
-		for _, p := range df.Ports {
-			key := "port_" + p
-			sb.WriteString(fmt.Sprintf(`  - key: %s
-    label: "Port %s"
-    type: number
-    default: %s
-    required: true
-    validation:
-      min: 1
-      max: 65535
-    help: "Container port %s"
-`, key, p, p, p))
-		}
-	}
-
-	sb.WriteString(`
-provisioning:
-  script: provision/install.py
-  timeout_sec: 600
-
-`)
-
-	// Volumes as comments
-	if df != nil && len(df.Volumes) > 0 {
-		sb.WriteString("# Dockerfile volume mappings (implement as directories in install.py):\n")
-		for _, v := range df.Volumes {
-			sb.WriteString(fmt.Sprintf("#   %s\n", v))
-		}
-		sb.WriteString("\n")
-	}
-
-	// Outputs
-	if df != nil && len(df.Ports) > 0 {
-		key := "port_" + df.Ports[0]
-		sb.WriteString(fmt.Sprintf(`outputs:
-  - key: url
-    label: "Web UI"
-    value: "http://{{IP}}:{{%s}}"
-  - key: webui_port
-    label: "Web UI Port"
-    value: "{{%s}}"
-`, key, key))
-	} else {
-		sb.WriteString(`outputs:
-  - key: url
-    label: "Access URL"
-    value: "http://{{IP}}/"
-`)
-	}
-
-	manifest := sb.String()
-
-	// Build script
-	className := toPascalCase(id)
-	var scriptParts []string
-	scriptParts = append(scriptParts, fmt.Sprintf(`#!/usr/bin/env python3
-"""
-Provisioning script for %s.
-Imported from Dockerfile — implement the provisioning logic below.
-"""
-from appstore import BaseApp, run
-
-
-class %s(BaseApp):
-    def install(self):`, name, className))
-
-	// Port inputs
-	if df != nil && len(df.Ports) > 0 {
-		scriptParts = append(scriptParts, "        # Read inputs")
-		for _, p := range df.Ports {
-			key := "port_" + p
-			varName := toSnakeCase(key)
-			scriptParts = append(scriptParts, fmt.Sprintf(`        %s = self.inputs.integer("%s", %s)`, varName, key, p))
-		}
-		scriptParts = append(scriptParts, "")
-	}
-
-	scriptParts = append(scriptParts, `        # Step 1: Install packages
-        # TODO: Replace with the actual packages needed
-        # self.apt_install(["package1", "package2"])`)
-
-	if df != nil && len(df.Volumes) > 0 {
-		scriptParts = append(scriptParts, "\n        # Step 2: Create data directories")
-		for _, v := range df.Volumes {
-			scriptParts = append(scriptParts, fmt.Sprintf(`        self.create_dir("%s")`, v))
-		}
-	}
-
-	scriptParts = append(scriptParts, `
-        # Step 3: Configure the application
-        # TODO: Write config files, set up users, etc.
-
-        # Step 4: Create and enable systemd service
-        # TODO: Create a service unit for the application
-
-        self.log("Installation complete — configure the application manually")`)
-
-	scriptParts = append(scriptParts, fmt.Sprintf(`
-
-run(%s)
-`, className))
-
-	script := strings.Join(scriptParts, "\n")
 	return id, manifest, script
 }

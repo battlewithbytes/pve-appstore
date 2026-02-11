@@ -1,8 +1,6 @@
 """Ollama — local LLM inference server."""
 
 import os
-import time
-import urllib.request
 
 from appstore import BaseApp, run
 
@@ -23,11 +21,7 @@ Environment="LD_LIBRARY_PATH=/usr/lib/nvidia"
 
 class OllamaApp(BaseApp):
     def _detect_gpu(self):
-        """Detect GPU availability inside LXC by checking device nodes.
-
-        lspci does not work in LXC containers (no PCI bus), so we check
-        for device nodes that the engine bind-mounts from the host.
-        """
+        """Detect GPU availability inside LXC by checking device nodes."""
         if os.path.exists("/dev/nvidia0"):
             self.log.info("NVIDIA GPU detected (/dev/nvidia0 present)")
             return "nvidia"
@@ -36,20 +30,6 @@ class OllamaApp(BaseApp):
             return "dri"
         self.log.info("No GPU devices detected — running in CPU-only mode")
         return None
-
-    def _wait_for_service(self, bind_address, api_port, timeout=60):
-        """Wait for Ollama API to become ready."""
-        api_url = f"http://127.0.0.1:{api_port}"
-        self.log.info(f"Waiting for Ollama API at {api_url}...")
-        for i in range(timeout // 2):
-            try:
-                urllib.request.urlopen(api_url, timeout=2)
-                self.log.info("Ollama API is ready")
-                return True
-            except Exception:
-                time.sleep(2)
-        self.log.warn("Ollama API did not become ready within timeout")
-        return False
 
     def install(self):
         api_port = self.inputs.string("api_port", "11434")
@@ -62,8 +42,6 @@ class OllamaApp(BaseApp):
         gpu_type = self._detect_gpu()
 
         # Install Ollama via upstream installer script
-        # The script may warn about missing GPU since lspci doesn't work in LXC,
-        # but the ollama binary detects GPUs at runtime via NVIDIA libraries.
         self.run_installer_script("https://ollama.ai/install.sh")
 
         # Build systemd override config
@@ -84,16 +62,16 @@ class OllamaApp(BaseApp):
         )
 
         # Ensure models directory and parent .ollama dir exist with correct ownership
-        # Ollama needs write access to .ollama/ for its key file (id_ed25519)
         self.create_dir(models_path)
         self.chown("/usr/share/ollama/.ollama", "ollama:ollama", recursive=True)
 
-        # Restart with new config (restart_service handles daemon-reload)
+        # Restart with new config
         self.restart_service("ollama")
 
         # Pull default model if specified
         if default_model:
-            if self._wait_for_service(bind_address, api_port):
+            api_url = f"http://127.0.0.1:{api_port}"
+            if self.wait_for_http(api_url, timeout=60, interval=2):
                 self.log.info(f"Pulling model: {default_model}")
                 try:
                     self.run_command(["ollama", "pull", default_model])

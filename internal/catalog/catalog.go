@@ -29,9 +29,13 @@ func New(repoURL, branch, dataDir string) *Catalog {
 }
 
 // Refresh clones or pulls the catalog repo and re-indexes all apps.
+// Developer apps are preserved across refreshes.
 func (c *Catalog) Refresh() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+
+	// Snapshot dev apps before re-indexing
+	saved := c.devApps()
 
 	if err := c.fetchRepo(); err != nil {
 		return fmt.Errorf("fetching catalog: %w", err)
@@ -39,6 +43,11 @@ func (c *Catalog) Refresh() error {
 
 	if err := c.indexApps(); err != nil {
 		return fmt.Errorf("indexing catalog: %w", err)
+	}
+
+	// Restore dev apps
+	for _, app := range saved {
+		c.apps[app.ID] = app
 	}
 
 	return nil
@@ -224,6 +233,34 @@ func (c *Catalog) indexApps() error {
 
 	c.apps = newApps
 	return nil
+}
+
+// MergeDevApp adds or replaces a developer app in the catalog.
+func (c *Catalog) MergeDevApp(app *AppManifest) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	app.Source = "developer"
+	c.apps[app.ID] = app
+}
+
+// RemoveDevApp removes a developer app from the catalog (only if source is "developer").
+func (c *Catalog) RemoveDevApp(id string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if app, ok := c.apps[id]; ok && app.Source == "developer" {
+		delete(c.apps, id)
+	}
+}
+
+// devApps returns a snapshot of all developer-sourced apps (must be called with lock held).
+func (c *Catalog) devApps() []*AppManifest {
+	var devApps []*AppManifest
+	for _, app := range c.apps {
+		if app.Source == "developer" {
+			devApps = append(devApps, app)
+		}
+	}
+	return devApps
 }
 
 func matches(app *AppManifest, query string) bool {

@@ -136,16 +136,33 @@ class TestInstallerScriptPermissions:
 
 
 class TestAptRepoPermissions:
-    def test_allowed_repo(self):
+    def test_allowed_repo_url(self):
+        """URL-based match: allowed entry is the repo URL."""
+        p = make_perms(apt_repos=["https://repo.example.com"])
+        p.check_apt_repo("deb https://repo.example.com stable main")
+
+    def test_allowed_repo_url_with_path(self):
+        """URL-based match: repo URL starts with allowed URL."""
+        p = make_perms(apt_repos=["https://linux-packages.resilio.com/resilio-sync/deb"])
+        p.check_apt_repo("deb [arch=amd64 signed-by=/usr/share/keyrings/resilio-sync.asc] https://linux-packages.resilio.com/resilio-sync/deb resilio-sync non-free")
+
+    def test_wildcard_repo_url(self):
+        """URL-based match with wildcard pattern."""
+        p = make_perms(apt_repos=["https://downloads.plex.tv/*"])
+        p.check_apt_repo("deb https://downloads.plex.tv/repo/deb public main")
+
+    def test_legacy_full_line_match(self):
+        """Legacy: exact full-line match still works."""
         p = make_perms(apt_repos=["deb https://repo.example.com stable main"])
         p.check_apt_repo("deb https://repo.example.com stable main")
 
-    def test_wildcard_repo(self):
-        p = make_perms(apt_repos=["deb *downloads.plex.tv*"])
-        p.check_apt_repo("deb https://downloads.plex.tv/repo/deb public main")
-
     def test_disallowed_repo(self):
         p = make_perms(apt_repos=[])
+        with pytest.raises(PermissionDeniedError):
+            p.check_apt_repo("deb https://evil.com/repo stable main")
+
+    def test_disallowed_different_domain(self):
+        p = make_perms(apt_repos=["https://repo.example.com"])
         with pytest.raises(PermissionDeniedError):
             p.check_apt_repo("deb https://evil.com/repo stable main")
 

@@ -52,8 +52,12 @@ func (s *Server) handleTerminalForCTID(w http.ResponseWriter, r *http.Request, c
 
 	ctx := r.Context()
 
-	// Spawn a root shell inside the container via pct exec
-	cmd := pctpkg.SudoNsenterCmd("/usr/sbin/pct", "exec", strconv.Itoa(ctid), "--", "/bin/bash", "-l")
+	// Detect available shell: prefer bash, fall back to sh (Alpine has no bash)
+	shell := "/bin/bash"
+	if result, err := pctpkg.Exec(ctid, []string{"test", "-x", "/bin/bash"}); err != nil || result.ExitCode != 0 {
+		shell = "/bin/sh"
+	}
+	cmd := pctpkg.SudoNsenterCmd("/usr/sbin/pct", "exec", strconv.Itoa(ctid), "--", shell, "-l")
 	cmd.Env = append(os.Environ(), "TERM=xterm-256color")
 
 	ptmx, err := pty.Start(cmd)
@@ -156,9 +160,14 @@ func (s *Server) handleJournalLogsForCTID(w http.ResponseWriter, r *http.Request
 
 	ctx := r.Context()
 
-	// Run journalctl inside the container via pct exec (no PTY needed)
-	cmd := pctpkg.SudoNsenterCmd("/usr/sbin/pct", "exec", strconv.Itoa(ctid), "--",
-		"journalctl", "-f", "--no-pager", "-n", "100", "--output=short-iso")
+	// Detect OS to pick the right log command: journalctl (Debian) or logread (Alpine)
+	logArgs := []string{"journalctl", "-f", "--no-pager", "-n", "100", "--output=short-iso"}
+	if result, err := pctpkg.Exec(ctid, []string{"test", "-x", "/sbin/logread"}); err == nil && result.ExitCode == 0 {
+		// Alpine/BusyBox: use logread -f (follows syslog ring buffer)
+		logArgs = []string{"logread", "-f"}
+	}
+	pctArgs := append([]string{"exec", strconv.Itoa(ctid), "--"}, logArgs...)
+	cmd := pctpkg.SudoNsenterCmd("/usr/sbin/pct", pctArgs...)
 	cmd.Env = append(os.Environ(), "TERM=dumb")
 
 	stdout, err := cmd.StdoutPipe()

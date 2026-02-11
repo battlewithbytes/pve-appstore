@@ -9,6 +9,7 @@ export interface AppSummary {
   official?: boolean;
   gpu_required: boolean;
   gpu_support?: string[];
+  source?: string;
 }
 
 export interface AppDetail {
@@ -57,6 +58,7 @@ export interface AppInput {
   type: 'string' | 'number' | 'boolean' | 'secret' | 'select';
   default?: unknown;
   required: boolean;
+  reconfigurable?: boolean;
   validation?: {
     regex?: string;
     min?: number;
@@ -289,6 +291,12 @@ export interface EditRequest {
   inputs?: Record<string, string>;
 }
 
+export interface ReconfigureRequest {
+  cores?: number;
+  memory_mb?: number;
+  inputs?: Record<string, string>;
+}
+
 export interface ExportRecipe {
   app_id: string;
   storage: string;
@@ -434,4 +442,97 @@ export interface StackValidateResponse {
   warnings: string[];
   recommended?: { cores: number; memory_mb: number; disk_gb: number };
   ostemplate?: string;
+}
+
+// --- Settings ---
+
+export interface Settings {
+  defaults: { cores: number; memory_mb: number; disk_gb: number };
+  storages: string[];
+  bridges: string[];
+  developer: { enabled: boolean };
+  service: { port: number };
+  auth: { mode: string };
+  catalog: { refresh: string };
+  gpu: { enabled: boolean; policy: string };
+}
+
+export interface SettingsUpdate {
+  defaults?: { cores?: number; memory_mb?: number; disk_gb?: number };
+  developer?: { enabled: boolean };
+  catalog?: { refresh?: string };
+  gpu?: { enabled?: boolean; policy?: string };
+}
+
+// --- Developer Mode ---
+
+export interface DevAppMeta {
+  id: string;
+  name: string;
+  version: string;
+  description: string;
+  status: string;
+  has_icon: boolean;
+  has_readme: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface DevFile {
+  path: string;
+  size: number;
+  is_dir: boolean;
+}
+
+export interface DevApp extends DevAppMeta {
+  manifest: string;
+  script: string;
+  readme: string;
+  files: DevFile[];
+  deployed: boolean;
+}
+
+export interface DevAppsResponse {
+  apps: DevAppMeta[];
+  total: number;
+}
+
+export interface DevTemplate {
+  id: string;
+  name: string;
+  description: string;
+  category: string;
+}
+
+export interface ValidationMsg {
+  file: string;
+  line?: number;
+  message: string;
+  code: string;
+}
+
+export interface ChecklistItem {
+  label: string;
+  passed: boolean;
+}
+
+export interface ValidationResult {
+  valid: boolean;
+  errors: ValidationMsg[];
+  warnings: ValidationMsg[];
+  checklist: ChecklistItem[];
+}
+
+// --- Dockerfile Chain Resolution ---
+
+export interface DockerfileChainEvent {
+  type: 'fetching' | 'parsed' | 'terminal' | 'error' | 'merged' | 'complete';
+  layer: number;
+  image?: string;
+  url?: string;
+  message: string;
+  packages?: number;
+  ports?: number;
+  volumes?: number;
+  app_id?: string;
 }

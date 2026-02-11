@@ -134,6 +134,18 @@ func (e *Engine) runInstall(bgCtx context.Context, job *Job) {
 			ctx.job.UpdatedAt = now
 			ctx.job.CompletedAt = &now
 			e.store.UpdateJob(ctx.job)
+			// Destroy the container if one was created
+			if ctx.job.CTID > 0 {
+				ctx.info("Cleaning up container %d after failure...", ctx.job.CTID)
+				cleanCtx := context.Background()
+				_ = e.cm.Stop(cleanCtx, ctx.job.CTID)
+				time.Sleep(2 * time.Second)
+				if dErr := e.cm.Destroy(cleanCtx, ctx.job.CTID); dErr != nil {
+					ctx.warn("Failed to destroy container %d: %v", ctx.job.CTID, dErr)
+				} else {
+					ctx.info("Container %d destroyed", ctx.job.CTID)
+				}
+			}
 			return
 		}
 	}
@@ -533,15 +545,31 @@ func stepProvision(ctx *installContext) error {
 	ctx.info("Running provisioning: python3 -m appstore.runner ... install %s",
 		filepath.Base(ctx.manifest.Provisioning.Script))
 
+	// Track the last error message from the SDK for inclusion in the error
+	var lastError string
+
 	// Stream output line-by-line for real-time log feedback
 	result, err := ctx.engine.cm.ExecStream(ctx.job.CTID, cmd, func(line string) {
 		parseProvisionLine(ctx, line)
+		// Capture error-level messages so we can include them in the Go error
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "@@APPLOG@@") {
+			jsonStr := strings.TrimPrefix(trimmed, "@@APPLOG@@")
+			if extractJSONField(jsonStr, "level") == "error" {
+				if msg := extractJSONField(jsonStr, "msg"); msg != "" {
+					lastError = msg
+				}
+			}
+		}
 	})
 	if err != nil {
 		return fmt.Errorf("executing provision script: %w", err)
 	}
 
 	if result.ExitCode != 0 {
+		if lastError != "" {
+			return fmt.Errorf("provision failed: %s", lastError)
+		}
 		if result.ExitCode == 2 {
 			return fmt.Errorf("provision failed: permission denied (exit 2)")
 		}
@@ -645,7 +673,8 @@ func stepCollectOutputs(ctx *installContext) error {
 	outputs := make(map[string]string)
 	for _, out := range ctx.manifest.Outputs {
 		value := out.Value
-		// Replace template variables
+		// Replace template variables (support both {{IP}} and {{ip}})
+		value = strings.ReplaceAll(value, "{{IP}}", ip)
 		value = strings.ReplaceAll(value, "{{ip}}", ip)
 		for k, v := range ctx.job.Inputs {
 			value = strings.ReplaceAll(value, "{{"+k+"}}", v)

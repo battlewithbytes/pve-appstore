@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -59,6 +60,7 @@ type ContainerManager interface {
 	Push(ctid int, src, dst, perms string) error
 	GetIP(ctid int) (string, error)
 	GetConfig(ctx context.Context, ctid int) (map[string]interface{}, error)
+	UpdateConfig(ctx context.Context, ctid int, params url.Values) error
 	DetachMountPoints(ctx context.Context, ctid int, indexes []int) error
 	GetStorageInfo(ctx context.Context, storageID string) (*StorageInfo, error)
 	ConfigureDevices(ctid int, devices []DevicePassthrough) error
@@ -1402,6 +1404,88 @@ func extractHWAddr(net0 string) string {
 		}
 	}
 	return ""
+}
+
+// ReconfigureInstall applies in-place changes to an active install without
+// destroying/recreating the container. Resource changes (cores, memory) are
+// applied via the Proxmox API. Input changes trigger the app's configure()
+// lifecycle method inside the container. This is a synchronous operation.
+func (e *Engine) ReconfigureInstall(installID string, req ReconfigureRequest) (*Install, error) {
+	inst, err := e.store.GetInstall(installID)
+	if err != nil {
+		return nil, fmt.Errorf("install %q not found", installID)
+	}
+	if inst.Status == "uninstalled" || inst.CTID == 0 {
+		return nil, fmt.Errorf("install %q has no active container", installID)
+	}
+
+	ctx := context.Background()
+
+	// Apply resource changes via Proxmox API (works on running or stopped containers)
+	resourceChanged := false
+	if req.Cores > 0 && req.Cores != inst.Cores {
+		resourceChanged = true
+		inst.Cores = req.Cores
+	}
+	if req.MemoryMB > 0 && req.MemoryMB != inst.MemoryMB {
+		resourceChanged = true
+		inst.MemoryMB = req.MemoryMB
+	}
+
+	if resourceChanged {
+		params := url.Values{}
+		if req.Cores > 0 {
+			params.Set("cores", strconv.Itoa(inst.Cores))
+		}
+		if req.MemoryMB > 0 {
+			params.Set("memory", strconv.Itoa(inst.MemoryMB))
+		}
+		if err := e.cm.UpdateConfig(ctx, inst.CTID, params); err != nil {
+			return nil, fmt.Errorf("updating container config: %w", err)
+		}
+	}
+
+	// Apply input changes and run configure() if needed
+	inputsChanged := false
+	if len(req.Inputs) > 0 {
+		if inst.Inputs == nil {
+			inst.Inputs = make(map[string]string)
+		}
+		for k, v := range req.Inputs {
+			if inst.Inputs[k] != v {
+				inst.Inputs[k] = v
+				inputsChanged = true
+			}
+		}
+	}
+
+	if inputsChanged {
+		// Push updated inputs.json into the container
+		if err := pushInputsJSON(inst.CTID, e.cm, inst.Inputs); err != nil {
+			return nil, fmt.Errorf("pushing updated inputs: %w", err)
+		}
+
+		// Look up the app to get the provision script path
+		app, ok := e.catalog.Get(inst.AppID)
+		if ok && app.Provisioning.Script != "" {
+			envVars := mergeEnvVars(app.Provisioning.Env, inst.EnvVars)
+			cmd := buildProvisionCommand(app.Provisioning.Script, "configure", envVars)
+			result, err := e.cm.ExecStream(inst.CTID, cmd, func(line string) {
+				// Log configure output but don't track as job logs (synchronous op)
+			})
+			if err != nil {
+				return nil, fmt.Errorf("running configure: %w", err)
+			}
+			if result.ExitCode != 0 {
+				return nil, fmt.Errorf("configure exited with code %d", result.ExitCode)
+			}
+		}
+	}
+
+	// Update the install record
+	e.store.UpdateInstall(inst)
+
+	return inst, nil
 }
 
 // --- Stack operations ---

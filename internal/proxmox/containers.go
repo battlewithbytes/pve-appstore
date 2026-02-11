@@ -236,6 +236,14 @@ func (c *Client) DetachMountPoints(ctx context.Context, ctid int, indexes []int)
 	return c.doRequest(ctx, "PUT", path, params, nil)
 }
 
+// UpdateConfig updates the configuration of an existing LXC container.
+// This is used for in-place reconfiguration (e.g. changing cores, memory)
+// without destroying and recreating the container.
+func (c *Client) UpdateConfig(ctx context.Context, ctid int, params url.Values) error {
+	path := fmt.Sprintf("/nodes/%s/lxc/%d/config", c.node, ctid)
+	return c.doRequest(ctx, "PUT", path, params, nil)
+}
+
 // formatIPConfig formats an IP address for Proxmox net0 configuration.
 // If the input already contains "/" (CIDR notation), it's passed through as-is.
 // Otherwise, /24 is appended and a gateway is derived by replacing the last octet with .1.
