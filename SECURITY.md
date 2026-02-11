@@ -163,9 +163,11 @@ Install scripts run inside the target LXC container via `pct exec`. The Python S
 | System packages | `packages` | `pkg_install()` — only listed packages can be installed via apk/apt |
 | Pip packages | `pip` | `pip_install()` — only listed pip packages can be installed |
 | URLs | `urls` | `download()`, `add_apt_key()`, `add_apt_repo()` — only listed URLs (supports wildcards) |
+| Installer scripts | `installer_scripts` | `run_installer_script()` — only listed script URLs can be downloaded and executed |
+| APT repos | `apt_repos` | `add_apt_repository()` — only listed repository URLs can be added |
 | Filesystem paths | `paths` | `create_dir()`, `create_venv()`, file operations — only under listed path prefixes |
 | Commands | `commands` | `run_command()` — only listed binary names (supports wildcards) |
-| Services | `services` | `enable_service()` — only listed service names |
+| Services | `services` | `enable_service()`, `create_service()`, `restart_service()` — only listed service names |
 | Users | `users` | `create_user()` — only listed usernames |
 
 ### Implicitly allowed paths
@@ -186,6 +188,41 @@ Modern Linux distributions (Alpine 3.22+, Debian 12+, Ubuntu 24.04+) mark the sy
 3. The venv path is implicitly allowed (no manifest entry needed)
 4. Apps can use `pip_install(venv="/opt/venv/myapp")` for explicit per-service isolation
 5. `create_venv()` remains available for manual control (requires `paths` permission)
+
+### Template files and configuration
+
+App install scripts use template files stored in the `provision/` directory rather than embedding config content as inline strings. This approach:
+
+- Keeps install scripts readable and auditable
+- Separates configuration structure from provisioning logic
+- Uses `render_template()` for template variable substitution (`$variable` syntax)
+- Uses `deploy_provision_file()` to copy static files without modification
+- Uses `provision_file()` to read template content for programmatic use
+
+Template substitution supports `$variable` placeholders and conditional blocks (`{{#key}}...{{/key}}`). The engine pushes all provision files into the container at `/opt/appstore/provision/` before running the install script.
+
+### Input type safety
+
+The SDK provides typed input accessors that match the `type:` declared in `app.yml`:
+
+| Manifest type | SDK method | Python type |
+|--------------|-----------|-------------|
+| `string` | `inputs.string(key, default)` | `str` |
+| `number` | `inputs.integer(key, default)` | `int` |
+| `boolean` | `inputs.boolean(key, default)` | `bool` |
+| `secret` | `inputs.string(key, default)` | `str` |
+| `select` | `inputs.string(key, default)` | `str` |
+
+### Reconfigure endpoint
+
+The `POST /api/installs/{id}/reconfigure` endpoint allows in-place changes to an installed app's settings without destroying the container. Only inputs marked `reconfigurable: true` in the manifest can be changed post-install. The endpoint:
+
+1. Validates the request against the app's manifest (only reconfigurable inputs accepted)
+2. Updates LXC resources (cores, memory) via the Proxmox API if changed
+3. Runs the app's `configure()` Python method with updated inputs
+4. Updates the install record in the database
+
+Container-destructive changes (disk resize, bridge change, storage pool) require the full edit/rebuild flow.
 
 ### What a malicious install script cannot do
 

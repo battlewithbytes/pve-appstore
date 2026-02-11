@@ -14,6 +14,8 @@ PVE App Store lets you browse a catalog of self-hosted applications and deploy t
 - **GPU passthrough** — Intel QSV and NVIDIA profiles for transcoding and AI workloads
 - **Config backup & restore** — save your installs and settings as portable YAML
 - **Sandboxed provisioning** — apps run through a Python SDK with enforced permission boundaries
+- **Developer mode** — build, test, and deploy custom apps with a built-in code editor, validation, and Dockerfile import
+- **In-place reconfigure** — change app settings and container resources without rebuilding
 
 ## Quick Start
 
@@ -37,12 +39,17 @@ Open **http://your-proxmox-ip:8088** to browse and install apps.
 | App | Category | GPU |
 |-----|----------|-----|
 | Crawl4AI | AI | — |
+| GitLab CE | Development | — |
 | Gluetun VPN Client | Networking | — |
+| Hello World (Nginx) | Demo | — |
 | Home Assistant | Automation | — |
 | Jellyfin | Media | Intel / NVIDIA |
 | Nginx | Web | — |
 | Ollama | AI | Intel / NVIDIA |
 | Plex Media Server | Media | Intel / NVIDIA |
+| qBittorrent | Media | — |
+| Resilio Sync | Utilities | — |
+| SWAG | Networking | — |
 
 See the [catalog repo](https://github.com/battlewithbytes/pve-appstore-catalog) for the full list and details.
 
@@ -83,6 +90,27 @@ Back up all installs and stacks as portable YAML, then restore on another node.
 
 The catalog is a Git repository of app manifests (YAML + Python install scripts). PVE App Store clones it locally and serves the catalog through a web UI. When you install an app, a job engine creates an LXC container via the Proxmox REST API, pushes the install script inside, and runs it through a sandboxed Python SDK that enforces declared permissions.
 
+## Developer Mode
+
+Build custom apps directly from the web UI:
+
+1. **Create** a new app from a starter template or import a Dockerfile
+2. **Edit** the manifest (`app.yml`) and install script (`install.py`) in the built-in CodeMirror editor with SDK autocompletion
+3. **Validate** — checks both the manifest schema and Python script syntax
+4. **Deploy** to the local catalog for testing — installs appear alongside official apps
+5. **Export** as a zip for submission to the catalog repo
+
+### Dockerfile Import
+
+Developer mode can import a Dockerfile to generate a starting point for your app manifest and install script. It analyzes the Dockerfile's `FROM`, `RUN`, `COPY`, `ENV`, `EXPOSE`, and `ENTRYPOINT` instructions and translates them into SDK calls.
+
+**Important:** Dockerfile import is a scaffolding tool, not a converter. The generated script gets you close but will almost always need manual editing. Docker images rely on init systems (s6-overlay, supervisord, tini), entrypoint scripts, and runtime behaviors that don't translate 1:1 to LXC. Expect to:
+
+- Replace Docker-specific init scripts with native service management (`create_service()`, `enable_service()`)
+- Move inline config strings to template files in the `provision/` directory
+- Add missing configuration that Docker init scripts would normally handle
+- Test and iterate — the scaffold is a starting point, not a finished product
+
 ## Writing Your Own App
 
 App manifests are YAML files paired with a Python install script. The [App Development Tutorial](tutorial.md) walks through building one from scratch, and the [catalog repo](https://github.com/battlewithbytes/pve-appstore-catalog) has a quickstart guide.
@@ -114,14 +142,15 @@ internal/
   config/                config.yml parsing and validation
   catalog/               git catalog, manifest parsing, search
   server/                HTTP server, REST API, auth, SPA serving
-  engine/                install/uninstall job pipeline
+  engine/                install/uninstall/reconfigure job pipeline
   proxmox/               Proxmox REST API client
   pct/                   pct exec/push wrappers
+  devmode/               developer mode: templates, validation, Dockerfile import
   installer/             TUI setup wizard
 sdk/python/appstore/     Python provisioning SDK
 web/frontend/            React + TypeScript SPA
 deploy/                  install.sh one-liner
-testdata/catalog/        sample app catalog for testing
+testdata/catalog/        sample app catalog (12 apps)
 ```
 
 ## License
