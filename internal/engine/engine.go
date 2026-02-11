@@ -137,11 +137,24 @@ func New(cfg *config.Config, cat *catalog.Catalog, dataDir string, cm ContainerM
 		cancels: make(map[string]context.CancelFunc),
 	}
 
-	// Recover orphaned jobs from previous run
-	if n, err := store.RecoverOrphanedJobs(); err != nil {
+	// Recover orphaned jobs from previous run and clean up their containers
+	if orphans, err := store.RecoverOrphanedJobs(); err != nil {
 		fmt.Printf("  engine:  warning: orphan recovery failed: %v\n", err)
-	} else if n > 0 {
-		fmt.Printf("  engine:  recovered %d orphaned job(s) from previous run\n", n)
+	} else if len(orphans) > 0 {
+		fmt.Printf("  engine:  recovered %d orphaned job(s) from previous run\n", len(orphans))
+		// Destroy containers that were left behind by interrupted jobs
+		if cm != nil {
+			for _, o := range orphans {
+				if o.CTID > 0 {
+					fmt.Printf("  engine:  destroying orphaned container %d (job %s)\n", o.CTID, o.ID)
+					ctx := context.Background()
+					_ = cm.Stop(ctx, o.CTID)
+					if err := cm.Destroy(ctx, o.CTID); err != nil {
+						fmt.Printf("  engine:  warning: failed to destroy container %d: %v\n", o.CTID, err)
+					}
+				}
+			}
+		}
 	}
 
 	return e, nil
@@ -540,26 +553,17 @@ func (e *Engine) runUninstall(job *Job, inst *Install, keepVolumes bool) {
 	ctx.transition("stopping")
 	ctx.info("Stopping container %d...", inst.CTID)
 
-	// Try graceful shutdown first, then force stop
-	ctx.info("Attempting graceful shutdown of container %d (timeout 30s)...", inst.CTID)
-	if err := e.cm.Shutdown(bgCtx, inst.CTID, 30); err != nil {
+	// Force stop — no need for graceful shutdown during uninstall
+	if err := e.cm.Stop(bgCtx, inst.CTID); err != nil {
 		if isContainerGone(err) {
-			ctx.info("Container %d already removed — skipping stop/destroy", inst.CTID)
+			ctx.info("Container %d already removed — skipping destroy", inst.CTID)
 			ctGone = true
 		} else {
-			ctx.warn("Graceful shutdown failed: %v — forcing stop", err)
-			if err := e.cm.Stop(bgCtx, inst.CTID); err != nil {
-				if isContainerGone(err) {
-					ctx.info("Container %d already removed — skipping destroy", inst.CTID)
-					ctGone = true
-				} else {
-					ctx.warn("Force stop error: %v", err)
-				}
-			}
+			ctx.warn("Force stop error: %v", err)
 		}
 	}
 	if !ctGone {
-		ctx.info("Shutdown/stop command completed for container %d", inst.CTID)
+		ctx.info("Container %d stopped", inst.CTID)
 	}
 
 	// If keeping volumes, detach managed volumes before destroy (bind mounts don't need detaching)

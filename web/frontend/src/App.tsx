@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { WebLinksAddon } from '@xterm/addon-web-links'
@@ -432,6 +432,33 @@ function InstallWizard({ app, onClose }: { app: AppDetail; onClose: () => void }
   const bindVolumes = (app.volumes || []).filter(v => v.type === 'bind')
   const hasMounts = volumeVolumes.length > 0 || bindVolumes.length > 0
 
+  // Input validation
+  const inputErrors = useMemo(() => {
+    const errors: Record<string, string> = {}
+    for (const inp of (app.inputs || [])) {
+      const val = inputs[inp.key] || ''
+      if (inp.type === 'boolean') continue
+      if (inp.required && !val) { errors[inp.key] = 'Required'; continue }
+      if (!val) continue
+      const v = inp.validation
+      if (!v) continue
+      if (inp.type === 'number') {
+        const num = parseFloat(val)
+        if (isNaN(num)) { errors[inp.key] = 'Must be a number'; continue }
+        if (v.min !== undefined && num < v.min) { errors[inp.key] = `Minimum ${v.min}`; continue }
+        if (v.max !== undefined && num > v.max) { errors[inp.key] = `Maximum ${v.max}`; continue }
+      }
+      if (inp.type === 'string' || inp.type === 'secret') {
+        if (v.min_length !== undefined && val.length < v.min_length) { errors[inp.key] = `At least ${v.min_length} characters`; continue }
+        if (v.max_length !== undefined && val.length > v.max_length) { errors[inp.key] = `At most ${v.max_length} characters`; continue }
+        if (v.regex) { try { if (!new RegExp(v.regex).test(val)) errors[inp.key] = `Does not match required pattern` } catch {} }
+      }
+      if (v.enum && v.enum.length > 0 && !v.enum.includes(val)) { errors[inp.key] = 'Invalid selection' }
+    }
+    return errors
+  }, [inputs, app.inputs])
+  const hasInputErrors = Object.keys(inputErrors).length > 0
+
   const openBrowser = (target: string, currentPath?: string) => {
     setBrowseTarget(target)
     setBrowseInitPath(currentPath || '')
@@ -729,6 +756,7 @@ function InstallWizard({ app, onClose }: { app: AppDetail; onClose: () => void }
                   <FormInput value={inputs[inp.key] || ''} onChange={v => setInputs(p => ({ ...p, [inp.key]: v }))}
                     type={inp.type === 'secret' ? 'password' : inp.type === 'number' ? 'number' : 'text'} />
                 )}
+                {inputErrors[inp.key] && <div className="text-status-stopped text-xs mt-0.5 font-mono">{inputErrors[inp.key]}</div>}
               </FormRow>
             ))}
           </div>
@@ -906,7 +934,7 @@ function InstallWizard({ app, onClose }: { app: AppDetail; onClose: () => void }
 
         <div className="flex gap-3 mt-6 justify-end">
           <button onClick={onClose} className="px-5 py-2.5 text-sm font-semibold border border-border rounded-lg cursor-pointer text-text-secondary bg-transparent hover:border-text-secondary transition-colors font-mono">Cancel</button>
-          <button onClick={handleInstall} disabled={installing} className="px-5 py-2.5 text-sm font-semibold border-none rounded-lg cursor-pointer bg-primary text-bg-primary hover:shadow-[0_0_20px_rgba(0,255,157,0.3)] transition-all disabled:opacity-50 font-mono">
+          <button onClick={handleInstall} disabled={installing || hasInputErrors} className="px-5 py-2.5 text-sm font-semibold border-none rounded-lg cursor-pointer bg-primary text-bg-primary hover:shadow-[0_0_20px_rgba(0,255,157,0.3)] transition-all disabled:opacity-50 disabled:cursor-not-allowed font-mono">
             {installing ? 'Installing...' : 'Install'}
           </button>
         </div>
@@ -4456,6 +4484,7 @@ function DevAppEditor({ id, requireAuth }: { id: string; requireAuth: (cb: () =>
   const [manifest, setManifest] = useState('')
   const [script, setScript] = useState('')
   const [readme, setReadme] = useState('')
+  const [extraFiles, setExtraFiles] = useState<Record<string, string>>({})
   const [saving, setSaving] = useState(false)
   const [saveMsg, setSaveMsg] = useState('')
   const [validation, setValidation] = useState<ValidationResult | null>(null)
@@ -4565,10 +4594,31 @@ function DevAppEditor({ id, requireAuth }: { id: string; requireAuth: (cb: () =>
     })
   }
 
+  const coreFileSet = useMemo(() => new Set(['app.yml', 'provision/install.py', 'README.md']), [])
+  const allFiles = useMemo(() => {
+    if (!app) return ['app.yml', 'provision/install.py', 'README.md']
+    const core = ['app.yml', 'provision/install.py']
+    const extra = (app.files || [])
+      .filter(f => !f.is_dir && !coreFileSet.has(f.path) && !f.path.startsWith('.') && !f.path.endsWith('.png') && !f.path.endsWith('.jpg') && !f.path.endsWith('.ico'))
+      .map(f => f.path)
+      .sort()
+    return [...core, ...extra, 'README.md']
+  }, [app, coreFileSet])
+
+  const selectFile = useCallback(async (f: string) => {
+    setActiveFile(f)
+    if (!coreFileSet.has(f) && !(f in extraFiles)) {
+      try {
+        const data = await api.devGetFile(id, f)
+        setExtraFiles(prev => ({ ...prev, [f]: data.content }))
+      } catch { setExtraFiles(prev => ({ ...prev, [f]: '' })) }
+    }
+  }, [id, extraFiles, coreFileSet])
+
   if (!app) return <Center className="py-16"><span className="text-text-muted font-mono">Loading...</span></Center>
 
-  const currentContent = activeFile === 'app.yml' ? manifest : activeFile === 'provision/install.py' ? script : readme
-  const setCurrentContent = activeFile === 'app.yml' ? setManifest : activeFile === 'provision/install.py' ? setScript : setReadme
+  const currentContent = activeFile === 'app.yml' ? manifest : activeFile === 'provision/install.py' ? script : activeFile === 'README.md' ? readme : (extraFiles[activeFile] ?? '')
+  const setCurrentContent = activeFile === 'app.yml' ? setManifest : activeFile === 'provision/install.py' ? setScript : activeFile === 'README.md' ? setReadme : ((v: string) => setExtraFiles(prev => ({ ...prev, [activeFile]: v })))
 
   return (
     <div>
@@ -4628,10 +4678,10 @@ function DevAppEditor({ id, requireAuth }: { id: string; requireAuth: (cb: () =>
         <div className="w-48 border border-border rounded-lg overflow-hidden shrink-0">
           <div className="bg-bg-card px-3 py-2 border-b border-border text-xs text-text-muted font-mono uppercase">Files</div>
           <div className="p-1">
-            {['app.yml', 'provision/install.py', 'README.md'].map(f => (
+            {allFiles.map(f => (
               <button
                 key={f}
-                onClick={() => setActiveFile(f)}
+                onClick={() => selectFile(f)}
                 className={`w-full text-left px-3 py-1.5 text-xs font-mono rounded cursor-pointer transition-colors ${activeFile === f ? 'bg-primary/10 text-primary' : 'text-text-secondary hover:text-text-primary hover:bg-white/5'}`}
               >
                 {f}

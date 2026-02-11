@@ -80,11 +80,13 @@ type ShowWhenSpec struct {
 }
 
 type InputValidation struct {
-	Regex   string   `yaml:"regex,omitempty" json:"regex,omitempty"`
-	Min     *float64 `yaml:"min,omitempty" json:"min,omitempty"`
-	Max     *float64 `yaml:"max,omitempty" json:"max,omitempty"`
-	Enum    []string `yaml:"enum,omitempty" json:"enum,omitempty"`
-	EnumDir string   `yaml:"enum_dir,omitempty" json:"-"` // directory of .yml files to build enum from
+	Regex     string   `yaml:"regex,omitempty" json:"regex,omitempty"`
+	Min       *float64 `yaml:"min,omitempty" json:"min,omitempty"`
+	Max       *float64 `yaml:"max,omitempty" json:"max,omitempty"`
+	MinLength *int     `yaml:"min_length,omitempty" json:"min_length,omitempty"`
+	MaxLength *int     `yaml:"max_length,omitempty" json:"max_length,omitempty"`
+	Enum      []string `yaml:"enum,omitempty" json:"enum,omitempty"`
+	EnumDir   string   `yaml:"enum_dir,omitempty" json:"-"` // directory of .yml files to build enum from
 }
 
 type ProvisioningSpec struct {

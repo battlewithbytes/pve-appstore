@@ -83,6 +83,9 @@ func (s *Server) handleDevSaveManifest(w http.ResponseWriter, r *http.Request) {
 	// If manifest has an icon URL, auto-download it
 	s.syncDevIcon(id, data)
 
+	// Auto-refresh catalog if app is deployed
+	s.refreshDeployedDevApp(id)
+
 	writeJSON(w, http.StatusOK, map[string]string{"status": "saved"})
 }
 
@@ -97,7 +100,32 @@ func (s *Server) handleDevSaveScript(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+
+	// Auto-refresh catalog if app is deployed
+	s.refreshDeployedDevApp(id)
+
 	writeJSON(w, http.StatusOK, map[string]string{"status": "saved"})
+}
+
+// refreshDeployedDevApp re-merges a dev app into the catalog if it's currently deployed.
+// This means edits to app.yml or install.py take effect immediately without undeploy/redeploy.
+func (s *Server) refreshDeployedDevApp(id string) {
+	if !s.devStore.IsDeployed(id) {
+		return
+	}
+	manifest, err := s.devStore.ParseManifest(id)
+	if err != nil {
+		return // silently skip — invalid manifest won't break anything
+	}
+	appDir := s.devStore.AppDir(id)
+	manifest.DirPath = appDir
+	if _, err := os.Stat(filepath.Join(appDir, "icon.png")); err == nil {
+		manifest.IconPath = filepath.Join(appDir, "icon.png")
+	}
+	if _, err := os.Stat(filepath.Join(appDir, "README.md")); err == nil {
+		manifest.ReadmePath = filepath.Join(appDir, "README.md")
+	}
+	s.catalog.MergeDevApp(manifest)
 }
 
 func (s *Server) handleDevSaveFile(w http.ResponseWriter, r *http.Request) {
@@ -121,6 +149,21 @@ func (s *Server) handleDevSaveFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "saved"})
+}
+
+func (s *Server) handleDevGetFile(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	path := r.URL.Query().Get("path")
+	if path == "" {
+		writeError(w, http.StatusBadRequest, "path query parameter required")
+		return
+	}
+	data, err := s.devStore.ReadFile(id, path)
+	if err != nil {
+		writeError(w, http.StatusNotFound, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"content": string(data)})
 }
 
 func (s *Server) handleDevGetIcon(w http.ResponseWriter, r *http.Request) {

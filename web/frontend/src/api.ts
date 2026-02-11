@@ -263,6 +263,9 @@ export const api = {
       body: content,
     }),
 
+  devGetFile: (id: string, path: string) =>
+    fetchJSON<{ content: string }>(`${BASE}/dev/apps/${id}/file?path=${encodeURIComponent(path)}`),
+
   devSaveFile: (id: string, path: string, content: string) =>
     fetchJSON<{ status: string }>(`${BASE}/dev/apps/${id}/file`, {
       method: 'PUT',

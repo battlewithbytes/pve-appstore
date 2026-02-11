@@ -1,0 +1,177 @@
+id: gitlab
+name: GitLab CE
+description: Self-hosted Git repository management, CI/CD pipelines, issue tracking, and DevOps platform.
+overview: |
+  GitLab Community Edition is a complete DevOps platform delivered as a single application.
+  It includes Git repository hosting, merge requests, CI/CD pipelines, container registry,
+  issue boards, wikis, and much more. The omnibus package bundles PostgreSQL, Redis, Puma,
+  Sidekiq, Gitaly, Nginx, and all dependencies into a single install.
+
+  Running GitLab on Proxmox LXC gives you a lightweight, fast self-hosted instance without
+  the overhead of a full VM. Recommended minimum: 4 cores, 8 GB RAM, 20 GB disk for small
+  teams (up to ~50 users).
+version: "1.0.0"
+categories:
+  - development
+  - devops
+tags:
+  - git
+  - ci-cd
+  - devops
+  - repository
+icon: https://about.gitlab.com/images/press/logo/png/gitlab-icon-rgb.png
+homepage: https://about.gitlab.com
+license: MIT
+maintainers:
+  - PVE App Store
+
+lxc:
+  ostemplate: ubuntu-24.04
+  defaults:
+    unprivileged: true
+    cores: 4
+    memory_mb: 8192
+    disk_gb: 20
+    features:
+      - nesting
+    onboot: true
+
+inputs:
+  - key: external_url
+    label: External URL
+    type: string
+    default: ""
+    required: false
+    reconfigurable: true
+    group: General
+    description: The URL users will use to access GitLab (e.g. http://gitlab.example.com).
+    help: "Include http:// or https://. If blank, defaults to http://<container-ip>"
+  - key: gitlab_port
+    label: HTTP Port
+    type: number
+    default: 80
+    required: false
+    reconfigurable: true
+    group: Network
+    validation:
+      min: 1
+      max: 65535
+    description: Port for the GitLab web interface.
+    help: "Default: 80"
+  - key: ssh_port
+    label: SSH Port
+    type: number
+    default: 22
+    required: false
+    reconfigurable: true
+    group: Network
+    validation:
+      min: 1
+      max: 65535
+    description: Port for Git SSH access.
+    help: "Default: 22"
+  - key: registry_enabled
+    label: Container Registry
+    type: boolean
+    default: false
+    required: false
+    reconfigurable: true
+    group: Features
+    description: Enable the built-in Docker/OCI container registry.
+    help: Requires additional disk space for stored images
+  - key: pages_enabled
+    label: GitLab Pages
+    type: boolean
+    default: false
+    required: false
+    reconfigurable: true
+    group: Features
+    description: Enable GitLab Pages for hosting static websites from repositories.
+  - key: require_email_confirmation
+    label: Require Email Confirmation
+    type: boolean
+    default: false
+    required: false
+    reconfigurable: true
+    group: Security
+    description: Require new users to confirm their email address before they can sign in.
+    help: "Requires a working SMTP server. Leave disabled if no email is configured."
+  - key: initial_root_password
+    label: Initial Root Password
+    type: secret
+    required: false
+    group: Security
+    validation:
+      min_length: 8
+    description: Set the initial password for the root admin user. If blank, a random password is generated and shown in outputs.
+    help: Minimum 8 characters
+
+volumes:
+  - name: config
+    type: volume
+    mount_path: /etc/gitlab
+    size_gb: 1
+    label: Config
+    required: true
+    description: GitLab configuration files (gitlab.rb, secrets)
+  - name: data
+    type: volume
+    mount_path: /var/opt/gitlab
+    size_gb: 50
+    label: Data
+    required: true
+    description: Git repositories, database, uploads, CI artifacts
+  - name: logs
+    type: volume
+    mount_path: /var/log/gitlab
+    size_gb: 5
+    label: Logs
+    required: true
+    description: GitLab service logs
+
+permissions:
+  packages:
+    - curl
+    - openssh-server
+    - ca-certificates
+    - tzdata
+    - perl
+    - locales
+    - gitlab-ce
+  apt_repos:
+    - "https://packages.gitlab.com/gitlab/gitlab-ce"
+  urls:
+    - "https://packages.gitlab.com/*"
+  paths:
+    - /etc/gitlab/
+    - /var/opt/gitlab/
+    - /var/log/gitlab/
+    - /etc/apt/sources.list.d/
+    - /usr/share/keyrings/
+    - /etc/systemd/system/
+  services:
+    - gitlab-runsvdir
+  commands:
+    - gitlab-ctl
+    - gitlab-rake
+    - gitlab-rails
+    - locale-gen
+    - update-locale
+    - sh
+
+provisioning:
+  script: provision/install.py
+  timeout_sec: 1800
+  env:
+    GITLAB_SKIP_RECONFIGURE: "true"
+
+outputs:
+  - key: url
+    label: Web UI
+    value: "http://{{ip}}:{{gitlab_port}}"
+  - key: ssh
+    label: SSH Clone
+    value: "ssh://git@{{ip}}:{{ssh_port}}"
+  - key: initial_password
+    label: Root Password
+    value: "{{initial_root_password}}"

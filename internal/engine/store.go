@@ -495,47 +495,52 @@ func (s *Store) HasActiveInstallForApp(appID string) (*Install, bool) {
 	return inst, true
 }
 
+// OrphanedJob holds info about a job that was running when the service restarted.
+type OrphanedJob struct {
+	ID   string
+	CTID int
+}
+
 // RecoverOrphanedJobs marks all non-terminal jobs as failed on startup.
-// Returns the number of jobs recovered.
-func (s *Store) RecoverOrphanedJobs() (int, error) {
+// Returns the orphaned jobs (with CTIDs) so the engine can clean up containers.
+func (s *Store) RecoverOrphanedJobs() ([]OrphanedJob, error) {
 	now := time.Now().Format(time.RFC3339)
 
-	// Find orphaned job IDs first (for log entries)
-	rows, err := s.db.Query(`SELECT id FROM jobs WHERE state NOT IN ('completed','failed','cancelled')`)
+	// Find orphaned job IDs and CTIDs first
+	rows, err := s.db.Query(`SELECT id, ctid FROM jobs WHERE state NOT IN ('completed','failed','cancelled')`)
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
-	var ids []string
+	var orphans []OrphanedJob
 	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err == nil {
-			ids = append(ids, id)
+		var o OrphanedJob
+		if err := rows.Scan(&o.ID, &o.CTID); err == nil {
+			orphans = append(orphans, o)
 		}
 	}
 	rows.Close()
 
-	if len(ids) == 0 {
-		return 0, nil
+	if len(orphans) == 0 {
+		return nil, nil
 	}
 
 	// Mark all as failed
-	result, err := s.db.Exec(`UPDATE jobs SET state='failed', error='interrupted by service restart', completed_at=?, updated_at=? WHERE state NOT IN ('completed','failed','cancelled')`, now, now)
+	_, err = s.db.Exec(`UPDATE jobs SET state='failed', error='interrupted by service restart', completed_at=?, updated_at=? WHERE state NOT IN ('completed','failed','cancelled')`, now, now)
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
 
 	// Append a log entry for each recovered job
-	for _, id := range ids {
+	for _, o := range orphans {
 		s.AppendLog(&LogEntry{
-			JobID:     id,
+			JobID:     o.ID,
 			Timestamp: time.Now(),
 			Level:     "warn",
 			Message:   "Job interrupted — service was restarted while this job was running",
 		})
 	}
 
-	affected, _ := result.RowsAffected()
-	return int(affected), nil
+	return orphans, nil
 }
 
 // ClearTerminalJobs deletes all jobs in a terminal state (completed, failed, cancelled)

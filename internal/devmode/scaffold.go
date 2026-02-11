@@ -104,6 +104,7 @@ lxc:
     type: number
     default: %s
     required: true
+    reconfigurable: true
     validation:
       min: 1
       max: 65535
@@ -118,6 +119,7 @@ lxc:
     type: string
     default: "%s"
     required: false
+    reconfigurable: true
     help: "Environment variable %s"
 `, key, label, strings.ReplaceAll(ev.Default, `"`, `\"`), ev.Key))
 		}
@@ -217,6 +219,10 @@ provisioning:
 		permPaths = append(permPaths, "/usr/share/keyrings/")
 	}
 	permPaths = append(permPaths, "/etc/systemd/system/")
+	// configure() writes to /etc/default/<service>
+	if len(portInputs) > 0 || len(df.EnvVars) > 0 {
+		permPaths = append(permPaths, "/etc/default/")
+	}
 	// Extract paths referenced by run_command() calls (sed targets, mv destinations, etc.)
 	permPaths = append(permPaths, extractPathsFromRunCommands(df.RunCommands)...)
 	if len(permPaths) > 0 {
@@ -1081,6 +1087,12 @@ func buildInstallScript(p buildScriptParams) string {
 		execStart = ""
 	}
 
+	// Call configure() before starting the service so config is written first
+	if hasInputs {
+		sp.WriteString("\n        # Write config from inputs, then start service\n")
+		sp.WriteString("        self.configure()\n")
+	}
+
 	if execStart != "" {
 		sp.WriteString(fmt.Sprintf("        self.create_service(\"%s\",\n                            exec_start=\"%s\")\n",
 			p.mainService, strings.ReplaceAll(execStart, `"`, `\"`)))
@@ -1089,6 +1101,62 @@ func buildInstallScript(p buildScriptParams) string {
 	}
 
 	sp.WriteString(fmt.Sprintf("        self.log.info(\"%s installation complete\")\n", p.name))
+
+	// Generate configure() method that writes inputs to an env-style config file.
+	// The developer should adapt the format to match the service's native config,
+	// but this is functional out of the box — values get written and the service restarts.
+	if hasInputs {
+		sp.WriteString("\n    def configure(self):\n")
+		sp.WriteString("        \"\"\"Apply configuration from inputs. Called by install() and reconfigure.\"\"\"\n")
+
+		// Collect all input reads and their env-style key names
+		type inputVar struct {
+			varName string
+			envKey  string
+		}
+		var allVars []inputVar
+
+		for _, pi := range p.portInputs {
+			varName := toSnakeCase(pi.key)
+			sp.WriteString(fmt.Sprintf("        %s = self.inputs.integer(\"%s\", %s)\n", varName, pi.key, pi.defaultVal))
+			allVars = append(allVars, inputVar{varName, strings.ToUpper(pi.key)})
+		}
+		for _, v := range p.secretVars {
+			sp.WriteString(fmt.Sprintf("        %s = self.inputs.secret(\"%s\")\n", v.key, v.key))
+			allVars = append(allVars, inputVar{v.key, strings.ToUpper(v.key)})
+		}
+		for _, v := range p.stringVars {
+			sp.WriteString(fmt.Sprintf("        %s = self.inputs.string(\"%s\", \"%s\")\n", v.key, v.key, v.defaultVal))
+			allVars = append(allVars, inputVar{v.key, strings.ToUpper(v.key)})
+		}
+		for _, ev := range p.envInputs {
+			varName := toSnakeCase(ev.Key)
+			sp.WriteString(fmt.Sprintf("        %s = self.inputs.string(\"%s\", \"%s\")\n",
+				varName, toSnakeCase(ev.Key), strings.ReplaceAll(ev.Default, `"`, `\"`)))
+			allVars = append(allVars, inputVar{varName, strings.ToUpper(ev.Key)})
+		}
+
+		// Write config file using the inputs
+		sp.WriteString("\n        # Write config — adapt format to match the service's native config.\n")
+		sp.WriteString("        # Find the real config path: cat /lib/systemd/system/" + p.mainService + ".service\n")
+		configPath := fmt.Sprintf("/etc/default/%s", p.mainService)
+		if len(allVars) == 1 {
+			sp.WriteString(fmt.Sprintf("        config = f\"%s={%s}\\n\"\n", allVars[0].envKey, allVars[0].varName))
+		} else {
+			sp.WriteString("        config = (\n")
+			for i, v := range allVars {
+				if i < len(allVars)-1 {
+					sp.WriteString(fmt.Sprintf("            f\"%s={%s}\\n\"\n", v.envKey, v.varName))
+				} else {
+					sp.WriteString(fmt.Sprintf("            f\"%s={%s}\\n\"\n", v.envKey, v.varName))
+				}
+			}
+			sp.WriteString("        )\n")
+		}
+		sp.WriteString(fmt.Sprintf("        self.write_config(\"%s\", config)\n", configPath))
+		sp.WriteString(fmt.Sprintf("        self.restart_service(\"%s\")\n", p.mainService))
+	}
+
 	sp.WriteString(fmt.Sprintf("\n\nrun(%s)\n", p.className))
 
 	return sp.String()

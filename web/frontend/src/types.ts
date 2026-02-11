@@ -63,6 +63,8 @@ export interface AppInput {
     regex?: string;
     min?: number;
     max?: number;
+    min_length?: number;
+    max_length?: number;
     enum?: string[];
   };
   help?: string;

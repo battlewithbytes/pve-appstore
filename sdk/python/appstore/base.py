@@ -92,11 +92,12 @@ class BaseApp(ABC):
             self._run(["apt-get", "install", "-y", "-qq"] + list(packages))
 
     def write_config(self, path: str, template_str: str, **kwargs) -> str:
-        """Write a config file using string.Template substitution.
+        """Write a config file using template substitution.
 
         Args:
             path: Destination path (must be under an allowed path prefix).
-            template_str: Template string using $variable syntax.
+            template_str: Template string using $variable syntax and
+                          {{#key}}...{{/key}} conditional blocks.
             **kwargs: Variables to substitute.
 
         Returns:
@@ -110,6 +111,29 @@ class BaseApp(ABC):
             f.write(content)
         self.log.info(f"Wrote config: {path}")
         return content
+
+    def render_template(self, template_name: str, dest_path: str, **kwargs) -> str:
+        """Read a template file from the app's provision directory and write it to dest_path.
+
+        Template files support:
+          - $$variable / $${variable} — value substitution
+          - {{#key}} ... {{/key}} — conditional block (included when key is truthy)
+          - {{^key}} ... {{/key}} — inverted block (included when key is falsy)
+
+        Args:
+            template_name: Filename relative to the provision directory
+                           (e.g. "gitlab.rb.tmpl").
+            dest_path: Where to write the rendered output.
+            **kwargs: Template variables.
+
+        Returns:
+            The rendered content.
+        """
+        # Templates are pushed to /opt/appstore/provision/ alongside install.py
+        tmpl_path = os.path.join("/opt/appstore/provision", template_name)
+        with open(tmpl_path) as f:
+            template_str = f.read()
+        return self.write_config(dest_path, template_str, **kwargs)
 
     def enable_service(self, name: str) -> None:
         """Enable and start a service (systemd on Debian, OpenRC on Alpine)."""
@@ -344,12 +368,66 @@ class BaseApp(ABC):
         with open(dest, "w") as f:
             f.write(repo_line + "\n")
 
-    def run_command(self, cmd: list, check: bool = True) -> subprocess.CompletedProcess:
-        """Run a command. The binary (cmd[0]) must be in permissions.commands."""
+    def add_apt_repository(self, repo_url: str, key_url: str, name: str = "",
+                           suite: str = "", components: str = "main") -> None:
+        """Add an APT repository with its signing key in one call.
+
+        This is the recommended high-level method. It:
+        1. Downloads and installs the GPG signing key
+        2. Detects the distro codename (e.g. "noble") if suite is not given
+        3. Writes the sources list entry with signed-by
+
+        Args:
+            repo_url: Base URL of the repository (e.g. "https://downloads.plex.tv/repo/deb").
+            key_url: URL to the GPG signing key.
+            name: Short name for the repo (used for filenames). Auto-derived from URL if blank.
+            suite: Distribution suite/codename (e.g. "noble", "stable", "public").
+                   If blank, auto-detected from /etc/os-release VERSION_CODENAME.
+            components: Space-separated components (default: "main").
+        """
+        import re
+        from urllib.parse import urlparse
+
+        # Derive name from URL if not provided
+        if not name:
+            # Use last path segment or hostname
+            parsed = urlparse(repo_url)
+            segments = [s for s in parsed.path.strip("/").split("/") if s]
+            name = segments[-1] if segments else parsed.hostname.replace(".", "-")
+            # Clean to safe filename chars
+            name = re.sub(r"[^a-zA-Z0-9_-]", "-", name)
+
+        # Auto-detect suite from os-release
+        if not suite:
+            suite = self._detect_codename()
+
+        keyring_path = f"/usr/share/keyrings/{name}.gpg"
+        self.add_apt_key(key_url, keyring_path)
+
+        repo_line = f"deb [signed-by={keyring_path}] {repo_url} {suite} {components}"
+        self.add_apt_repo(repo_line, f"{name}.list")
+
+    @staticmethod
+    def _detect_codename() -> str:
+        """Detect distro codename from /etc/os-release."""
+        try:
+            with open("/etc/os-release") as f:
+                for line in f:
+                    if line.startswith("VERSION_CODENAME="):
+                        return line.strip().split("=", 1)[1].strip('"')
+        except FileNotFoundError:
+            pass
+        return "stable"  # safe fallback for Debian-based
+
+    def run_command(self, cmd: list, check: bool = True, input_text: str = None) -> subprocess.CompletedProcess:
+        """Run a command. The binary (cmd[0]) must be in permissions.commands.
+
+        If input_text is provided, it is written to the process's stdin.
+        """
         if not cmd:
             raise ValueError("empty command")
         self.permissions.check_command(cmd[0])
-        return self._run(cmd, check=check)
+        return self._run(cmd, check=check, input_text=input_text)
 
     def run_installer_script(self, url: str) -> None:
         """Download and run a remote installer script."""
@@ -609,15 +687,30 @@ class BaseApp(ABC):
             return True
         return False
 
-    def _run(self, cmd: list, check: bool = True) -> subprocess.CompletedProcess:
+    def _run(self, cmd: list, check: bool = True, input_text: str = None) -> subprocess.CompletedProcess:
         """Run a subprocess, streaming output line-by-line for real-time logging."""
+        # Force line-buffered stdout on child processes via _STDBUF_O.
+        # Without this, C programs like dpkg/apt use full 4KB buffering when
+        # not on a TTY, causing long silent gaps in the provision log.
+        env = os.environ.copy()
+        stdbuf_lib = "/usr/lib/x86_64-linux-gnu/libstdbuf.so"
+        if not os.path.exists(stdbuf_lib):
+            stdbuf_lib = "/usr/lib/aarch64-linux-gnu/libstdbuf.so"
+        if os.path.exists(stdbuf_lib):
+            env.setdefault("LD_PRELOAD", stdbuf_lib)
+            env["_STDBUF_O"] = "L"  # line-buffered stdout
         proc = subprocess.Popen(
             cmd,
+            stdin=subprocess.PIPE if input_text else None,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
             bufsize=1,  # line-buffered
+            env=env,
         )
+        if input_text:
+            proc.stdin.write(input_text)
+            proc.stdin.close()
         lines = []
         for line in proc.stdout:
             stripped = line.rstrip("\n")

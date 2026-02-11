@@ -135,6 +135,225 @@ func validateManifest(result *ValidationResult, data []byte, appDir string) {
 	}
 }
 
+// validatePermissions cross-references SDK method calls in the script against
+// the permissions declared in the manifest. Warns when the script uses a command,
+// package, service, path, or URL that isn't allowed by the manifest.
+func validatePermissions(result *ValidationResult, script string, manifestData []byte) {
+	if manifestData == nil {
+		return
+	}
+	var manifest catalog.AppManifest
+	if err := yaml.Unmarshal(manifestData, &manifest); err != nil {
+		return
+	}
+	perms := manifest.Permissions
+
+	lines := strings.Split(script, "\n")
+
+	// Build lookup sets
+	pkgSet := toSet(perms.Packages)
+	svcSet := toSet(perms.Services)
+	cmdSet := toSet(perms.Commands)
+	userSet := toSet(perms.Users)
+	pipSet := toSet(perms.Pip)
+
+	// Compiled regexes for SDK method calls
+	var (
+		// self.pkg_install("pkg1", "pkg2") or self.apt_install("pkg")
+		rePkgInstall = regexp.MustCompile(`self\.(?:pkg_install|apt_install)\(([^)]+)\)`)
+		// self.pip_install("pkg1", "pkg2")
+		rePipInstall = regexp.MustCompile(`self\.pip_install\(([^)]+)\)`)
+		// self.enable_service("svc"), self.restart_service("svc"), self.create_service("svc", ...)
+		reService = regexp.MustCompile(`self\.(?:enable_service|restart_service|create_service)\(\s*"([^"]+)"`)
+		// self.run_command(["cmd", "arg1", ...]) — extract first element
+		reRunCmd = regexp.MustCompile(`self\.run_command\(\s*\[\s*"([^"]+)"`)
+		// self.create_user("user")
+		reCreateUser = regexp.MustCompile(`self\.create_user\(\s*"([^"]+)"`)
+		// self.write_config("path", ...), self.create_dir("path"), self.chown("path", ...)
+		rePath = regexp.MustCompile(`self\.(?:write_config|create_dir|chown|write_env_file|deploy_provision_file)\(\s*"([^"]+)"`)
+		// self.download("url", ...), self.add_apt_key("url", ...), self.wait_for_http("url")
+		reURL = regexp.MustCompile(`self\.(?:download|add_apt_key|wait_for_http)\(\s*"([^"]+)"`)
+		// self.add_apt_repo("deb ...", "filename")
+		reAptRepo = regexp.MustCompile(`self\.add_apt_repo\(\s*"([^"]+)"`)
+		// Extract string literals from arg list: "pkg1", "pkg2"
+		reStringLit = regexp.MustCompile(`"([^"]+)"`)
+	)
+
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+		lineNo := i + 1
+
+		// --- Packages ---
+		if m := rePkgInstall.FindStringSubmatch(line); m != nil {
+			for _, sm := range reStringLit.FindAllStringSubmatch(m[1], -1) {
+				pkg := sm[1]
+				if !matchesAny(pkg, pkgSet, perms.Packages) {
+					result.addWarning("provision/install.py", lineNo,
+						fmt.Sprintf("Package %q not in permissions.packages", pkg),
+						"PERM_MISSING_PACKAGE")
+				}
+			}
+		}
+
+		// --- Pip packages ---
+		if m := rePipInstall.FindStringSubmatch(line); m != nil {
+			for _, sm := range reStringLit.FindAllStringSubmatch(m[1], -1) {
+				pkg := sm[1]
+				if !matchesAny(pkg, pipSet, perms.Pip) {
+					result.addWarning("provision/install.py", lineNo,
+						fmt.Sprintf("Pip package %q not in permissions.pip", pkg),
+						"PERM_MISSING_PIP")
+				}
+			}
+		}
+
+		// --- Services ---
+		if m := reService.FindStringSubmatch(line); m != nil {
+			svc := m[1]
+			if !svcSet[svc] {
+				result.addWarning("provision/install.py", lineNo,
+					fmt.Sprintf("Service %q not in permissions.services", svc),
+					"PERM_MISSING_SERVICE")
+			}
+		}
+
+		// --- Commands (run_command first arg) ---
+		if m := reRunCmd.FindStringSubmatch(line); m != nil {
+			cmd := m[1]
+			// Skip common shell builtins that don't need explicit permission
+			if cmd != "sh" && cmd != "bash" && !matchesAny(cmd, cmdSet, perms.Commands) {
+				result.addWarning("provision/install.py", lineNo,
+					fmt.Sprintf("Command %q not in permissions.commands", cmd),
+					"PERM_MISSING_COMMAND")
+			}
+		}
+
+		// --- Users ---
+		if m := reCreateUser.FindStringSubmatch(line); m != nil {
+			user := m[1]
+			if !userSet[user] {
+				result.addWarning("provision/install.py", lineNo,
+					fmt.Sprintf("User %q not in permissions.users", user),
+					"PERM_MISSING_USER")
+			}
+		}
+
+		// --- Paths ---
+		if m := rePath.FindStringSubmatch(line); m != nil {
+			path := m[1]
+			if !pathAllowed(path, perms.Paths) {
+				result.addWarning("provision/install.py", lineNo,
+					fmt.Sprintf("Path %q not covered by permissions.paths", path),
+					"PERM_MISSING_PATH")
+			}
+		}
+
+		// --- URLs ---
+		if m := reURL.FindStringSubmatch(line); m != nil {
+			url := m[1]
+			if !matchesAnyGlob(url, perms.URLs) {
+				result.addWarning("provision/install.py", lineNo,
+					fmt.Sprintf("URL %q not covered by permissions.urls", url),
+					"PERM_MISSING_URL")
+			}
+		}
+
+		// --- APT repos ---
+		if m := reAptRepo.FindStringSubmatch(line); m != nil {
+			repoLine := m[1]
+			if !aptRepoAllowed(repoLine, perms.AptRepos) {
+				result.addWarning("provision/install.py", lineNo,
+					fmt.Sprintf("APT repo not covered by permissions.apt_repos"),
+					"PERM_MISSING_APT_REPO")
+			}
+		}
+	}
+}
+
+// toSet builds a lookup map from a string slice.
+func toSet(items []string) map[string]bool {
+	m := make(map[string]bool, len(items))
+	for _, item := range items {
+		m[item] = true
+	}
+	return m
+}
+
+// matchesAny checks exact set membership first, then falls back to fnmatch-style
+// glob matching against the raw patterns (for wildcard entries like "lib*").
+func matchesAny(value string, set map[string]bool, patterns []string) bool {
+	if set[value] {
+		return true
+	}
+	for _, p := range patterns {
+		if matched, _ := filepath.Match(p, value); matched {
+			return true
+		}
+	}
+	return false
+}
+
+// matchesAnyGlob checks if a URL matches any allowed pattern using glob matching.
+func matchesAnyGlob(url string, patterns []string) bool {
+	for _, p := range patterns {
+		if matched, _ := filepath.Match(p, url); matched {
+			return true
+		}
+		// Also try prefix match for wildcard patterns like "https://example.com/*"
+		prefix := strings.TrimSuffix(p, "*")
+		if prefix != p && strings.HasPrefix(url, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+// pathAllowed checks if a path is covered by the allowed paths list.
+// Matches if the path equals an allowed path, or starts with an allowed directory prefix.
+// Implicitly allows /tmp and /opt/venv (matching SDK behavior).
+func pathAllowed(path string, allowed []string) bool {
+	// Implicit paths (always allowed by SDK)
+	if strings.HasPrefix(path, "/tmp") || strings.HasPrefix(path, "/opt/venv") {
+		return true
+	}
+	for _, a := range allowed {
+		a = strings.TrimRight(a, "/")
+		if path == a || strings.HasPrefix(path, a+"/") || strings.HasPrefix(path, a) {
+			return true
+		}
+	}
+	return false
+}
+
+// aptRepoAllowed checks if a repo line is covered by the allowed apt repos.
+// Extracts the URL from the deb line and matches against allowed entries.
+func aptRepoAllowed(repoLine string, allowed []string) bool {
+	// Extract URL from deb line
+	var repoURL string
+	for _, token := range strings.Fields(repoLine) {
+		if strings.HasPrefix(token, "http://") || strings.HasPrefix(token, "https://") {
+			repoURL = strings.TrimRight(token, "/")
+			break
+		}
+	}
+	if repoURL == "" {
+		return false
+	}
+	for _, a := range allowed {
+		a = strings.TrimRight(a, "/")
+		if repoURL == a || strings.HasPrefix(repoURL, a+"/") {
+			return true
+		}
+		if matched, _ := filepath.Match(a, repoURL); matched {
+			return true
+		}
+	}
+	return false
+}
+
 func validateScript(result *ValidationResult, script string, manifestData []byte) {
 	lines := strings.Split(script, "\n")
 
@@ -250,6 +469,9 @@ func validateScript(result *ValidationResult, script string, manifestData []byte
 			}
 		}
 	}
+
+	// Cross-reference SDK calls against manifest permissions
+	validatePermissions(result, script, manifestData)
 }
 
 func buildChecklist(result *ValidationResult, appDir string, manifestData []byte) {

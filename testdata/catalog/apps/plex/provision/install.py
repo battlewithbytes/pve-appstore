@@ -17,14 +17,11 @@ class PlexApp(BaseApp):
         claim_token = self.inputs.string("claim_token", "")
 
         # Add Plex APT key and repository
-        # (curl is pre-installed by the engine's base packages step)
-        self.add_apt_key(
-            "https://downloads.plex.tv/plex-keys/PlexSign.key",
-            "/usr/share/keyrings/plex-archive-keyring.gpg",
-        )
-        self.add_apt_repo(
-            "deb [signed-by=/usr/share/keyrings/plex-archive-keyring.gpg] https://downloads.plex.tv/repo/deb public main",
-            "plexmediaserver.list",
+        self.add_apt_repository(
+            "https://downloads.plex.tv/repo/deb",
+            key_url="https://downloads.plex.tv/plex-keys/PlexSign.key",
+            name="plexmediaserver",
+            suite="public",
         )
 
         self.apt_install("plexmediaserver")

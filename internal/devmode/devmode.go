@@ -204,6 +204,18 @@ func (d *DevStore) SaveFile(id, relPath string, data []byte) error {
 	return os.WriteFile(fullPath, data, 0644)
 }
 
+// ReadFile reads an arbitrary file from a dev app.
+func (d *DevStore) ReadFile(id, relPath string) ([]byte, error) {
+	if !isValidID(id) {
+		return nil, fmt.Errorf("invalid app id")
+	}
+	clean := filepath.Clean(relPath)
+	if strings.Contains(clean, "..") {
+		return nil, fmt.Errorf("invalid path")
+	}
+	return os.ReadFile(filepath.Join(d.baseDir, id, clean))
+}
+
 // Delete removes a dev app directory.
 func (d *DevStore) Delete(id string) error {
 	if !isValidID(id) {
@@ -283,6 +295,19 @@ func (d *DevStore) readMeta(id string) (*DevAppMeta, error) {
 func (d *DevStore) SetStatus(id, status string) error {
 	data, _ := json.Marshal(map[string]string{"status": status})
 	return os.WriteFile(filepath.Join(d.baseDir, id, ".devstatus"), data, 0644)
+}
+
+// IsDeployed returns true if the dev app is currently deployed to the catalog.
+func (d *DevStore) IsDeployed(id string) bool {
+	data, err := os.ReadFile(filepath.Join(d.baseDir, id, ".devstatus"))
+	if err != nil {
+		return false
+	}
+	var s struct{ Status string `json:"status"` }
+	if json.Unmarshal(data, &s) != nil {
+		return false
+	}
+	return s.Status == "deployed"
 }
 
 func (d *DevStore) listFiles(dir, prefix string) []DevFile {

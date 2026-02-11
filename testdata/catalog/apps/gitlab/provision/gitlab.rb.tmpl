@@ -1,0 +1,31 @@
+external_url '$external_url'
+
+# Nginx
+nginx['listen_port'] = $gitlab_port
+nginx['listen_https'] = false
+
+# SSH
+gitlab_rails['gitlab_shell_ssh_port'] = $ssh_port
+
+# Performance tuning for LXC
+puma['worker_processes'] = 2
+sidekiq['concurrency'] = 5
+postgresql['shared_buffers'] = '256MB'
+prometheus_monitoring['enable'] = false
+
+# Sign-up
+gitlab_rails['signup_enabled'] = true
+gitlab_rails['require_admin_approval_after_registration'] = false
+gitlab_rails['send_user_confirmation_email'] = $send_confirmation_email
+
+{{#registry_enabled}}
+# Container Registry
+registry['enable'] = true
+registry_external_url 'http://registry.$hostname:5050'
+{{/registry_enabled}}
+
+{{#pages_enabled}}
+# GitLab Pages
+pages_external_url 'http://pages.$hostname'
+gitlab_pages['enable'] = true
+{{/pages_enabled}}

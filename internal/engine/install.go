@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -190,7 +192,79 @@ func stepValidateRequest(ctx *installContext) error {
 	if ctx.job.AppID == "" {
 		return fmt.Errorf("app_id is required")
 	}
+
+	// Validate user inputs against manifest rules
+	if err := validateInputs(ctx.manifest, ctx.job.Inputs); err != nil {
+		return err
+	}
+
 	ctx.info("Request validated for app %s", ctx.job.AppID)
+	return nil
+}
+
+// validateInputs checks user-supplied input values against manifest InputSpec rules.
+func validateInputs(manifest *catalog.AppManifest, inputs map[string]string) error {
+	for _, inp := range manifest.Inputs {
+		val, provided := inputs[inp.Key]
+
+		// Required check
+		if inp.Required && (!provided || val == "") {
+			return fmt.Errorf("input %q is required", inp.Key)
+		}
+
+		// Skip further validation if not provided or empty
+		if !provided || val == "" {
+			continue
+		}
+
+		v := inp.Validation
+		if v == nil {
+			continue
+		}
+
+		switch inp.Type {
+		case "number":
+			num, err := strconv.ParseFloat(val, 64)
+			if err != nil {
+				return fmt.Errorf("input %q: invalid number %q", inp.Key, val)
+			}
+			if v.Min != nil && num < *v.Min {
+				return fmt.Errorf("input %q: value %g is below minimum %g", inp.Key, num, *v.Min)
+			}
+			if v.Max != nil && num > *v.Max {
+				return fmt.Errorf("input %q: value %g exceeds maximum %g", inp.Key, num, *v.Max)
+			}
+		case "string", "secret":
+			if v.MinLength != nil && len(val) < *v.MinLength {
+				return fmt.Errorf("input %q: must be at least %d characters (got %d)", inp.Key, *v.MinLength, len(val))
+			}
+			if v.MaxLength != nil && len(val) > *v.MaxLength {
+				return fmt.Errorf("input %q: must be at most %d characters (got %d)", inp.Key, *v.MaxLength, len(val))
+			}
+			if v.Regex != "" {
+				re, err := regexp.Compile(v.Regex)
+				if err != nil {
+					return fmt.Errorf("input %q: invalid regex %q: %w", inp.Key, v.Regex, err)
+				}
+				if !re.MatchString(val) {
+					return fmt.Errorf("input %q: value does not match pattern %q", inp.Key, v.Regex)
+				}
+			}
+		}
+
+		if len(v.Enum) > 0 {
+			found := false
+			for _, e := range v.Enum {
+				if val == e {
+					found = true
+					break
+				}
+			}
+			if !found {
+				return fmt.Errorf("input %q: value %q is not one of the allowed options", inp.Key, val)
+			}
+		}
+	}
 	return nil
 }
 
