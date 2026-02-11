@@ -12,7 +12,7 @@ class Crawl4AIApp(BaseApp):
         headless = self.inputs.string("headless", "true")
 
         # Install system dependencies
-        self.apt_install(
+        self.pkg_install(
             "python3", "python3-venv", "python3-pip",
             "curl", "wget", "gnupg",
             "libnss3", "libnspr4", "libatk1.0-0", "libatk-bridge2.0-0",
@@ -30,8 +30,9 @@ class Crawl4AIApp(BaseApp):
         self.create_venv("/opt/crawl4ai/venv")
         self.pip_install("crawl4ai", "fastapi", "uvicorn", venv="/opt/crawl4ai/venv")
 
-        # Write the API server script
+        # Deploy server and playground files
         self.deploy_provision_file("server.py", "/opt/crawl4ai/server.py")
+        self.deploy_provision_file("playground.html", "/opt/crawl4ai/playground.html")
 
         # Set ownership before installing browsers so they land in the right cache
         self.chown("/opt/crawl4ai", "crawl4ai:crawl4ai", recursive=True)

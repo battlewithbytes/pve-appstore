@@ -317,7 +317,7 @@ func (d *DevStore) listFiles(dir, prefix string) []DevFile {
 	}
 	var files []DevFile
 	for _, e := range entries {
-		if strings.HasPrefix(e.Name(), ".") {
+		if isSkippable(e.Name()) {
 			continue
 		}
 		rel := filepath.Join(prefix, e.Name())
@@ -336,12 +336,83 @@ func (d *DevStore) listFiles(dir, prefix string) []DevFile {
 	return files
 }
 
+// Fork copies a catalog app directory into the dev store under a new ID.
+func (d *DevStore) Fork(newID, sourceDir string) error {
+	if !isValidID(newID) {
+		return fmt.Errorf("invalid app id: must be kebab-case")
+	}
+	destDir := filepath.Join(d.baseDir, newID)
+	if _, err := os.Stat(destDir); err == nil {
+		return fmt.Errorf("app %q already exists", newID)
+	}
+	if err := copyDir(sourceDir, destDir); err != nil {
+		os.RemoveAll(destDir) // clean up partial copy
+		return fmt.Errorf("copying app: %w", err)
+	}
+	// Update the ID in app.yml — use simple line replacement to preserve formatting
+	manifestPath := filepath.Join(destDir, "app.yml")
+	if data, err := os.ReadFile(manifestPath); err == nil {
+		lines := strings.Split(string(data), "\n")
+		for i, line := range lines {
+			if strings.HasPrefix(line, "id:") {
+				lines[i] = "id: " + newID
+				break
+			}
+		}
+		os.WriteFile(manifestPath, []byte(strings.Join(lines, "\n")), 0644)
+	}
+	return nil
+}
+
+// copyDir recursively copies src to dst, skipping dotfiles.
+func copyDir(src, dst string) error {
+	if err := os.MkdirAll(dst, 0755); err != nil {
+		return err
+	}
+	entries, err := os.ReadDir(src)
+	if err != nil {
+		return err
+	}
+	for _, e := range entries {
+		if isSkippable(e.Name()) {
+			continue
+		}
+		srcPath := filepath.Join(src, e.Name())
+		dstPath := filepath.Join(dst, e.Name())
+		if e.IsDir() {
+			if err := copyDir(srcPath, dstPath); err != nil {
+				return err
+			}
+		} else {
+			data, err := os.ReadFile(srcPath)
+			if err != nil {
+				return err
+			}
+			if err := os.WriteFile(dstPath, data, 0644); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
 // EnsureIcon writes the default icon.png if one doesn't already exist.
 func (d *DevStore) EnsureIcon(id string) {
 	iconPath := filepath.Join(d.baseDir, id, "icon.png")
 	if _, err := os.Stat(iconPath); os.IsNotExist(err) {
 		os.WriteFile(iconPath, defaultIconPNG, 0644)
 	}
+}
+
+// isSkippable returns true for files/dirs that should be excluded from copies and listings.
+func isSkippable(name string) bool {
+	if strings.HasPrefix(name, ".") {
+		return true
+	}
+	if name == "__pycache__" || strings.HasSuffix(name, ".pyc") {
+		return true
+	}
+	return false
 }
 
 func isValidID(id string) bool {

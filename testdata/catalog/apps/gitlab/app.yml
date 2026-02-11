@@ -19,12 +19,12 @@ tags:
   - ci-cd
   - devops
   - repository
-icon: https://about.gitlab.com/images/press/logo/png/gitlab-icon-rgb.png
 homepage: https://about.gitlab.com
 license: MIT
 maintainers:
   - PVE App Store
 
+official: true
 lxc:
   ostemplate: ubuntu-24.04
   defaults:

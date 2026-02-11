@@ -4,12 +4,54 @@ import { EditorState, Compartment } from '@codemirror/state'
 import { yaml } from '@codemirror/lang-yaml'
 import { python } from '@codemirror/lang-python'
 import { markdown } from '@codemirror/lang-markdown'
+import { html } from '@codemirror/lang-html'
 import { oneDark } from '@codemirror/theme-one-dark'
 import { defaultKeymap, indentWithTab, history, historyKeymap } from '@codemirror/commands'
 import { autocompletion } from '@codemirror/autocomplete'
 import type { CompletionContext, CompletionResult } from '@codemirror/autocomplete'
-import { syntaxHighlighting, defaultHighlightStyle, indentOnInput, bracketMatching, foldGutter } from '@codemirror/language'
+import { syntaxHighlighting, defaultHighlightStyle, indentOnInput, bracketMatching, foldGutter, foldKeymap, foldService } from '@codemirror/language'
 import { searchKeymap, highlightSelectionMatches } from '@codemirror/search'
+
+// Fold multi-line bracket pairs: ( ... ), [ ... ], { ... }
+const bracketFold = foldService.of((state, lineStart) => {
+  const line = state.doc.lineAt(lineStart)
+  const text = line.text
+  // Find last unmatched opening bracket on this line
+  const openers = '([{'
+  const closers = ')]}'
+  let stack: { char: string; pos: number }[] = []
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i]
+    const oi = openers.indexOf(ch)
+    if (oi >= 0) stack.push({ char: closers[oi], pos: line.from + i })
+    const ci = closers.indexOf(ch)
+    if (ci >= 0) {
+      // Pop matching opener
+      for (let j = stack.length - 1; j >= 0; j--) {
+        if (stack[j].char === ch) { stack.splice(j, 1); break }
+      }
+    }
+  }
+  if (stack.length === 0) return null
+  // Use the first unmatched opener
+  const open = stack[0]
+  const closer = open.char
+  // Scan forward to find the matching close bracket
+  let depth = 1
+  for (let pos = open.pos + 1; pos < state.doc.length && depth > 0; pos++) {
+    const ch = state.doc.sliceString(pos, pos + 1)
+    if (ch === text[open.pos - line.from]) depth++ // same opener
+    if (ch === closer) depth--
+    if (depth === 0) {
+      const closeLine = state.doc.lineAt(pos)
+      // Only fold if the close bracket is on a different line
+      if (closeLine.number > line.number) {
+        return { from: open.pos + 1, to: pos }
+      }
+    }
+  }
+  return null
+})
 
 // Python SDK completions
 const sdkMethods = [
@@ -59,6 +101,7 @@ function getLangExtension(filename: string) {
   if (filename.endsWith('.yml') || filename.endsWith('.yaml')) return yaml()
   if (filename.endsWith('.py')) return python()
   if (filename.endsWith('.md')) return markdown()
+  if (filename.endsWith('.html') || filename.endsWith('.tmpl')) return html()
   return []
 }
 
@@ -79,6 +122,15 @@ const appTheme = EditorView.theme({
     color: '#555',
     border: 'none',
     borderRight: '1px solid #1a1a1a',
+  },
+  '.cm-foldGutter .cm-gutterElement': {
+    color: '#888',
+    cursor: 'pointer',
+    padding: '0 4px',
+    fontSize: '14px',
+  },
+  '.cm-foldGutter .cm-gutterElement:hover': {
+    color: '#00FF9D',
   },
   '.cm-activeLineGutter': {
     backgroundColor: '#111',
@@ -134,6 +186,7 @@ export function CodeEditor({ value, onChange, filename, onSave }: CodeEditorProp
         indentOnInput(),
         bracketMatching(),
         foldGutter(),
+        bracketFold,
         history(),
         highlightSelectionMatches(),
         syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
@@ -144,6 +197,7 @@ export function CodeEditor({ value, onChange, filename, onSave }: CodeEditorProp
           ...defaultKeymap,
           ...historyKeymap,
           ...searchKeymap,
+          ...foldKeymap,
           indentWithTab,
           {
             key: 'Mod-s',

@@ -137,6 +137,7 @@ func New(cfg *config.Config, cat *catalog.Catalog, eng *engine.Engine, spaFS fs.
 	// API routes — developer mode
 	mux.HandleFunc("GET /api/dev/apps", s.withDevMode(s.withAuth(s.handleDevListApps)))
 	mux.HandleFunc("POST /api/dev/apps", s.withDevMode(s.withAuth(s.handleDevCreateApp)))
+	mux.HandleFunc("POST /api/dev/fork", s.withDevMode(s.withAuth(s.handleDevForkApp)))
 	mux.HandleFunc("GET /api/dev/apps/{id}", s.withDevMode(s.withAuth(s.handleDevGetApp)))
 	mux.HandleFunc("PUT /api/dev/apps/{id}/manifest", s.withDevMode(s.withAuth(s.handleDevSaveManifest)))
 	mux.HandleFunc("PUT /api/dev/apps/{id}/script", s.withDevMode(s.withAuth(s.handleDevSaveScript)))

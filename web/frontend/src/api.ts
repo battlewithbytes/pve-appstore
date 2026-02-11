@@ -247,6 +247,13 @@ export const api = {
       body: JSON.stringify({ id, template }),
     }),
 
+  devForkApp: (sourceId: string, newId: string) =>
+    fetchJSON<DevApp>(`${BASE}/dev/fork`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ source_id: sourceId, new_id: newId }),
+    }),
+
   devGetApp: (id: string) => fetchJSON<DevApp>(`${BASE}/dev/apps/${id}`),
 
   devSaveManifest: (id: string, content: string) =>

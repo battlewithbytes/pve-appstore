@@ -1,0 +1,120 @@
+id: resilio-sync
+name: Resilio Sync
+description: Fast peer-to-peer file synchronization powered by BitTorrent technology. Sync files across devices without cloud storage.
+overview: |
+  Resilio Sync (formerly BitTorrent Sync) is a fast, reliable file synchronization
+  tool that uses peer-to-peer technology to transfer files directly between devices.
+  Unlike cloud-based sync services, your data never passes through a third-party server.
+
+  Features include selective sync, encrypted folders, bandwidth throttling, and a
+  web-based management UI. It supports one-way and two-way sync between unlimited
+  devices with no file size limits.
+
+  This container runs the Resilio Sync agent with a web UI for managing sync folders,
+  peers, and settings.
+version: "1.0.0"
+categories:
+  - utilities
+  - backup
+tags:
+  - sync
+  - p2p
+  - file-sharing
+  - backup
+homepage: https://www.resilio.com/individuals/
+license: Proprietary
+maintainers:
+  - PVE App Store
+
+official: true
+lxc:
+  ostemplate: debian-12
+  defaults:
+    unprivileged: true
+    cores: 2
+    memory_mb: 1024
+    disk_gb: 8
+    onboot: true
+
+inputs:
+  - key: bind_address
+    label: Bind Address
+    type: string
+    default: "0.0.0.0"
+    required: false
+    reconfigurable: true
+    group: Network
+    description: Network address the Web UI binds to. Use 0.0.0.0 to accept connections from any host, or 127.0.0.1 for local only.
+    help: "0.0.0.0 = all interfaces, 127.0.0.1 = localhost only"
+
+  - key: webui_port
+    label: Web UI Port
+    type: number
+    default: 8888
+    required: true
+    reconfigurable: true
+    group: Network
+    validation:
+      min: 1024
+      max: 65535
+    description: Port for the Resilio Sync web interface.
+    help: "Default: 8888"
+
+  - key: listening_port
+    label: Listening Port
+    type: number
+    default: 55555
+    required: true
+    reconfigurable: true
+    group: Network
+    validation:
+      min: 1024
+      max: 65535
+    description: Port used for peer-to-peer sync connections.
+    help: "Default: 55555"
+
+volumes:
+  - name: config
+    type: volume
+    mount_path: /config
+    size_gb: 1
+    label: Configuration
+    required: true
+    description: App configuration files and sync metadata
+
+  - name: sync
+    type: volume
+    mount_path: /sync
+    size_gb: 50
+    label: Sync Data
+    required: true
+    description: Synchronized file data
+
+provisioning:
+  script: provision/install.py
+  timeout_sec: 600
+
+permissions:
+  packages:
+    - resilio-sync
+  apt_repos:
+    - "https://linux-packages.resilio.com/resilio-sync/deb"
+  urls:
+    - "https://linux-packages.resilio.com/*"
+  paths:
+    - /config
+    - /sync
+    - /etc/resilio-sync/
+    - /etc/apt/sources.list.d/
+    - /usr/share/keyrings/
+    - /etc/systemd/system/
+  services:
+    - resilio-sync
+
+outputs:
+  - key: url
+    label: Web UI
+    value: "http://{{ip}}:{{webui_port}}"
+  - key: sync_port
+    label: Sync Port
+    value: "{{listening_port}}"

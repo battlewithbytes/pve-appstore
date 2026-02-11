@@ -58,6 +58,45 @@ func (s *Server) handleDevCreateApp(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, app)
 }
 
+func (s *Server) handleDevForkApp(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		SourceID string `json:"source_id"` // catalog app to fork from
+		NewID    string `json:"new_id"`    // new dev app ID
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if req.SourceID == "" || req.NewID == "" {
+		writeError(w, http.StatusBadRequest, "source_id and new_id are required")
+		return
+	}
+
+	// Look up the catalog app to get its directory
+	catApp, ok := s.catalog.Get(req.SourceID)
+	if !ok {
+		writeError(w, http.StatusNotFound, fmt.Sprintf("catalog app %q not found", req.SourceID))
+		return
+	}
+	if catApp.DirPath == "" {
+		writeError(w, http.StatusBadRequest, "catalog app has no source directory")
+		return
+	}
+
+	if err := s.devStore.Fork(req.NewID, catApp.DirPath); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	app, err := s.devStore.Get(req.NewID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusCreated, app)
+}
+
 func (s *Server) handleDevGetApp(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	app, err := s.devStore.Get(id)

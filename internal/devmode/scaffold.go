@@ -95,8 +95,23 @@ lxc:
     onboot: true
 `, osTemplate))
 
+	// Build set of ports for dedup against env vars
+	portSet := make(map[string]bool, len(df.Ports))
+	for _, p := range df.Ports {
+		portSet[p] = true
+	}
+
+	// Filter env vars that duplicate a port input (e.g. ENV PORT=4999 when EXPOSE 4999 exists)
+	var filteredEnvVars []EnvVar
+	for _, ev := range df.EnvVars {
+		if portSet[ev.Default] {
+			continue // already covered by port input
+		}
+		filteredEnvVars = append(filteredEnvVars, ev)
+	}
+
 	// Inputs from ports + env vars
-	if len(portInputs) > 0 || len(df.EnvVars) > 0 {
+	if len(portInputs) > 0 || len(filteredEnvVars) > 0 {
 		sb.WriteString("\ninputs:\n")
 		for _, p := range portInputs {
 			sb.WriteString(fmt.Sprintf(`  - key: %s
@@ -111,7 +126,7 @@ lxc:
     help: "Container port %s"
 `, p.key, p.port, p.defaultVal, p.port))
 		}
-		for _, ev := range df.EnvVars {
+		for _, ev := range filteredEnvVars {
 			key := toSnakeCase(ev.Key)
 			label := envKeyToLabel(ev.Key)
 			sb.WriteString(fmt.Sprintf(`  - key: %s
@@ -279,7 +294,7 @@ provisioning:
 		docstring:   fmt.Sprintf("Provisioning script for %s.\nConverted from Dockerfile analysis.", name),
 		df:          df,
 		portInputs:  portInputs,
-		envInputs:   df.EnvVars,
+		envInputs:   filteredEnvVars,
 		volumePaths: paths,
 		mainService: mainService,
 	})
@@ -771,7 +786,7 @@ func isUtilityPackage(pkg string) bool {
 		"shadow", "tzdata", "s6-overlay", "logrotate", "patch",
 		"file", "findutils", "ncurses-terminfo-base", "ncurses-terminfo",
 		"sed", "gawk", "less", "procps", "net-tools", "iproute2",
-		"jq", "nano", "vim", "tree", "hostname", "iputils",
+		"jq", "nano", "vim", "tree", "hostname", "iputils", "iputils-ping",
 		// Alpine base packages
 		"alpine-baselayout", "alpine-keys", "apk-tools", "musl", "musl-utils",
 		"busybox-extras", "scanelf", "ssl_client", "alpine-release":

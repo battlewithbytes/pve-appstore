@@ -71,7 +71,7 @@ function App() {
   if (jobMatch) content = <JobView id={jobMatch[1]} />
   else if (installMatch) content = <InstallDetailView id={installMatch[1]} requireAuth={requireAuth} />
   else if (stackMatch) content = <StackDetailView id={stackMatch[1]} requireAuth={requireAuth} />
-  else if (appMatch) content = <AppDetailView id={appMatch[1]} requireAuth={requireAuth} />
+  else if (appMatch) content = <AppDetailView id={appMatch[1]} requireAuth={requireAuth} devMode={devMode} />
   else if (isInstalls) content = <InstallsList requireAuth={requireAuth} />
   else if (isStacks) content = <StacksList requireAuth={requireAuth} />
   else if (isCreateStack) content = <StackCreateWizard requireAuth={requireAuth} />
@@ -222,12 +222,51 @@ function groupInputs(inputs: AppInput[]): Record<string, AppInput[]> {
   return groups
 }
 
-function AppDetailView({ id, requireAuth }: { id: string; requireAuth: (cb: () => void) => void }) {
+function ForkDialog({ sourceId, sourceName, onClose }: { sourceId: string; sourceName: string; onClose: () => void }) {
+  const [newId, setNewId] = useState(sourceId + '-custom')
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState('')
+
+  const isValid = /^[a-z0-9]+(-[a-z0-9]+)*$/.test(newId) && newId.length <= 64
+
+  const handleFork = async () => {
+    setLoading(true); setError('')
+    try {
+      await api.devForkApp(sourceId, newId)
+      window.location.hash = `#/dev/${newId}`
+      onClose()
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : 'Fork failed')
+    } finally { setLoading(false) }
+  }
+
+  return (
+    <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-[200]">
+      <div className="bg-bg-card border border-border rounded-xl p-8 w-full max-w-[420px]">
+        <h2 className="text-lg font-bold text-text-primary mb-2 font-mono">Fork {sourceName}</h2>
+        <p className="text-sm text-text-secondary mb-4">Copy this app into Developer Mode so you can customize it.</p>
+        <label className="block text-xs text-text-muted font-mono mb-1">New App ID</label>
+        <input value={newId} onChange={e => setNewId(e.target.value)} className="w-full bg-bg-primary border border-border rounded px-3 py-2 text-sm font-mono text-text-primary focus:border-primary focus:outline-none" placeholder="my-custom-app" />
+        {!isValid && newId && <p className="text-xs text-status-stopped mt-1">Must be lowercase kebab-case (a-z, 0-9, hyphens)</p>}
+        {error && <p className="text-xs text-status-stopped mt-2">{error}</p>}
+        <div className="flex gap-3 mt-5 justify-end">
+          <button onClick={onClose} className="px-5 py-2.5 text-sm font-semibold border border-border rounded-lg cursor-pointer text-text-secondary bg-transparent hover:border-text-secondary transition-colors font-mono">Cancel</button>
+          <button onClick={handleFork} disabled={!isValid || loading} className="px-5 py-2.5 text-sm font-semibold border-none rounded-lg cursor-pointer bg-yellow-400 text-bg-primary hover:shadow-[0_0_20px_rgba(255,200,0,0.3)] transition-all disabled:opacity-50 font-mono">
+            {loading ? 'Forking...' : 'Fork to Dev'}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function AppDetailView({ id, requireAuth, devMode }: { id: string; requireAuth: (cb: () => void) => void; devMode: boolean }) {
   const [app, setApp] = useState<AppDetail | null>(null)
   const [readme, setReadme] = useState('')
   const [error, setError] = useState('')
   const [showInstall, setShowInstall] = useState(false)
   const [appStatus, setAppStatus] = useState<AppStatusResponse | null>(null)
+  const [showFork, setShowFork] = useState(false)
 
   useEffect(() => {
     setApp(null); setError(''); setAppStatus(null)
@@ -260,14 +299,19 @@ function AppDetailView({ id, requireAuth }: { id: string; requireAuth: (cb: () =
             {app.homepage && <a href={app.homepage} target="_blank" rel="noreferrer" className="text-primary hover:underline">{'>'}homepage</a>}
           </div>
         </div>
-        {appStatus?.installed ? (
-          <a href={`#/install/${appStatus.install_id}`} className="px-6 py-2.5 bg-bg-secondary border border-primary text-primary font-semibold font-mono uppercase text-sm rounded-lg hover:bg-primary/10 transition-all no-underline">Installed</a>
-        ) : appStatus?.job_active ? (
-          <a href={`#/job/${appStatus.job_id}`} className="px-6 py-2.5 bg-bg-secondary border border-status-warning text-status-warning font-semibold font-mono uppercase text-sm rounded-lg hover:bg-status-warning/10 transition-all no-underline">Installing...</a>
-        ) : (
-          <button onClick={() => requireAuth(() => setShowInstall(true))} className="px-6 py-2.5 bg-primary text-bg-primary font-semibold font-mono uppercase text-sm rounded-lg hover:shadow-[0_0_20px_rgba(0,255,157,0.3)] transition-all cursor-pointer border-none">Install</button>
-        )}
+        <div className="flex gap-2 items-center shrink-0">
+          {appStatus?.installed ? (
+            <a href={`#/install/${appStatus.install_id}`} className="px-6 py-2.5 bg-bg-secondary border border-primary text-primary font-semibold font-mono uppercase text-sm rounded-lg hover:bg-primary/10 transition-all no-underline">Installed</a>
+          ) : appStatus?.job_active ? (
+            <a href={`#/job/${appStatus.job_id}`} className="px-6 py-2.5 bg-bg-secondary border border-status-warning text-status-warning font-semibold font-mono uppercase text-sm rounded-lg hover:bg-status-warning/10 transition-all no-underline">Installing...</a>
+          ) : (
+            <button onClick={() => requireAuth(() => setShowInstall(true))} className="px-6 py-2.5 bg-primary text-bg-primary font-semibold font-mono uppercase text-sm rounded-lg hover:shadow-[0_0_20px_rgba(0,255,157,0.3)] transition-all cursor-pointer border-none">Install</button>
+          )}
+          {devMode && <button onClick={() => requireAuth(() => setShowFork(true))} className="px-4 py-2.5 bg-bg-secondary border border-yellow-400 text-yellow-400 font-semibold font-mono uppercase text-sm rounded-lg hover:bg-yellow-400/10 transition-all cursor-pointer">Fork</button>}
+        </div>
       </div>
+
+      {showFork && <ForkDialog sourceId={app.id} sourceName={app.name} onClose={() => setShowFork(false)} />}
 
       {app.overview && (
         <div className="mt-5 bg-bg-card border border-border rounded-lg p-6">
