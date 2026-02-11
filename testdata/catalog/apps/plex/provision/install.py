@@ -2,17 +2,12 @@
 
 from appstore import BaseApp, run
 
-PREFS_TEMPLATE = """\
-<?xml version="1.0" encoding="utf-8"?>
-<Preferences FriendlyName="$friendly_name" ManualPortMappingPort="$http_port" TranscoderTempDirectory="$transcode_path"$claim_attr/>
-"""
-
 
 class PlexApp(BaseApp):
     def install(self):
         media_path = self.inputs.string("media_path", "/mnt/media")
         transcode_path = self.inputs.string("transcode_path", "/tmp/plex-transcode")
-        http_port = self.inputs.string("http_port", "32400")
+        http_port = self.inputs.integer("http_port", 32400)
         friendly_name = self.inputs.string("friendly_name", "Proxmox Plex")
         claim_token = self.inputs.string("claim_token", "")
 
@@ -36,12 +31,10 @@ class PlexApp(BaseApp):
             claim_attr = f' ProcessedMachineIdentifier="" PlexOnlineToken="{claim_token}"'
             self.log.info("Claim token provided — server will be linked to your Plex account")
 
-        # Write Plex preferences
+        # Write Plex preferences from template
         prefs_dir = "/var/lib/plexmediaserver/Library/Application Support/Plex Media Server"
         self.create_dir(prefs_dir)
-        self.write_config(
-            f"{prefs_dir}/Preferences.xml",
-            PREFS_TEMPLATE,
+        self.render_template("Preferences.xml", f"{prefs_dir}/Preferences.xml",
             friendly_name=friendly_name,
             http_port=http_port,
             transcode_path=transcode_path,

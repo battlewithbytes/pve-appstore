@@ -1,0 +1,6 @@
+homeassistant:
+  name: Home
+  time_zone: $timezone
+
+http:
+  server_port: $http_port

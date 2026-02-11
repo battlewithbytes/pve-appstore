@@ -156,8 +156,8 @@ func TestHealthEndpoint(t *testing.T) {
 		t.Errorf("node = %v, want %q", body["node"], "testnode")
 	}
 	count := body["app_count"].(float64)
-	if count != 9 {
-		t.Errorf("app_count = %v, want 9", count)
+	if count != 12 {
+		t.Errorf("app_count = %v, want 12", count)
 	}
 }
 
@@ -173,12 +173,12 @@ func TestListAppsEndpoint(t *testing.T) {
 
 	body := decodeJSON(t, w)
 	total := body["total"].(float64)
-	if total != 9 {
-		t.Errorf("total = %v, want 9", total)
+	if total != 12 {
+		t.Errorf("total = %v, want 12", total)
 	}
 	apps := body["apps"].([]interface{})
-	if len(apps) != 9 {
-		t.Errorf("apps count = %d, want 9", len(apps))
+	if len(apps) != 12 {
+		t.Errorf("apps count = %d, want 12", len(apps))
 	}
 }
 

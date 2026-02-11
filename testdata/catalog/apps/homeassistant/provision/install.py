@@ -2,27 +2,11 @@
 
 from appstore import BaseApp, run
 
-HA_CONFIG = """\
-homeassistant:
-  name: Home
-  time_zone: $timezone
-
-http:
-  server_port: $http_port
-"""
-
-MQTT_HA_CONFIG = """\
-
-mqtt:
-  broker: 127.0.0.1
-  port: 1883
-"""
-
 
 class HomeAssistantApp(BaseApp):
     def install(self):
         timezone = self.inputs.string("timezone", "America/New_York")
-        http_port = self.inputs.string("http_port", "8123")
+        http_port = self.inputs.integer("http_port", 8123)
         config_path = self.inputs.string("config_path", "/opt/homeassistant/config")
         enable_mqtt = self.inputs.boolean("enable_mqtt", False)
 
@@ -48,9 +32,7 @@ class HomeAssistantApp(BaseApp):
         self.pip_install("homeassistant", venv="/opt/homeassistant/venv")
 
         # Write Home Assistant configuration
-        self.write_config(
-            f"{config_path}/configuration.yaml",
-            HA_CONFIG,
+        self.render_template("configuration.yaml", f"{config_path}/configuration.yaml",
             timezone=timezone,
             http_port=http_port,
         )
@@ -60,8 +42,9 @@ class HomeAssistantApp(BaseApp):
             self.apt_install("mosquitto", "mosquitto-clients")
             self.enable_service("mosquitto")
             # Append MQTT config to HA configuration
+            mqtt_snippet = self.provision_file("mqtt.yaml")
             with open(f"{config_path}/configuration.yaml", "a") as f:
-                f.write(MQTT_HA_CONFIG)
+                f.write(mqtt_snippet)
             self.log.info("MQTT broker installed and running on port 1883")
 
         # Set ownership

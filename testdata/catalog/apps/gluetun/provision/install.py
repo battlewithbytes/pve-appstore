@@ -9,13 +9,6 @@ import os
 
 from appstore import BaseApp, run
 
-START_SCRIPT = """\
-#!/bin/bash
-set -a
-source /etc/gluetun/env
-exec /gluetun-entrypoint
-"""
-
 # Environment variables that must not be overridden via extra_env.
 # These protect the kill switch, DNS leak prevention, and firewall integrity.
 BLOCKED_ENV_KEYS = frozenset({
@@ -45,8 +38,7 @@ class GluetunApp(BaseApp):
         env["VPN_TYPE"] = self.inputs.string("vpn_type", "wireguard")
 
         # Port forwarding
-        port_fwd = self.inputs.string("vpn_port_forwarding", "false")
-        if port_fwd.lower() in ("true", "on", "1", "yes"):
+        if self.inputs.boolean("vpn_port_forwarding", False):
             env["VPN_PORT_FORWARDING"] = "on"
 
         # OpenVPN auth
@@ -73,17 +65,15 @@ class GluetunApp(BaseApp):
                 env[evar] = val
 
         # Proxy settings
-        httpproxy = self.inputs.string("httpproxy", "true")
-        httpproxy_port = self.inputs.string("httpproxy_port", "8888")
-        if httpproxy.lower() in ("true", "on", "1", "yes"):
+        httpproxy_port = self.inputs.integer("httpproxy_port", 8888)
+        if self.inputs.boolean("httpproxy", True):
             env["HTTPPROXY"] = "on"
             env["HTTPPROXY_LISTENING_ADDRESS"] = f":{httpproxy_port}"
         else:
             env["HTTPPROXY"] = "off"
 
-        shadowsocks = self.inputs.string("shadowsocks", "false")
-        shadowsocks_port = self.inputs.string("shadowsocks_port", "8388")
-        if shadowsocks.lower() in ("true", "on", "1", "yes"):
+        shadowsocks_port = self.inputs.integer("shadowsocks_port", 8388)
+        if self.inputs.boolean("shadowsocks", False):
             env["SHADOWSOCKS"] = "on"
             env["SHADOWSOCKS_LISTENING_ADDRESS"] = f":{shadowsocks_port}"
         else:
@@ -150,8 +140,7 @@ class GluetunApp(BaseApp):
         self.write_env_file("/etc/gluetun/env", self._build_env(), mode="0600")
 
         # Install start script
-        self.write_config("/etc/gluetun/start.sh", START_SCRIPT)
-        self.run_command(["chmod", "755", "/etc/gluetun/start.sh"])
+        self.deploy_provision_file("start.sh", "/etc/gluetun/start.sh", mode="0755")
 
         # Create and start Gluetun service
         self.create_service("gluetun",

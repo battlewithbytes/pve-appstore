@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<EncodingOptions>
+  <HardwareAccelerationType>nvenc</HardwareAccelerationType>
+  <EnableHardwareEncoding>true</EnableHardwareEncoding>
+  <EnableTonemapping>true</EnableTonemapping>
+</EncodingOptions>

@@ -5,11 +5,11 @@ from appstore import BaseApp, run
 
 class Crawl4AIApp(BaseApp):
     def install(self):
-        api_port = self.inputs.string("api_port", "11235")
+        api_port = self.inputs.integer("api_port", 11235)
         bind_address = self.inputs.string("bind_address", "0.0.0.0")
-        max_concurrent = self.inputs.string("max_concurrent", "5")
+        max_concurrent = self.inputs.integer("max_concurrent", 5)
         cache_dir = self.inputs.string("cache_dir", "/var/lib/crawl4ai/cache")
-        headless = self.inputs.string("headless", "true")
+        headless = self.inputs.boolean("headless", True)
 
         # Install system dependencies
         self.pkg_install(
@@ -50,11 +50,11 @@ class Crawl4AIApp(BaseApp):
             user="crawl4ai",
             working_directory="/opt/crawl4ai",
             environment={
-                "CRAWL4AI_API_PORT": api_port,
+                "CRAWL4AI_API_PORT": str(api_port),
                 "CRAWL4AI_HOST": bind_address,
-                "CRAWL4AI_MAX_CONCURRENT": max_concurrent,
+                "CRAWL4AI_MAX_CONCURRENT": str(max_concurrent),
                 "CRAWL4AI_CACHE_DIR": cache_dir,
-                "CRAWL4AI_HEADLESS": headless,
+                "CRAWL4AI_HEADLESS": str(headless).lower(),
             },
             restart="on-failure",
             restart_sec=5,

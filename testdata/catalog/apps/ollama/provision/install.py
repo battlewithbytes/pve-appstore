@@ -4,20 +4,6 @@ import os
 
 from appstore import BaseApp, run
 
-SYSTEMD_OVERRIDE = """\
-[Service]
-Environment="OLLAMA_HOST=$bind_address:$api_port"
-Environment="OLLAMA_MODELS=$models_path"
-Environment="OLLAMA_NUM_CTX=$num_ctx"
-"""
-
-# Additional env vars for NVIDIA GPU support in LXC
-SYSTEMD_NVIDIA_SNIPPET = """\
-Environment="NVIDIA_VISIBLE_DEVICES=all"
-Environment="NVIDIA_DRIVER_CAPABILITIES=compute,utility"
-Environment="LD_LIBRARY_PATH=/usr/lib/nvidia"
-"""
-
 
 class OllamaApp(BaseApp):
     def _detect_gpu(self):
@@ -32,10 +18,10 @@ class OllamaApp(BaseApp):
         return None
 
     def install(self):
-        api_port = self.inputs.string("api_port", "11434")
+        api_port = self.inputs.integer("api_port", 11434)
         bind_address = self.inputs.string("bind_address", "0.0.0.0")
         models_path = self.inputs.string("models_path", "/usr/share/ollama/.ollama/models")
-        num_ctx = self.inputs.string("num_ctx", "2048")
+        num_ctx = self.inputs.integer("num_ctx", 2048)
         default_model = self.inputs.string("model", "")
 
         # Detect GPU before install
@@ -44,11 +30,11 @@ class OllamaApp(BaseApp):
         # Install Ollama via upstream installer script
         self.run_installer_script("https://ollama.ai/install.sh")
 
-        # Build systemd override config
-        override = SYSTEMD_OVERRIDE
+        # Build systemd override config from template
+        override = self.provision_file("systemd-override.conf")
         if gpu_type == "nvidia":
             self.log.info("Configuring NVIDIA GPU environment for Ollama")
-            override += SYSTEMD_NVIDIA_SNIPPET
+            override += self.provision_file("nvidia-env.conf")
 
         # Configure environment overrides
         self.create_dir("/etc/systemd/system/ollama.service.d")

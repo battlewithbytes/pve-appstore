@@ -178,12 +178,15 @@ inputs:
     help: "Default port: 8888"
   - key: httpproxy_port
     label: HTTP Proxy Port
-    type: string
-    default: "8888"
+    type: number
+    default: 8888
     required: false
     group: Proxy
     description: Port for the built-in HTTP proxy server.
     help: Must be between 1024-65535
+    validation:
+      min: 1024
+      max: 65535
   - key: shadowsocks
     label: Enable Shadowsocks
     type: boolean
@@ -194,22 +197,28 @@ inputs:
     help: "Default port: 8388"
   - key: shadowsocks_port
     label: Shadowsocks Port
-    type: string
-    default: "8388"
+    type: number
+    default: 8388
     required: false
     group: Proxy
     description: Port for the built-in Shadowsocks server.
     help: Must be between 1024-65535
+    validation:
+      min: 1024
+      max: 65535
 
   # --- Status ---
   - key: status_port
     label: Status Page Port
-    type: string
-    default: "8001"
+    type: number
+    default: 8001
     required: false
     group: Status
     description: Port for the VPN status page showing your public IP, country, and connection status.
     help: Visit http://<container-ip>:8001 to verify VPN is working
+    validation:
+      min: 1024
+      max: 65535
 
   # --- Advanced ---
   - key: timezone

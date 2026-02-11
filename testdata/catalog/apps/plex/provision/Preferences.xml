@@ -1,0 +1,2 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Preferences FriendlyName="$friendly_name" ManualPortMappingPort="$http_port" TranscoderTempDirectory="$transcode_path"$claim_attr/>

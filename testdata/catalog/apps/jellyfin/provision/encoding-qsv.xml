@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<EncodingOptions>
+  <HardwareAccelerationType>vaapi</HardwareAccelerationType>
+  <VaapiDevice>/dev/dri/renderD128</VaapiDevice>
+  <EnableHardwareEncoding>true</EnableHardwareEncoding>
+  <EnableTonemapping>true</EnableTonemapping>
+</EncodingOptions>
