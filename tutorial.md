@@ -19,6 +19,8 @@ apps/my-page/
   app.yml               # App manifest (required)
   provision/
     install.py          # Install script (required)
+    index.html          # Template files (recommended)
+    default.conf        # Keep config as separate files
   icon.png              # App icon (optional, displayed in the web UI)
   README.md             # Detailed docs (optional)
 ```
@@ -26,6 +28,8 @@ apps/my-page/
 ```bash
 mkdir -p apps/my-page/provision
 ```
+
+> **Tip:** You can also use **Developer Mode** in the web UI to create apps interactively — it provides a code editor, validation, and deploy/test workflow without touching the filesystem directly. See [Developer Mode](#developer-mode) below.
 
 ### App Icon
 
@@ -137,10 +141,10 @@ gpu:
 
 | Key | What it allows |
 |-----|---------------|
-| `packages` | APT packages to install (supports glob: `lib*`) |
+| `packages` | APT/apk packages to install (supports glob: `lib*`) |
 | `pip` | pip packages to install in a venv |
 | `paths` | Filesystem paths your script can write to (prefix match) |
-| `services` | systemd services to enable/start/restart |
+| `services` | systemd/OpenRC services to enable/start/restart |
 | `users` | System users to create |
 | `commands` | Binaries your script can run directly |
 | `urls` | URLs your script can download from (glob match) |
@@ -153,16 +157,13 @@ If your script tries to do something not in its permissions, it fails immediatel
 
 **`gpu`** — Set `supported: [intel]`, `[nvidia]`, or `[intel, nvidia]` if your app benefits from GPU passthrough. Use `required: false` unless the app is unusable without a GPU.
 
-## Step 3: Write the Install Script (install.py)
+## Step 3: Write Template Files
 
-Create `apps/my-page/provision/install.py`:
+**Keep configuration files as separate template files in `provision/`** — don't embed multi-line strings as constants in your Python code. This makes templates easier to read, edit, and diff.
 
-```python
-"""My Page — a simple static website."""
+Create `apps/my-page/provision/index.html`:
 
-from appstore import BaseApp, run
-
-HTML_TEMPLATE = """\
+```html
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -191,9 +192,11 @@ HTML_TEMPLATE = """\
   </div>
 </body>
 </html>
-"""
+```
 
-NGINX_CONF = """\
+Create `apps/my-page/provision/default.conf`:
+
+```nginx
 server {
     listen $http_port default_server;
     listen [::]:$http_port default_server;
@@ -203,32 +206,45 @@ server {
         try_files $$uri $$uri/ =404;
     }
 }
-"""
+```
+
+### Template Syntax
+
+Templates use Python's `string.Template` syntax with some extensions:
+- `$variable` or `${variable}` — substituted with keyword arguments
+- `$$` — literal `$` character (needed for Nginx's `$uri`, shell variables, etc.)
+- `{{#key}} ... {{/key}}` — conditional block (included when key is truthy)
+- `{{^key}} ... {{/key}}` — inverted block (included when key is falsy)
+
+## Step 4: Write the Install Script (install.py)
+
+Create `apps/my-page/provision/install.py`:
+
+```python
+"""My Page — a simple static website."""
+
+from appstore import BaseApp, run
 
 
 class MyPageApp(BaseApp):
     def install(self):
         # 1. Install Nginx
-        self.apt_install("nginx")
+        self.pkg_install("nginx")
 
-        # 2. Read user inputs
+        # 2. Read user inputs (use typed accessors matching the manifest type)
         title = self.inputs.string("title", "My Page")
         message = self.inputs.string("message", "Hello from Proxmox!")
-        http_port = self.inputs.string("http_port", "80")
+        http_port = self.inputs.integer("http_port", 80)
 
-        # 3. Write the HTML page
-        self.write_config(
-            "/var/www/html/index.html",
-            HTML_TEMPLATE,
+        # 3. Write the HTML page from template
+        self.render_template("index.html", "/var/www/html/index.html",
             title=title,
             message=message,
         )
 
         # 4. Configure Nginx port (if not default)
-        if http_port != "80":
-            self.write_config(
-                "/etc/nginx/sites-available/default",
-                NGINX_CONF,
+        if http_port != 80:
+            self.render_template("default.conf", "/etc/nginx/sites-available/default",
                 http_port=http_port,
             )
 
@@ -252,19 +268,40 @@ The [SDK](https://github.com/battlewithbytes/pve-appstore/tree/main/sdk/python/a
 
 ### Key Concepts
 
-**Reading inputs** — Use typed accessors on `self.inputs`:
+**Reading inputs** — Use typed accessors on `self.inputs` that match your manifest's `type:` field:
+
 ```python
-name = self.inputs.string("key", "default")
-port = self.inputs.integer("port", 8080)
-enabled = self.inputs.boolean("flag", False)
-token = self.inputs.secret("api_token")  # redacted in logs
+name = self.inputs.string("key", "default")    # type: string
+port = self.inputs.integer("port", 8080)        # type: number
+enabled = self.inputs.boolean("flag", False)     # type: boolean
+token = self.inputs.secret("api_token")          # type: secret (redacted in logs)
 ```
 
-**Config templates** — `write_config()` uses Python's `string.Template` syntax:
-- `$variable` — substituted with your keyword arguments
-- `$$` — literal `$` character (needed for Nginx's `$uri`, etc.)
+Using the right accessor matters: `inputs.integer()` returns an `int`, `inputs.boolean()` returns a `bool`. Don't use `inputs.string()` for numbers or booleans — you'll get string comparison bugs (e.g., `"80" != 80`).
+
+**Template files** — Keep config as separate files in `provision/`, not as Python string constants:
+
+```python
+# GOOD — template file in provision/config.yml
+self.render_template("config.yml", "/etc/myapp/config.yml", port=port)
+
+# GOOD — copy without substitution
+self.deploy_provision_file("static.conf", "/etc/myapp/static.conf")
+
+# GOOD — read contents for further processing
+content = self.provision_file("snippet.conf")
+
+# BAD — don't embed multi-line configs as string constants
+TEMPLATE = """\
+port: $port
+"""
+self.write_config("/etc/myapp/config.yml", TEMPLATE, port=port)
+```
+
+`write_config()` still works but is best reserved for short, one-line configs. For anything over ~3 lines, use a template file.
 
 **Logging** — Use `self.log` for structured output:
+
 ```python
 self.log.info("Installing dependencies")
 self.log.warn("Port conflict detected")
@@ -273,26 +310,43 @@ self.log.progress(2, 5, "Configuring service")
 self.log.output("admin_url", "http://localhost:8080/admin")
 ```
 
-## Step 4: Understand the Available Helpers
+## Step 5: Understand the Available Helpers
 
 Every helper validates against your `permissions` block before executing.
 
 ### Package Management
 
 ```python
-# APT packages (must be in permissions.packages)
+# OS-aware: uses apt on Debian/Ubuntu, apk on Alpine (PREFERRED)
+self.pkg_install("nginx", "curl", "gnupg")
+
+# APT-only (use pkg_install instead for cross-OS support)
 self.apt_install("nginx", "curl", "gnupg")
 
 # pip packages in a virtual environment (must be in permissions.pip)
-self.create_venv("/opt/myapp/venv")
 self.pip_install("flask", "gunicorn", venv="/opt/myapp/venv")
+
+# Create a venv explicitly (pip_install auto-creates one at /opt/venv)
+self.create_venv("/opt/myapp/venv")
 ```
 
-### File Operations
+### File & Template Operations
 
 ```python
-# Write a config file from a template (path must be in permissions.paths)
-self.write_config("/etc/myapp/config.yml", TEMPLATE, port=port, host=host)
+# Render a template file from provision/ with variable substitution
+self.render_template("config.yml", "/etc/myapp/config.yml", port=port, host=host)
+
+# Copy a file from provision/ without substitution
+self.deploy_provision_file("binary.conf", "/etc/myapp/binary.conf", mode="0644")
+
+# Read a provision file as a string (for composing configs)
+content = self.provision_file("snippet.conf")
+
+# Write a config from an inline template string (short configs only)
+self.write_config("/etc/myapp/port.conf", "listen $port\n", port=port)
+
+# Write a KEY=VALUE environment file
+self.write_env_file("/etc/myapp/env", {"PORT": "8080", "HOST": "0.0.0.0"})
 
 # Create a directory (path must be in permissions.paths)
 self.create_dir("/opt/myapp/data", owner="myapp", mode="0750")
@@ -304,32 +358,63 @@ self.chown("/opt/myapp", "myapp:myapp", recursive=True)
 self.download("https://example.com/release.tar.gz", "/opt/myapp/release.tar.gz")
 ```
 
+### Service Management
+
+```python
+# Enable and start an existing service (installed by a package)
+self.enable_service("nginx")
+
+# Restart a running service
+self.restart_service("nginx")
+
+# Create a new service from scratch (systemd on Debian, OpenRC on Alpine)
+self.create_service("myapp",
+    exec_start="/opt/myapp/bin/server --port 8080",
+    description="My Application Server",
+    user="myapp",
+    working_directory="/opt/myapp",
+    environment={"PORT": "8080"},
+    environment_file="/etc/myapp/env",
+    restart="on-failure",
+    restart_sec=10,
+)
+```
+
+`create_service()` generates the unit file, enables, and starts it in one call. It handles both systemd and OpenRC automatically.
+
 ### System Operations
 
 ```python
-# Enable and start a systemd service (must be in permissions.services)
-self.enable_service("myapp")
-
-# Restart a service (must be in permissions.services)
-self.restart_service("myapp")
-
 # Create a system user (must be in permissions.users)
 self.create_user("myapp", system=True, home="/opt/myapp", shell="/bin/bash")
 
 # Run a command (binary must be in permissions.commands)
 self.run_command(["myapp-setup", "--init"])
+
+# Run a command that might fail (non-fatal)
+self.run_command(["optional-step"], check=False)
+
+# Wait for a service to come up
+if self.wait_for_http("http://localhost:8080", timeout=60, interval=3):
+    self.log.info("Service is ready")
 ```
 
 ### APT Repository Management
 
 ```python
-# Add a signing key (URL must match permissions.urls)
+# High-level: add a repo with signing key in one call (PREFERRED)
+self.add_apt_repository(
+    "https://downloads.plex.tv/repo/deb",
+    key_url="https://downloads.plex.tv/plex-keys/PlexSign.key",
+    name="plexmediaserver",
+    suite="public",
+)
+
+# Low-level: add key and repo separately
 self.add_apt_key(
     "https://repo.example.com/gpg.key",
     "/usr/share/keyrings/example-keyring.gpg"
 )
-
-# Add a repository (must match permissions.apt_repos)
 self.add_apt_repo(
     "deb [signed-by=/usr/share/keyrings/example-keyring.gpg] https://repo.example.com/deb stable main",
     "example.list"
@@ -345,7 +430,28 @@ Some projects provide their own installer (like Ollama, Jellyfin). Use `run_inst
 self.run_installer_script("https://ollama.ai/install.sh")
 ```
 
-## Step 5: Optional Lifecycle Methods
+### Advanced Helpers
+
+```python
+# Deploy a status page (CCO-themed monitoring dashboard)
+self.status_page(
+    port=8081,
+    title="My App",
+    api_url="http://localhost:8080/api/status",
+    fields={"status": "Status", "uptime": "Uptime", "version": "Version"},
+)
+
+# Download a binary from a Docker/OCI image (no Docker needed)
+self.pull_oci_binary("qmcgaw/gluetun", "/opt/gluetun/gluetun", tag="latest")
+
+# Apply sysctl settings persistently
+self.sysctl({"net.ipv4.ip_forward": 1})
+
+# Disable IPv6
+self.disable_ipv6()
+```
+
+## Step 6: Optional Lifecycle Methods
 
 Beyond `install()`, you can implement additional lifecycle methods:
 
@@ -353,28 +459,30 @@ Beyond `install()`, you can implement additional lifecycle methods:
 class MyPageApp(BaseApp):
     def install(self):
         """Required. Runs during initial installation."""
-        ...
+        self.configure()  # Share config logic with configure()
 
     def configure(self):
-        """Optional. Runs after install for additional setup."""
-        ...
+        """Optional. Runs for in-place reconfiguration with updated inputs.
+
+        Tip: Put config-writing and service-restart logic here, then call
+        self.configure() at the end of install() so the logic is shared.
+        """
+        port = self.inputs.integer("http_port", 80)
+        self.render_template("default.conf", "/etc/nginx/sites-available/default",
+            http_port=port)
+        self.restart_service("nginx")
 
     def healthcheck(self) -> bool:
         """Optional. Returns True if the app is healthy."""
-        import urllib.request
-        try:
-            port = self.inputs.string("http_port", "80")
-            urllib.request.urlopen(f"http://localhost:{port}", timeout=5)
-            return True
-        except Exception:
-            return False
+        port = self.inputs.integer("http_port", 80)
+        return self.wait_for_http(f"http://localhost:{port}", timeout=10)
 
     def uninstall(self):
         """Optional. Cleanup when the app is removed."""
         ...
 ```
 
-## Step 6: Test Locally
+## Step 7: Test Locally
 
 Before submitting, test your manifest parses correctly:
 
@@ -394,87 +502,170 @@ Before submitting, test your manifest parses correctly:
    # Open the web UI and search for "my-page"
    ```
 
-## Step 7: Submit to the Catalog
+## Step 8: Submit to the Catalog
 
 1. Fork the [pve-appstore-catalog](https://github.com/battlewithbytes/pve-appstore-catalog) repo
-2. Add your `apps/my-page/` directory (with `app.yml`, `provision/install.py`, and optionally `icon.png`)
+2. Add your `apps/my-page/` directory (with `app.yml`, `provision/install.py`, template files, and optionally `icon.png`)
 3. Open a pull request
 
 Your app will be reviewed for:
 - Manifest completeness and correct permissions
 - Install script uses SDK helpers (no raw `subprocess` calls bypassing permissions)
+- Template files for configs instead of inline string constants
+- Typed input accessors: `inputs.integer()` for `type: number`, `inputs.boolean()` for `type: boolean`
 - Reasonable container defaults (don't request 32GB RAM for a static site)
 - Permissions are minimal — only declare what you actually need
 - Icon included (recommended but not required)
 
+## Developer Mode
+
+Instead of creating files manually, you can use **Developer Mode** in the web UI (Settings > Developer Mode):
+
+1. **Create** — Pick a starter template or import from a Dockerfile/Unraid XML
+2. **Edit** — Code editor with SDK autocompletions for the manifest and install script
+3. **Validate** — One-click manifest + script validation
+4. **Deploy** — Merge into the running catalog for testing
+5. **Export** — Download as a zip ready to submit as a PR
+
+### Dockerfile Import
+
+Developer Mode can import a Dockerfile and generate a starting `app.yml` + `install.py`. This is a **scaffolding tool, not a magic bullet** — it gets you ~60-80% of the way but the output almost always needs manual editing. Docker images rely on init systems (s6-overlay, supervisord), complex entrypoint scripts, and layered builds that don't translate directly to LXC.
+
+**Recommended workflow:**
+1. Import the Dockerfile to generate the scaffold
+2. Read the generated `install.py` and understand what it's trying to do
+3. Research the original app's docs and Docker entrypoint scripts
+4. Rewrite the install script using SDK best practices (template files, typed inputs, proper service management)
+5. Test iteratively using Deploy
+
 ## Real-World Examples
 
-### App that uses a remote installer (like Ollama)
+### App that uses a remote installer (Ollama)
 
 ```python
 class OllamaApp(BaseApp):
     def install(self):
+        api_port = self.inputs.integer("api_port", 11434)
+        bind_address = self.inputs.string("bind_address", "0.0.0.0")
+        num_ctx = self.inputs.integer("num_ctx", 2048)
+
         self.run_installer_script("https://ollama.ai/install.sh")
-        # Configure via systemd override
+
+        # Build config from template files
+        override = self.provision_file("systemd-override.conf")
         self.create_dir("/etc/systemd/system/ollama.service.d")
         self.write_config(
             "/etc/systemd/system/ollama.service.d/override.conf",
-            OVERRIDE_TEMPLATE,
-            host=self.inputs.string("bind_address", "0.0.0.0"),
-            port=self.inputs.string("api_port", "11434"),
+            override,
+            bind_address=bind_address,
+            api_port=api_port,
+            num_ctx=num_ctx,
         )
         self.restart_service("ollama")
 ```
 
-### App with Python venv (like Home Assistant)
+### App with Python venv (Home Assistant)
 
 ```python
 class HomeAssistantApp(BaseApp):
     def install(self):
-        self.apt_install("python3", "python3-venv", "python3-pip")
+        http_port = self.inputs.integer("http_port", 8123)
+        timezone = self.inputs.string("timezone", "America/New_York")
         config_path = self.inputs.string("config_path", "/opt/homeassistant/config")
+
+        self.pkg_install("python3", "python3-venv", "python3-pip",
+                         "libffi-dev", "libssl-dev")
+        self.create_user("homeassistant", system=True, home="/opt/homeassistant")
         self.create_dir(config_path)
         self.create_venv("/opt/homeassistant/venv")
         self.pip_install("homeassistant", venv="/opt/homeassistant/venv")
-        self.write_config("/etc/systemd/system/homeassistant.service",
-                          SERVICE_TEMPLATE, config_path=config_path)
-        self.enable_service("homeassistant")
+
+        # Config from template file — not inline string
+        self.render_template("configuration.yaml", f"{config_path}/configuration.yaml",
+            timezone=timezone, http_port=http_port)
+
+        self.create_service("homeassistant",
+            exec_start=f"/opt/homeassistant/venv/bin/hass -c {config_path}",
+            description="Home Assistant Core",
+            user="homeassistant",
+            working_directory="/opt/homeassistant",
+        )
 ```
 
-### App with APT repository (like Plex)
+### App with APT repository (Plex)
 
 ```python
 class PlexApp(BaseApp):
     def install(self):
-        self.apt_install("curl")
-        self.add_apt_key(
-            "https://downloads.plex.tv/plex-keys/PlexSign.key",
-            "/usr/share/keyrings/plex-archive-keyring.gpg",
-        )
-        self.add_apt_repo(
-            "deb [signed-by=/usr/share/keyrings/plex-archive-keyring.gpg] "
-            "https://downloads.plex.tv/repo/deb public main",
-            "plexmediaserver.list",
+        http_port = self.inputs.integer("http_port", 32400)
+        friendly_name = self.inputs.string("friendly_name", "Proxmox Plex")
+
+        self.add_apt_repository(
+            "https://downloads.plex.tv/repo/deb",
+            key_url="https://downloads.plex.tv/plex-keys/PlexSign.key",
+            name="plexmediaserver",
+            suite="public",
         )
         self.apt_install("plexmediaserver")
+
+        # Write preferences from template file
+        prefs_dir = "/var/lib/plexmediaserver/Library/Application Support/Plex Media Server"
+        self.create_dir(prefs_dir)
+        self.render_template("Preferences.xml", f"{prefs_dir}/Preferences.xml",
+            friendly_name=friendly_name, http_port=http_port)
+        self.chown("/var/lib/plexmediaserver", "plex:plex", recursive=True)
         self.enable_service("plexmediaserver")
+```
+
+### Alpine-based app with OCI binary (Gluetun)
+
+```python
+class GluetunApp(BaseApp):
+    def install(self):
+        vpn_type = self.inputs.string("vpn_type", "openvpn")
+        httpproxy = self.inputs.boolean("httpproxy", False)
+        httpproxy_port = self.inputs.integer("httpproxy_port", 8888)
+
+        self.pkg_install("iptables", "ip6tables", "ca-certificates", "unbound")
+        self.pull_oci_binary("qmcgaw/gluetun", "/opt/gluetun/gluetun", tag="latest")
+
+        self.render_template("start.sh", "/opt/gluetun/start.sh",
+            vpn_type=vpn_type)
+        self.deploy_provision_file("start.sh", "/opt/gluetun/start.sh", mode="0755")
+
+        self.create_service("gluetun",
+            exec_start="/opt/gluetun/start.sh",
+            capabilities=["NET_ADMIN"],
+        )
 ```
 
 ## Quick Reference
 
 | Helper | Permission Check | Description |
 |--------|-----------------|-------------|
-| `apt_install(*pkgs)` | `packages` | Install APT packages |
-| `pip_install(*pkgs, venv=)` | `pip` | Install pip packages |
+| `pkg_install(*pkgs)` | `packages` | OS-aware package install (apt/apk) |
+| `apt_install(*pkgs)` | `packages` | APT-only package install |
+| `pip_install(*pkgs, venv=)` | `pip` | Install pip packages in a venv |
 | `create_venv(path)` | `paths` | Create Python venv |
-| `write_config(path, tmpl, **kw)` | `paths` | Write templated config file |
+| `render_template(name, dest, **kw)` | `paths` | Render a template file from `provision/` |
+| `deploy_provision_file(name, dest)` | `paths` | Copy a provision file without substitution |
+| `provision_file(name)` | — | Read a provision file as a string |
+| `write_config(path, tmpl, **kw)` | `paths` | Write from inline template string |
+| `write_env_file(path, env_dict)` | `paths` | Write KEY=VALUE environment file |
 | `create_dir(path, owner=, mode=)` | `paths` | Create directory |
 | `chown(path, owner, recursive=)` | `paths` | Change ownership |
 | `download(url, dest)` | `urls` + `paths` | Download a file |
-| `enable_service(name)` | `services` | Enable + start service |
-| `restart_service(name)` | `services` | Restart service |
+| `create_service(name, exec_start=, ...)` | `services` | Create + enable + start a new service |
+| `enable_service(name)` | `services` | Enable + start an existing service |
+| `restart_service(name)` | `services` | Restart a service |
 | `create_user(name, ...)` | `users` | Create system user |
 | `run_command(cmd)` | `commands` | Run a binary |
 | `run_installer_script(url)` | `installer_scripts` | Download + run script |
+| `add_apt_repository(url, key_url=, ...)` | `urls` + `apt_repos` | Add APT repo + key (high-level) |
 | `add_apt_key(url, path)` | `urls` + `paths` | Add APT signing key |
 | `add_apt_repo(line, file)` | `apt_repos` + `paths` | Add APT repository |
+| `wait_for_http(url, timeout=)` | `urls` | Poll until HTTP 200 |
+| `status_page(port, title, ...)` | `services` + `paths` | Deploy status page dashboard |
+| `pull_oci_binary(image, dest)` | `urls` + `paths` | Download binary from Docker image |
+| `sysctl(settings)` | `paths` | Apply sysctl settings |
+| `disable_ipv6()` | `paths` | Disable IPv6 via sysctl |
