@@ -1,0 +1,290 @@
+id: swag
+name: "SWAG"
+description: "Secure Web Application Gateway — nginx reverse proxy with Let's Encrypt SSL, fail2ban, and 300+ preset proxy configs for popular apps"
+version: "1.0.0"
+categories:
+  - networking
+tags:
+  - reverse-proxy
+  - ssl
+  - certbot
+  - nginx
+  - letsencrypt
+  - fail2ban
+maintainers:
+  - "CCO"
+icon: "https://raw.githubusercontent.com/linuxserver/docker-templates/master/linuxserver.io/img/swag.png"
+official: true
+
+lxc:
+  ostemplate: "alpine-3.22"
+  defaults:
+    unprivileged: false
+    cores: 2
+    memory_mb: 1024
+    disk_gb: 4
+    onboot: true
+
+inputs:
+  - key: url
+    label: "Domain"
+    type: string
+    default: ""
+    required: true
+    reconfigurable: true
+    group: "Certificate"
+    help: "Your domain name (e.g. example.com or subdomain.duckdns.org)"
+
+  - key: email
+    label: "Email"
+    type: string
+    default: ""
+    required: false
+    reconfigurable: true
+    group: "Certificate"
+    help: "Email for Let's Encrypt certificate expiration notices"
+
+  - key: validation
+    label: "Validation Method"
+    type: select
+    default: "dns"
+    required: true
+    reconfigurable: true
+    group: "Certificate"
+    help: "How to prove domain ownership — DNS is easier (no port forwarding needed)"
+    validation:
+      enum:
+        - dns
+        - http
+
+  - key: dnsplugin
+    label: "DNS Plugin"
+    type: select
+    default: "cloudflare"
+    required: false
+    reconfigurable: true
+    group: "Certificate"
+    help: "Your DNS provider — edit /config/dns-conf/<plugin>.ini with API credentials after install"
+    show_when:
+      input: validation
+      values: ["dns"]
+    validation:
+      enum:
+        - acmedns
+        - aliyun
+        - azure
+        - bunny
+        - cloudflare
+        - cpanel
+        - desec
+        - digitalocean
+        - directadmin
+        - dnsimple
+        - dnsmadeeasy
+        - dnspod
+        - do
+        - domeneshop
+        - dreamhost
+        - duckdns
+        - dynudns
+        - freedns
+        - gandi
+        - gehirn
+        - glesys
+        - godaddy
+        - google
+        - he
+        - hetzner
+        - infomaniak
+        - inwx
+        - ionos
+        - linode
+        - loopia
+        - luadns
+        - namecheap
+        - netcup
+        - njalla
+        - nsone
+        - ovh
+        - porkbun
+        - rfc2136
+        - route53
+        - sakuracloud
+        - standalone
+        - transip
+        - vultr
+
+  - key: subdomains
+    label: "Subdomains"
+    type: string
+    default: "wildcard"
+    required: false
+    reconfigurable: true
+    group: "Certificate"
+    help: "Comma-separated (www,cloud,git) or 'wildcard' for *.domain"
+
+  - key: only_subdomains
+    label: "Only Subdomains"
+    type: boolean
+    default: false
+    required: false
+    reconfigurable: true
+    group: "Certificate"
+    help: "Only get certs for subdomains, not the main domain"
+
+  - key: staging
+    label: "Staging Mode"
+    type: boolean
+    default: false
+    required: false
+    reconfigurable: true
+    group: "Certificate"
+    help: "Use Let's Encrypt staging server for testing (not valid for browsers)"
+
+  - key: extra_domains
+    label: "Extra Domains"
+    type: string
+    default: ""
+    required: false
+    reconfigurable: true
+    group: "Certificate"
+    help: "Additional domains (comma-separated) to include in the certificate"
+
+  - key: port_http
+    label: "HTTP Port"
+    type: number
+    default: 80
+    required: true
+    reconfigurable: true
+    group: "Ports"
+    validation:
+      min: 1
+      max: 65535
+    help: "HTTP port — used for ACME validation and redirect to HTTPS"
+
+  - key: port_https
+    label: "HTTPS Port"
+    type: number
+    default: 443
+    required: true
+    reconfigurable: true
+    group: "Ports"
+    validation:
+      min: 1
+      max: 65535
+    help: "HTTPS port for the reverse proxy"
+
+provisioning:
+  script: provision/install.py
+  timeout_sec: 900
+
+permissions:
+  packages:
+    - bash
+    - ca-certificates
+    - coreutils
+    - curl
+    - jq
+    - openssl
+    - nginx
+    - nginx-mod-http-brotli
+    - nginx-mod-http-headers-more
+    - nginx-mod-stream
+    - fail2ban
+    - gnupg
+    - iptables-legacy
+    - logrotate
+    - python3
+    - py3-pip
+    - apache2-utils
+    - git
+    - inotify-tools
+  pip:
+    - certbot
+    - certbot-dns-acmedns
+    - certbot-dns-aliyun
+    - certbot-dns-azure
+    - certbot-dns-bunny
+    - certbot-dns-cloudflare
+    - certbot-dns-cpanel
+    - certbot-dns-desec
+    - certbot-dns-digitalocean
+    - certbot-dns-directadmin
+    - certbot-dns-dnsimple
+    - certbot-dns-dnsmadeeasy
+    - certbot-dns-dnspod
+    - certbot-dns-do
+    - certbot-dns-domeneshop
+    - certbot-dns-dreamhost
+    - certbot-dns-duckdns
+    - certbot-dns-dynudns
+    - certbot-dns-freedns
+    - certbot-dns-gehirn
+    - certbot-dns-glesys
+    - certbot-dns-godaddy
+    - certbot-dns-google
+    - certbot-dns-he
+    - certbot-dns-hetzner
+    - certbot-dns-infomaniak
+    - certbot-dns-inwx
+    - certbot-dns-ionos
+    - certbot-dns-linode
+    - certbot-dns-loopia
+    - certbot-dns-luadns
+    - certbot-dns-namecheap
+    - certbot-dns-netcup
+    - certbot-dns-njalla
+    - certbot-dns-nsone
+    - certbot-dns-ovh
+    - certbot-dns-porkbun
+    - certbot-dns-rfc2136
+    - certbot-dns-route53
+    - certbot-dns-sakuracloud
+    - certbot-dns-standalone
+    - certbot-dns-transip
+    - certbot-dns-vultr
+    - certbot-plugin-gandi
+    - cryptography
+    - requests
+  urls:
+    - "https://github.com/linuxserver/reverse-proxy-confs/tarball/master"
+    - "https://github.com/linuxserver/docker-swag*"
+  paths:
+    - /config
+    - /config/nginx
+    - /config/nginx/site-confs
+    - /config/nginx/proxy-confs
+    - /config/dns-conf
+    - /config/keys
+    - /config/www
+    - /config/log
+    - /config/fail2ban
+    - /config/etc/letsencrypt
+    - /defaults
+    - /etc/nginx
+    - /etc/fail2ban
+  commands:
+    - git
+    - cp
+    - rm
+    - ln
+    - sed
+    - mv
+    - tar
+    - certbot
+    - openssl
+    - iptables
+  services:
+    - nginx
+    - fail2ban
+
+outputs:
+  - key: url
+    label: "Web UI"
+    value: "https://{{IP}}"
+  - key: https_port
+    label: "HTTPS Port"
+    value: "{{port_https}}"
+  - key: config_path
+    label: "Config Path"
+    value: "/config"

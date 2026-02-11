@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>SWAG — Reverse Proxy</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #0a0a0a; color: #e0e0e0;
+            display: flex; align-items: center; justify-content: center;
+            min-height: 100vh;
+        }
+        .card {
+            background: #111; border: 1px solid #222; border-radius: 12px;
+            padding: 3rem; max-width: 520px; text-align: center;
+        }
+        h1 { color: #00ff9d; font-size: 2rem; margin-bottom: 0.5rem; }
+        p { color: #888; line-height: 1.6; margin-top: 1rem; }
+        code {
+            background: #1a1a1a; padding: 2px 8px; border-radius: 4px;
+            font-family: 'JetBrains Mono', monospace; font-size: 0.9em;
+            color: #00ff9d;
+        }
+        a { color: #00ff9d; text-decoration: none; }
+        a:hover { text-decoration: underline; }
+    </style>
+</head>
+<body>
+    <div class="card">
+        <h1>SWAG</h1>
+        <p>Secure Web Application Gateway is running.</p>
+        <p>Edit proxy configs in <code>/config/nginx/proxy-confs/</code>
+           to enable reverse proxies for your services.</p>
+        <p style="margin-top: 2rem; font-size: 0.85em;">
+            <a href="https://docs.linuxserver.io/general/swag/">Documentation</a>
+        </p>
+    </div>
+</body>
+</html>
