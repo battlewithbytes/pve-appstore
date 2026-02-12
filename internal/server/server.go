@@ -19,15 +19,20 @@ import (
 
 // Server is the main HTTP server for the PVE App Store.
 type Server struct {
-	cfg          *config.Config
-	configPath   string
-	catalog      *catalog.Catalog
-	engine       *engine.Engine
-	devStore     *devmode.DevStore
-	http         *http.Server
-	spa          fs.FS // embedded or disk-based SPA assets
-	storageMetas []engine.StorageInfo
-	allowedPaths []string // browsable filesystem roots from configured storages
+	cfg              *config.Config
+	configPath       string
+	catalog          *catalog.Catalog
+	catalogSvc       CatalogService
+	engine           *engine.Engine
+	engineInstallSvc EngineInstallService
+	engineStackSvc   EngineStackService
+	engineConfigSvc  EngineConfigService
+	devStore         *devmode.DevStore
+	devSvc           DevService
+	http             *http.Server
+	spa              fs.FS // embedded or disk-based SPA assets
+	storageMetas     []engine.StorageInfo
+	allowedPaths     []string // browsable filesystem roots from configured storages
 }
 
 // Option configures the server.
@@ -58,27 +63,33 @@ func New(cfg *config.Config, cat *catalog.Catalog, eng *engine.Engine, spaFS fs.
 		cfg:        cfg,
 		configPath: config.DefaultConfigPath,
 		catalog:    cat,
+		catalogSvc: NewCatalogService(cat),
 		engine:     eng,
 		spa:        spaFS,
 	}
+	engineSvc := NewEngineService(eng)
+	s.engineInstallSvc = engineSvc
+	s.engineStackSvc = engineSvc
+	s.engineConfigSvc = engineSvc
 	for _, opt := range opts {
 		opt(s)
 	}
 
 	// Initialize dev store and restore deployed dev apps into catalog
 	s.devStore = devmode.NewDevStore(filepath.Join(config.DefaultDataDir, "dev-apps"))
+	s.devSvc = NewDevService(s.devStore)
 	if cfg.Developer.Enabled {
-		if apps, err := s.devStore.List(); err == nil {
+		if apps, err := s.devSvc.List(); err == nil {
 			for _, meta := range apps {
 				if meta.Status != "deployed" {
 					continue
 				}
-				m, err := s.devStore.ParseManifest(meta.ID)
+				m, err := s.devSvc.ParseManifest(meta.ID)
 				if err != nil {
 					log.Printf("[dev] warning: could not restore deployed app %q: %v", meta.ID, err)
 					continue
 				}
-				appDir := s.devStore.AppDir(meta.ID)
+				appDir := s.devSvc.AppDir(meta.ID)
 				m.DirPath = appDir
 				if _, err := os.Stat(filepath.Join(appDir, "icon.png")); err == nil {
 					m.IconPath = filepath.Join(appDir, "icon.png")
@@ -86,7 +97,9 @@ func New(cfg *config.Config, cat *catalog.Catalog, eng *engine.Engine, spaFS fs.
 				if _, err := os.Stat(filepath.Join(appDir, "README.md")); err == nil {
 					m.ReadmePath = filepath.Join(appDir, "README.md")
 				}
-				cat.MergeDevApp(m)
+				if s.catalogSvc != nil {
+					s.catalogSvc.MergeDevApp(m)
+				}
 				log.Printf("[dev] restored deployed app %q into catalog", meta.ID)
 			}
 		}

@@ -1,0 +1,45 @@
+package server
+
+import "github.com/battlewithbytes/pve-appstore/internal/catalog"
+
+// CatalogService isolates catalog access from HTTP handlers.
+type CatalogService interface {
+	AppCount() int
+	ListApps() []*catalog.AppManifest
+	SearchApps(query string) []*catalog.AppManifest
+	GetApp(id string) (*catalog.AppManifest, bool)
+	Categories() []string
+	Refresh() error
+	MergeDevApp(app *catalog.AppManifest)
+	RemoveDevApp(id string)
+}
+
+type defaultCatalogService struct {
+	cat *catalog.Catalog
+}
+
+func NewCatalogService(cat *catalog.Catalog) CatalogService {
+	if cat == nil {
+		return nil
+	}
+	return &defaultCatalogService{cat: cat}
+}
+
+func (s *defaultCatalogService) AppCount() int { return s.cat.AppCount() }
+func (s *defaultCatalogService) ListApps() []*catalog.AppManifest {
+	return s.cat.List()
+}
+func (s *defaultCatalogService) SearchApps(query string) []*catalog.AppManifest {
+	return s.cat.Search(query)
+}
+func (s *defaultCatalogService) GetApp(id string) (*catalog.AppManifest, bool) {
+	return s.cat.Get(id)
+}
+func (s *defaultCatalogService) Categories() []string { return s.cat.Categories() }
+func (s *defaultCatalogService) Refresh() error       { return s.cat.Refresh() }
+func (s *defaultCatalogService) MergeDevApp(app *catalog.AppManifest) {
+	s.cat.MergeDevApp(app)
+}
+func (s *defaultCatalogService) RemoveDevApp(id string) {
+	s.cat.RemoveDevApp(id)
+}

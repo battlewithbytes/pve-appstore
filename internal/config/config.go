@@ -206,7 +206,7 @@ func (c *Config) Save(path string) error {
 		return fmt.Errorf("marshaling config: %w", err)
 	}
 
-	if err := os.WriteFile(path, data, 0660); err != nil {
+	if err := os.WriteFile(path, data, 0640); err != nil {
 		return fmt.Errorf("writing config: %w", err)
 	}
 

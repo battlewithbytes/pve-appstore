@@ -1,142 +1,21 @@
 package server
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/battlewithbytes/pve-appstore/internal/catalog"
 	"github.com/battlewithbytes/pve-appstore/internal/config"
+	"github.com/battlewithbytes/pve-appstore/internal/devmode"
 	"github.com/battlewithbytes/pve-appstore/internal/engine"
-	"github.com/battlewithbytes/pve-appstore/internal/pct"
 )
-
-// mockCM is a no-op ContainerManager for server tests.
-type mockCM struct{}
-
-func (m *mockCM) AllocateCTID(ctx context.Context) (int, error) { return 100, nil }
-func (m *mockCM) Create(ctx context.Context, opts engine.CreateOptions) error { return nil }
-func (m *mockCM) Start(ctx context.Context, ctid int) error { return nil }
-func (m *mockCM) Stop(ctx context.Context, ctid int) error { return nil }
-func (m *mockCM) Shutdown(ctx context.Context, ctid int, timeout int) error { return nil }
-func (m *mockCM) Destroy(ctx context.Context, ctid int, keepVolumes ...bool) error { return nil }
-func (m *mockCM) Status(ctx context.Context, ctid int) (string, error) { return "stopped", nil }
-func (m *mockCM) StatusDetail(ctx context.Context, ctid int) (*engine.ContainerStatusDetail, error) {
-	return &engine.ContainerStatusDetail{
-		Status: "stopped", Uptime: 0, CPU: 0, CPUs: 2,
-		Mem: 128 * 1024 * 1024, MaxMem: 512 * 1024 * 1024,
-		Disk: 100 * 1024 * 1024, MaxDisk: 4 * 1024 * 1024 * 1024,
-	}, nil
-}
-func (m *mockCM) ResolveTemplate(ctx context.Context, name, storage string) string { return name }
-func (m *mockCM) Exec(ctid int, command []string) (*pct.ExecResult, error) {
-	return &pct.ExecResult{Output: "", ExitCode: 0}, nil
-}
-func (m *mockCM) ExecStream(ctid int, command []string, onLine func(line string)) (*pct.ExecResult, error) {
-	return &pct.ExecResult{Output: "", ExitCode: 0}, nil
-}
-func (m *mockCM) ExecScript(ctid int, scriptPath string, env map[string]string) (*pct.ExecResult, error) {
-	return &pct.ExecResult{Output: "", ExitCode: 0}, nil
-}
-func (m *mockCM) Push(ctid int, src, dst, perms string) error { return nil }
-func (m *mockCM) GetIP(ctid int) (string, error) { return "10.0.0.1", nil }
-func (m *mockCM) GetConfig(ctx context.Context, ctid int) (map[string]interface{}, error) {
-	return map[string]interface{}{}, nil
-}
-func (m *mockCM) UpdateConfig(ctx context.Context, ctid int, params url.Values) error {
-	return nil
-}
-func (m *mockCM) DetachMountPoints(ctx context.Context, ctid int, indexes []int) error { return nil }
-func (m *mockCM) ConfigureDevices(ctid int, devices []engine.DevicePassthrough) error { return nil }
-func (m *mockCM) MountHostPath(ctid int, mpIndex int, hostPath, containerPath string, readOnly bool) error {
-	return nil
-}
-func (m *mockCM) AppendLXCConfig(ctid int, lines []string) error { return nil }
-func (m *mockCM) GetStorageInfo(ctx context.Context, storageID string) (*engine.StorageInfo, error) {
-	return &engine.StorageInfo{
-		ID:        storageID,
-		Type:      "dir",
-		Path:      "/tmp/test-storage",
-		Browsable: true,
-	}, nil
-}
-
-func testConfig() *config.Config {
-	return &config.Config{
-		NodeName: "testnode",
-		Pool:     "testpool",
-		Storages: []string{"local-lvm"},
-		Bridges:  []string{"vmbr0"},
-		Defaults: config.ResourceConfig{
-			Cores:    2,
-			MemoryMB: 2048,
-			DiskGB:   8,
-		},
-		Security: config.SecurityConfig{UnprivilegedOnly: true},
-		Service:  config.ServiceConfig{BindAddress: "127.0.0.1", Port: 0},
-		Auth:     config.AuthConfig{Mode: config.AuthModeNone},
-		Catalog:  config.CatalogConfig{URL: "https://example.com/catalog.git", Branch: "main", Refresh: config.RefreshManual},
-		GPU:      config.GPUConfig{Policy: config.GPUPolicyNone},
-	}
-}
-
-func testCatalog(t *testing.T) *catalog.Catalog {
-	t.Helper()
-	cat := catalog.New("", "main", t.TempDir())
-	if err := cat.LoadLocal("../../testdata/catalog"); err != nil {
-		t.Fatalf("LoadLocal: %v", err)
-	}
-	return cat
-}
-
-func testEngine(t *testing.T, cfg *config.Config, cat *catalog.Catalog) *engine.Engine {
-	t.Helper()
-	dataDir := t.TempDir()
-	eng, err := engine.New(cfg, cat, dataDir, &mockCM{})
-	if err != nil {
-		t.Fatalf("engine.New: %v", err)
-	}
-	t.Cleanup(func() { eng.Close() })
-	return eng
-}
-
-func testServer(t *testing.T) *Server {
-	t.Helper()
-	cfg := testConfig()
-	cat := testCatalog(t)
-	eng := testEngine(t, cfg, cat)
-	return New(cfg, cat, eng, nil)
-}
-
-func doRequest(t *testing.T, srv *Server, method, path string, body string) *httptest.ResponseRecorder {
-	t.Helper()
-	var req *http.Request
-	if body != "" {
-		req = httptest.NewRequest(method, path, strings.NewReader(body))
-		req.Header.Set("Content-Type", "application/json")
-	} else {
-		req = httptest.NewRequest(method, path, nil)
-	}
-	w := httptest.NewRecorder()
-	srv.http.Handler.ServeHTTP(w, req)
-	return w
-}
-
-func decodeJSON(t *testing.T, w *httptest.ResponseRecorder) map[string]interface{} {
-	t.Helper()
-	var result map[string]interface{}
-	if err := json.NewDecoder(w.Body).Decode(&result); err != nil {
-		t.Fatalf("decode JSON: %v (body: %s)", err, w.Body.String())
-	}
-	return result
-}
 
 // --- Health ---
 
@@ -179,6 +58,24 @@ func TestListAppsEndpoint(t *testing.T) {
 	apps := body["apps"].([]interface{})
 	if len(apps) != 12 {
 		t.Errorf("apps count = %d, want 12", len(apps))
+	}
+}
+
+func TestHealthUsesCatalogServiceWithoutCatalog(t *testing.T) {
+	cfg := testConfig()
+	srv := New(cfg, nil, nil, nil)
+	srv.catalogSvc = catalogSvcStub{
+		appCountFn: func() int { return 7 },
+	}
+
+	w := doRequest(t, srv, "GET", "/api/health", "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", w.Code, http.StatusOK)
+	}
+
+	body := decodeJSON(t, w)
+	if int(body["app_count"].(float64)) != 7 {
+		t.Fatalf("app_count = %v, want 7", body["app_count"])
 	}
 }
 
@@ -686,6 +583,48 @@ func TestNoEngineJobsReturnsEmpty(t *testing.T) {
 	}
 }
 
+func TestListJobsUsesEngineServiceWithoutEngine(t *testing.T) {
+	cfg := testConfig()
+	srv := New(cfg, nil, nil, nil)
+	setEngineServices(srv, engineSvcStub{
+		listJobsFn: func() ([]*engine.Job, error) {
+			return []*engine.Job{{ID: "job-1", AppID: "nginx"}}, nil
+		},
+	})
+
+	w := doRequest(t, srv, "GET", "/api/jobs", "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", w.Code, http.StatusOK)
+	}
+
+	body := decodeJSON(t, w)
+	if int(body["total"].(float64)) != 1 {
+		t.Fatalf("total = %v, want 1", body["total"])
+	}
+}
+
+func TestListInstallsUsesEngineServiceWithoutEngine(t *testing.T) {
+	cfg := testConfig()
+	srv := New(cfg, nil, nil, nil)
+	setEngineServices(srv, engineSvcStub{
+		listInstallsFn: func() ([]*engine.InstallListItem, error) {
+			return []*engine.InstallListItem{{
+				Install: engine.Install{ID: "inst-1", AppID: "nginx"},
+			}}, nil
+		},
+	})
+
+	w := doRequest(t, srv, "GET", "/api/installs", "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", w.Code, http.StatusOK)
+	}
+
+	body := decodeJSON(t, w)
+	if int(body["total"].(float64)) != 1 {
+		t.Fatalf("total = %v, want 1", body["total"])
+	}
+}
+
 func TestNoEngineInstallsReturnsEmpty(t *testing.T) {
 	cfg := testConfig()
 	cat := testCatalog(t)
@@ -723,21 +662,48 @@ func TestNoEngineGetJobReturns503(t *testing.T) {
 	}
 }
 
+func TestNoEngineTerminalReturns503(t *testing.T) {
+	cfg := testConfig()
+	cat := testCatalog(t)
+	srv := New(cfg, cat, nil, nil)
+
+	w := doRequest(t, srv, "GET", "/api/installs/test-id/terminal", "")
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want %d", w.Code, http.StatusServiceUnavailable)
+	}
+}
+
+func TestNoEngineJournalLogsReturns503(t *testing.T) {
+	cfg := testConfig()
+	cat := testCatalog(t)
+	srv := New(cfg, cat, nil, nil)
+
+	w := doRequest(t, srv, "GET", "/api/installs/test-id/logs", "")
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want %d", w.Code, http.StatusServiceUnavailable)
+	}
+}
+
 // --- Browse Paths ---
 
 func TestBrowsePathsAllowedStorage(t *testing.T) {
 	srv := testServer(t)
-	// The mock storage resolves to /tmp/test-storage — create it
-	os.MkdirAll("/tmp/test-storage", 0755)
-	w := doRequest(t, srv, "GET", "/api/browse/paths?path=/tmp/test-storage", "")
+	if len(srv.allowedPaths) == 0 {
+		t.Fatalf("no allowed paths configured")
+	}
+	root := srv.allowedPaths[0]
+	if err := os.MkdirAll(root, 0755); err != nil {
+		t.Fatalf("mkdir storage root: %v", err)
+	}
+	w := doRequest(t, srv, "GET", "/api/browse/paths?path="+root, "")
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d (body: %s)", w.Code, http.StatusOK, w.Body.String())
 	}
 
 	body := decodeJSON(t, w)
-	if body["path"] != "/tmp/test-storage" {
-		t.Errorf("path = %v, want /tmp/test-storage", body["path"])
+	if body["path"] != root {
+		t.Errorf("path = %v, want %s", body["path"], root)
 	}
 }
 
@@ -753,7 +719,11 @@ func TestBrowsePathsForbidden(t *testing.T) {
 
 func TestBrowsePathsInvalid(t *testing.T) {
 	srv := testServer(t)
-	w := doRequest(t, srv, "GET", "/api/browse/paths?path=/tmp/test-storage/nonexistent-abc123", "")
+	if len(srv.allowedPaths) == 0 {
+		t.Fatalf("no allowed paths configured")
+	}
+	root := srv.allowedPaths[0]
+	w := doRequest(t, srv, "GET", "/api/browse/paths?path="+filepath.Join(root, "nonexistent-abc123"), "")
 
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want %d", w.Code, http.StatusBadRequest)
@@ -762,9 +732,16 @@ func TestBrowsePathsInvalid(t *testing.T) {
 
 func TestBrowseMkdir(t *testing.T) {
 	srv := testServer(t)
-	os.MkdirAll("/tmp/test-storage", 0755)
+	if len(srv.allowedPaths) == 0 {
+		t.Fatalf("no allowed paths configured")
+	}
+	root := srv.allowedPaths[0]
+	if err := os.MkdirAll(root, 0755); err != nil {
+		t.Fatalf("mkdir storage root: %v", err)
+	}
+	newPath := filepath.Join(root, "new-folder")
 
-	w := doRequest(t, srv, "POST", "/api/browse/mkdir", `{"path":"/tmp/test-storage/new-folder"}`)
+	w := doRequest(t, srv, "POST", "/api/browse/mkdir", fmt.Sprintf(`{"path":%q}`, newPath))
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d (body: %s)", w.Code, http.StatusOK, w.Body.String())
 	}
@@ -775,7 +752,7 @@ func TestBrowseMkdir(t *testing.T) {
 	}
 
 	// Cleanup
-	os.RemoveAll("/tmp/test-storage/new-folder")
+	os.RemoveAll(newPath)
 }
 
 func TestBrowseMkdirForbidden(t *testing.T) {
@@ -886,6 +863,79 @@ func TestConfigApplyBadAppID(t *testing.T) {
 	}
 }
 
+func TestConfigApplyAndPreviewValidationPaths(t *testing.T) {
+	cases := []struct {
+		name     string
+		method   string
+		path     string
+		body     string
+		wantCode int
+		contains string
+	}{
+		{
+			name:     "apply invalid json",
+			method:   "POST",
+			path:     "/api/config/apply",
+			body:     `{"recipes":`,
+			wantCode: http.StatusBadRequest,
+			contains: "invalid request body",
+		},
+		{
+			name:     "apply empty payload",
+			method:   "POST",
+			path:     "/api/config/apply",
+			body:     `{}`,
+			wantCode: http.StatusBadRequest,
+			contains: "no recipes or stacks provided",
+		},
+		{
+			name:     "apply unknown app",
+			method:   "POST",
+			path:     "/api/config/apply",
+			body:     `{"recipes":[{"app_id":"does-not-exist"}]}`,
+			wantCode: http.StatusBadRequest,
+			contains: "does-not-exist",
+		},
+		{
+			name:     "preview empty body",
+			method:   "POST",
+			path:     "/api/config/apply/preview",
+			body:     "",
+			wantCode: http.StatusBadRequest,
+			contains: "empty request body",
+		},
+		{
+			name:     "preview missing app_id",
+			method:   "POST",
+			path:     "/api/config/apply/preview",
+			body:     `{"recipes":[{}]}`,
+			wantCode: http.StatusOK,
+			contains: "recipe[0]: missing app_id",
+		},
+		{
+			name:     "preview unknown app",
+			method:   "POST",
+			path:     "/api/config/apply/preview",
+			body:     `{"stacks":[{"name":"web","apps":[{"app_id":"does-not-exist"}]}]}`,
+			wantCode: http.StatusOK,
+			contains: "stack[0].apps[0]",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := testServer(t)
+			w := doRequest(t, srv, tc.method, tc.path, tc.body)
+			if w.Code != tc.wantCode {
+				t.Fatalf("status = %d, want %d (body: %s)", w.Code, tc.wantCode, w.Body.String())
+			}
+			if tc.contains != "" && !strings.Contains(w.Body.String(), tc.contains) {
+				t.Fatalf("body %q does not contain %q", w.Body.String(), tc.contains)
+			}
+		})
+	}
+}
+
 func TestConfigExportDownload(t *testing.T) {
 	srv := testServer(t)
 	w := doRequest(t, srv, "GET", "/api/config/export/download", "")
@@ -928,6 +978,110 @@ func TestConfigDefaultsWithStorageDetails(t *testing.T) {
 	}
 	if detail["browsable"] != true {
 		t.Error("expected storage to be browsable")
+	}
+}
+
+func TestNoEngineConfigExportReturns503(t *testing.T) {
+	cfg := testConfig()
+	cat := testCatalog(t)
+	srv := New(cfg, cat, nil, nil)
+
+	w := doRequest(t, srv, "GET", "/api/config/export", "")
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want %d", w.Code, http.StatusServiceUnavailable)
+	}
+}
+
+func TestNoEngineConfigApplyReturns503(t *testing.T) {
+	cfg := testConfig()
+	cat := testCatalog(t)
+	srv := New(cfg, cat, nil, nil)
+
+	w := doRequest(t, srv, "POST", "/api/config/apply", `{"recipes":[{"app_id":"nginx"}]}`)
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want %d", w.Code, http.StatusServiceUnavailable)
+	}
+}
+
+func TestConfigExportUsesServiceWithoutEngine(t *testing.T) {
+	cfg := testConfig()
+	srv := New(cfg, nil, nil, nil)
+	setEngineServices(srv, engineSvcStub{
+		listRawFn: func() ([]*engine.Install, error) {
+			return []*engine.Install{{
+				ID:       "inst-1",
+				AppID:    "nginx",
+				AppName:  "Nginx",
+				Storage:  "local-lvm",
+				Bridge:   "vmbr0",
+				Cores:    2,
+				MemoryMB: 512,
+				DiskGB:   4,
+				Inputs:   map[string]string{"http_port": "8080"},
+			}}, nil
+		},
+		listStacksFn: func() ([]*engine.Stack, error) {
+			return []*engine.Stack{}, nil
+		},
+	})
+	srv.catalogSvc = catalogSvcStub{
+		getAppFn: func(id string) (*catalog.AppManifest, bool) {
+			return &catalog.AppManifest{
+				ID: "nginx",
+				Inputs: []catalog.InputSpec{
+					{Key: "http_port", Label: "HTTP Port"},
+				},
+			}, true
+		},
+	}
+
+	w := doRequest(t, srv, "GET", "/api/config/export", "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d (body: %s)", w.Code, http.StatusOK, w.Body.String())
+	}
+	body := decodeJSON(t, w)
+	if body["node"] != "testnode" {
+		t.Fatalf("node = %v, want testnode", body["node"])
+	}
+	recipes := body["recipes"].([]interface{})
+	if len(recipes) != 1 {
+		t.Fatalf("recipes len = %d, want 1", len(recipes))
+	}
+}
+
+func TestConfigApplyUsesServicesWithoutEngineCatalog(t *testing.T) {
+	cfg := testConfig()
+	srv := New(cfg, nil, nil, nil)
+	srv.catalogSvc = catalogSvcStub{
+		getAppFn: func(id string) (*catalog.AppManifest, bool) {
+			return &catalog.AppManifest{ID: id}, true
+		},
+	}
+	setEngineServices(srv, engineSvcStub{
+		startInstallFn: func(req engine.InstallRequest) (*engine.Job, error) {
+			return &engine.Job{ID: "job-install", AppID: req.AppID}, nil
+		},
+		startStackFn: func(req engine.StackCreateRequest) (*engine.Job, error) {
+			return &engine.Job{ID: "job-stack", AppID: "stack"}, nil
+		},
+	})
+
+	reqBody := `{
+		"recipes":[{"app_id":"nginx"}],
+		"stacks":[{"name":"web","apps":[{"app_id":"nginx"}]}]
+	}`
+	w := doRequest(t, srv, "POST", "/api/config/apply", reqBody)
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want %d (body: %s)", w.Code, http.StatusAccepted, w.Body.String())
+	}
+	body := decodeJSON(t, w)
+	jobs := body["jobs"].([]interface{})
+	if len(jobs) != 1 {
+		t.Fatalf("jobs len = %d, want 1", len(jobs))
+	}
+	stackJobs := body["stack_jobs"].([]interface{})
+	if len(stackJobs) != 1 {
+		t.Fatalf("stack_jobs len = %d, want 1", len(stackJobs))
 	}
 }
 
@@ -996,6 +1150,8 @@ func TestInstallAppDuplicateReturns409(t *testing.T) {
 	if w1.Code != http.StatusAccepted {
 		t.Fatalf("first install status = %d, want %d (body: %s)", w1.Code, http.StatusAccepted, w1.Body.String())
 	}
+	firstJob := decodeJSON(t, w1)
+	firstJobID, _ := firstJob["id"].(string)
 
 	// Second install of same app should return 409
 	w2 := doRequest(t, srv, "POST", "/api/apps/nginx/install", reqBody)
@@ -1010,6 +1166,10 @@ func TestInstallAppDuplicateReturns409(t *testing.T) {
 	if body["existing_job_id"] == nil || body["existing_job_id"] == "" {
 		t.Error("expected existing_job_id in 409 response")
 	}
+
+	if firstJobID != "" {
+		waitForJobTerminalState(t, srv, firstJobID)
+	}
 }
 
 func TestInstallAppDifferentAppsAllowed(t *testing.T) {
@@ -1020,11 +1180,22 @@ func TestInstallAppDifferentAppsAllowed(t *testing.T) {
 	if w1.Code != http.StatusAccepted {
 		t.Fatalf("nginx install status = %d, want %d", w1.Code, http.StatusAccepted)
 	}
+	job1 := decodeJSON(t, w1)
+	job1ID, _ := job1["id"].(string)
 
 	// Different app should still be allowed
 	w2 := doRequest(t, srv, "POST", "/api/apps/ollama/install", reqBody)
 	if w2.Code != http.StatusAccepted {
 		t.Fatalf("ollama install status = %d, want %d (body: %s)", w2.Code, http.StatusAccepted, w2.Body.String())
+	}
+	job2 := decodeJSON(t, w2)
+	job2ID, _ := job2["id"].(string)
+
+	if job1ID != "" {
+		waitForJobTerminalState(t, srv, job1ID)
+	}
+	if job2ID != "" {
+		waitForJobTerminalState(t, srv, job2ID)
 	}
 }
 
@@ -1159,6 +1330,112 @@ func TestNoEngineStacksReturnsEmpty(t *testing.T) {
 	body := decodeJSON(t, w)
 	if body["total"].(float64) != 0 {
 		t.Errorf("total = %v, want 0", body["total"])
+	}
+}
+
+func TestListStacksUsesEngineServiceWithoutEngine(t *testing.T) {
+	cfg := testConfig()
+	srv := New(cfg, nil, nil, nil)
+	setEngineServices(srv, engineSvcStub{
+		listStacksEnrichedFn: func() ([]*engine.StackListItem, error) {
+			return []*engine.StackListItem{{Stack: engine.Stack{ID: "stack-1", Name: "web"}}}, nil
+		},
+	})
+
+	w := doRequest(t, srv, "GET", "/api/stacks", "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", w.Code, http.StatusOK)
+	}
+	body := decodeJSON(t, w)
+	if int(body["total"].(float64)) != 1 {
+		t.Fatalf("total = %v, want 1", body["total"])
+	}
+}
+
+func TestGetStackUsesEngineServiceWithoutEngine(t *testing.T) {
+	cfg := testConfig()
+	srv := New(cfg, nil, nil, nil)
+	setEngineServices(srv, engineSvcStub{
+		getStackDetailFn: func(id string) (*engine.StackDetail, error) {
+			return &engine.StackDetail{Stack: engine.Stack{ID: id, Name: "web"}}, nil
+		},
+	})
+
+	w := doRequest(t, srv, "GET", "/api/stacks/stack-1", "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d (body: %s)", w.Code, http.StatusOK, w.Body.String())
+	}
+	body := decodeJSON(t, w)
+	if body["id"] != "stack-1" {
+		t.Fatalf("id = %v, want stack-1", body["id"])
+	}
+}
+
+func TestValidateStackUsesEngineServiceWithoutEngine(t *testing.T) {
+	cfg := testConfig()
+	srv := New(cfg, nil, nil, nil)
+	setEngineServices(srv, engineSvcStub{
+		validateStackFn: func(req engine.StackCreateRequest) map[string]interface{} {
+			return map[string]interface{}{
+				"valid":       true,
+				"recommended": map[string]interface{}{"cores": 2},
+			}
+		},
+	})
+
+	w := doRequest(t, srv, "POST", "/api/stacks/validate", `{"name":"x","apps":[{"app_id":"nginx"}]}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", w.Code, http.StatusOK)
+	}
+	body := decodeJSON(t, w)
+	if body["valid"] != true {
+		t.Fatalf("valid = %v, want true", body["valid"])
+	}
+}
+
+func TestDevListAppsUsesDevServiceWithoutStore(t *testing.T) {
+	cfg := testConfig()
+	cfg.Developer.Enabled = true
+	srv := New(cfg, nil, nil, nil)
+	srv.devSvc = devSvcStub{
+		listFn: func() ([]devmode.DevAppMeta, error) {
+			return []devmode.DevAppMeta{{ID: "my-app", Name: "My App"}}, nil
+		},
+	}
+
+	w := doRequest(t, srv, "GET", "/api/dev/apps", "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d (body: %s)", w.Code, http.StatusOK, w.Body.String())
+	}
+	body := decodeJSON(t, w)
+	if int(body["total"].(float64)) != 1 {
+		t.Fatalf("total = %v, want 1", body["total"])
+	}
+}
+
+func TestDevForkUsesServicesWithoutStoreCatalog(t *testing.T) {
+	cfg := testConfig()
+	cfg.Developer.Enabled = true
+	srv := New(cfg, nil, nil, nil)
+	srv.catalogSvc = catalogSvcStub{
+		getAppFn: func(id string) (*catalog.AppManifest, bool) {
+			return &catalog.AppManifest{ID: id, DirPath: "/tmp/source-app"}, true
+		},
+	}
+	srv.devSvc = devSvcStub{
+		forkFn: func(newID, sourceDir string) error { return nil },
+		getFn: func(id string) (*devmode.DevApp, error) {
+			return &devmode.DevApp{DevAppMeta: devmode.DevAppMeta{ID: id, Name: "Forked"}}, nil
+		},
+	}
+
+	w := doRequest(t, srv, "POST", "/api/dev/fork", `{"source_id":"nginx","new_id":"nginx-fork"}`)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want %d (body: %s)", w.Code, http.StatusCreated, w.Body.String())
+	}
+	body := decodeJSON(t, w)
+	if body["id"] != "nginx-fork" {
+		t.Fatalf("id = %v, want nginx-fork", body["id"])
 	}
 }
 

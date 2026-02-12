@@ -25,12 +25,12 @@ type terminalResize struct {
 func (s *Server) handleTerminal(w http.ResponseWriter, r *http.Request) {
 	installID := r.PathValue("id")
 
-	if s.engine == nil {
+	if s.engineInstallSvc == nil {
 		writeError(w, http.StatusServiceUnavailable, "engine not available")
 		return
 	}
 
-	inst, err := s.engine.GetInstall(installID)
+	inst, err := s.engineInstallSvc.GetInstall(installID)
 	if err != nil {
 		writeError(w, http.StatusNotFound, fmt.Sprintf("install %q not found", installID))
 		return
@@ -133,12 +133,12 @@ func (s *Server) handleTerminalForCTID(w http.ResponseWriter, r *http.Request, c
 func (s *Server) handleJournalLogs(w http.ResponseWriter, r *http.Request) {
 	installID := r.PathValue("id")
 
-	if s.engine == nil {
+	if s.engineInstallSvc == nil {
 		writeError(w, http.StatusServiceUnavailable, "engine not available")
 		return
 	}
 
-	inst, err := s.engine.GetInstall(installID)
+	inst, err := s.engineInstallSvc.GetInstall(installID)
 	if err != nil {
 		writeError(w, http.StatusNotFound, fmt.Sprintf("install %q not found", installID))
 		return
