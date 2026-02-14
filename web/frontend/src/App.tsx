@@ -276,7 +276,12 @@ function BranchDialog({ sourceId, sourceName, onClose }: { sourceId: string; sou
   )
 }
 
-function AppDetailView({ id, requireAuth, devMode }: { id: string; requireAuth: (cb: () => void) => void; devMode: boolean }) {
+function AppDetailView({ id: rawId, requireAuth, devMode }: { id: string; requireAuth: (cb: () => void) => void; devMode: boolean }) {
+  // Parse ?testInstall=1 from hash fragment (e.g. #/app/gitlab?testInstall=1)
+  const qIdx = rawId.indexOf('?')
+  const id = qIdx >= 0 ? rawId.substring(0, qIdx) : rawId
+  const autoTestInstall = qIdx >= 0 && rawId.substring(qIdx).includes('testInstall=1')
+
   const [app, setApp] = useState<AppDetail | null>(null)
   const [readme, setReadme] = useState('')
   const [error, setError] = useState('')
@@ -284,12 +289,14 @@ function AppDetailView({ id, requireAuth, devMode }: { id: string; requireAuth: 
   const [appStatus, setAppStatus] = useState<AppStatusResponse | null>(null)
   const [showBranch, setShowBranch] = useState(false)
   const [replaceExisting, setReplaceExisting] = useState(false)
+  const [keepVolumes, setKeepVolumes] = useState<string[]>([])
   const [showTestConfirm, setShowTestConfirm] = useState(false)
   const [existingInstall, setExistingInstall] = useState<Install | null>(null)
   const [ghStatus, setGhStatus] = useState<GitHubStatus | null>(null)
+  const [autoTriggered, setAutoTriggered] = useState(false)
 
   useEffect(() => {
-    setApp(null); setError(''); setAppStatus(null); setExistingInstall(null)
+    setApp(null); setError(''); setAppStatus(null); setExistingInstall(null); setAutoTriggered(false)
     api.app(id).then(setApp).catch(e => setError(e.message))
     api.appReadme(id).then(setReadme)
     api.appStatus(id).then(s => {
@@ -300,6 +307,20 @@ function AppDetailView({ id, requireAuth, devMode }: { id: string; requireAuth: 
       }
     }).catch(() => {})
   }, [id])
+
+  // Auto-open test install flow when navigated from dev editor with ?testInstall=1
+  useEffect(() => {
+    if (autoTestInstall && !autoTriggered && app && appStatus) {
+      setAutoTriggered(true)
+      if (appStatus.installed) {
+        setShowTestConfirm(true)
+      } else {
+        setShowInstall(true)
+      }
+      // Clean the URL to remove ?testInstall=1
+      window.location.hash = `#/app/${id}`
+    }
+  }, [autoTestInstall, autoTriggered, app, appStatus, id])
 
   useEffect(() => {
     if (devMode) {
@@ -312,10 +333,9 @@ function AppDetailView({ id, requireAuth, devMode }: { id: string; requireAuth: 
 
   const inputGroups = app.inputs && app.inputs.length > 0 ? groupInputs(app.inputs) : null
 
-  // Dev app viewing an official install — allow "Test Install" to replace
+  // Dev app — allow "Test Install" to replace any existing install or install fresh
   const isDevApp = app.source === 'developer'
-  const hasOfficialInstall = appStatus?.installed && appStatus?.app_source !== 'developer'
-  const canTestInstall = isDevApp && hasOfficialInstall
+  const canTestInstall = isDevApp && appStatus?.installed
 
   return (
     <div>
@@ -358,7 +378,7 @@ function AppDetailView({ id, requireAuth, devMode }: { id: string; requireAuth: 
         <TestInstallModal
           app={app}
           ctid={appStatus?.ctid}
-          onConfirm={() => { setShowTestConfirm(false); setReplaceExisting(true); setShowInstall(true) }}
+          onConfirm={(vols) => { setShowTestConfirm(false); setReplaceExisting(true); setKeepVolumes(vols); setShowInstall(true) }}
           onClose={() => setShowTestConfirm(false)}
         />
       )}
@@ -372,7 +392,7 @@ function AppDetailView({ id, requireAuth, devMode }: { id: string; requireAuth: 
         </div>
       )}
 
-      {showInstall && <InstallWizard app={app} onClose={() => { setShowInstall(false); setReplaceExisting(false) }} replaceExisting={replaceExisting} existingInstall={replaceExisting ? existingInstall : undefined} />}
+      {showInstall && <InstallWizard app={app} onClose={() => { setShowInstall(false); setReplaceExisting(false); setKeepVolumes([]) }} replaceExisting={replaceExisting} keepVolumes={keepVolumes} existingInstall={replaceExisting ? existingInstall : undefined} />}
 
       <div className="grid grid-cols-[repeat(auto-fit,minmax(280px,1fr))] gap-4 mt-6">
         <InfoCard title="Default Resources">
@@ -479,7 +499,7 @@ function AppDetailView({ id, requireAuth, devMode }: { id: string; requireAuth: 
   )
 }
 
-function InstallWizard({ app, onClose, replaceExisting, existingInstall }: { app: AppDetail; onClose: () => void; replaceExisting?: boolean; existingInstall?: Install | null }) {
+function InstallWizard({ app, onClose, replaceExisting, keepVolumes, existingInstall }: { app: AppDetail; onClose: () => void; replaceExisting?: boolean; keepVolumes?: string[]; existingInstall?: Install | null }) {
   const prev = existingInstall // shorthand for previous install values
   const [inputs, setInputs] = useState<Record<string, string>>(() => {
     if (prev?.inputs) return { ...prev.inputs }
@@ -653,6 +673,7 @@ function InstallWizard({ app, onClose, replaceExisting, existingInstall }: { app
       }
       if (Object.keys(allEnv).length > 0) req.env_vars = allEnv
       if (replaceExisting) req.replace_existing = true
+      if (keepVolumes && keepVolumes.length > 0) req.keep_volumes = keepVolumes
       const job = await api.installApp(app.id, req as InstallRequest)
       window.location.hash = `#/job/${job.id}`
     } catch (e: unknown) {
@@ -724,7 +745,25 @@ function InstallWizard({ app, onClose, replaceExisting, existingInstall }: { app
 
             {/* Managed volumes with toggle: PVE Volume vs Host Path */}
             {volumeVolumes.map(vol => {
-              const isBind = volumeBindOverrides[vol.name] !== undefined
+              const isKept = keepVolumes && keepVolumes.includes(vol.name)
+              const isBind = !isKept && volumeBindOverrides[vol.name] !== undefined
+
+              if (isKept) {
+                // Volume is being reattached from previous install — show locked/preserved state
+                return (
+                  <div key={vol.name} className="bg-bg-secondary rounded-lg p-3 mb-1.5 border border-primary/20">
+                    <div className="flex justify-between items-center">
+                      <div className="flex items-center gap-2">
+                        <span className="text-sm text-text-primary">{vol.label || vol.name}</span>
+                        <span className="text-xs text-text-muted font-mono">{vol.mount_path}</span>
+                      </div>
+                      <Badge className="bg-primary/10 text-primary">keeping data</Badge>
+                    </div>
+                    <div className="text-xs text-text-muted mt-1">Existing volume will be reattached to the new container.</div>
+                  </div>
+                )
+              }
+
               return (
                 <div key={vol.name} className="bg-bg-secondary rounded-lg p-3 mb-1.5">
                   <div className="flex justify-between items-center">
@@ -3020,9 +3059,23 @@ function DirectoryBrowser({ initialPath, onSelect, onClose }: { initialPath: str
 
 // --- Test Install Confirmation Modal ---
 
-function TestInstallModal({ app, ctid, onConfirm, onClose }: { app: AppDetail; ctid?: number; onConfirm: () => void; onClose: () => void }) {
+function TestInstallModal({ app, ctid, onConfirm, onClose }: { app: AppDetail; ctid?: number; onConfirm: (keepVolumes: string[]) => void; onClose: () => void }) {
   const bindVolumes = (app.volumes || []).filter(v => v.type === 'bind')
   const managedVolumes = (app.volumes || []).filter(v => (v.type || 'volume') === 'volume')
+  const [kept, setKept] = useState<Record<string, boolean>>(() => {
+    const init: Record<string, boolean> = {}
+    for (const v of managedVolumes) init[v.name] = true
+    return init
+  })
+  const toggleVolume = (name: string) => setKept(prev => ({ ...prev, [name]: !prev[name] }))
+  const allChecked = managedVolumes.every(v => kept[v.name])
+  const noneChecked = managedVolumes.every(v => !kept[v.name])
+  const toggleAll = () => {
+    const newVal = !allChecked
+    const next: Record<string, boolean> = {}
+    for (const v of managedVolumes) next[v.name] = newVal
+    setKept(next)
+  }
 
   return (
     <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-[200]" onClick={onClose}>
@@ -3031,7 +3084,7 @@ function TestInstallModal({ app, ctid, onConfirm, onClose }: { app: AppDetail; c
           <span className="text-xl">&#9888;</span> Test Install
         </h2>
         <p className="text-sm text-text-muted mb-5">
-          This will replace the existing install{ctid ? ` (CT ${ctid})` : ''} with a fresh container provisioned from scratch using your dev version of <span className="text-text-primary font-semibold">{app.name}</span>.
+          This will replace the existing install{ctid ? ` (CT ${ctid})` : ''} with a fresh container using your dev version of <span className="text-text-primary font-semibold">{app.name}</span>.
         </p>
 
         <div className="space-y-3 mb-6">
@@ -3044,16 +3097,39 @@ function TestInstallModal({ app, ctid, onConfirm, onClose }: { app: AppDetail; c
           </div>
 
           {managedVolumes.length > 0 && (
-            <div className="flex items-start gap-3 p-3 rounded-lg bg-red-500/5 border border-red-500/20">
-              <span className="text-red-400 text-lg mt-0.5">&#10005;</span>
-              <div>
-                <div className="text-sm font-semibold text-red-400 mb-0.5">Managed volumes destroyed</div>
-                <div className="text-xs text-text-muted">
-                  Proxmox volumes will be recreated fresh by the install script:{' '}
-                  {managedVolumes.map(v => (
-                    <span key={v.name} className="inline-block bg-bg-secondary rounded px-1.5 py-0.5 mr-1 mb-1 font-mono">{v.name} ({v.mount_path})</span>
-                  ))}
-                </div>
+            <div className="p-3 rounded-lg border border-border">
+              <div className="flex items-center justify-between mb-2">
+                <div className="text-sm font-semibold text-text-primary">Managed volumes</div>
+                <button onClick={toggleAll} className="text-xs text-text-muted hover:text-text-secondary cursor-pointer bg-transparent border-none font-mono">
+                  {allChecked ? 'Uncheck all' : 'Check all'}
+                </button>
+              </div>
+              <div className="space-y-1.5">
+                {managedVolumes.map(v => (
+                  <label key={v.name} className="flex items-center gap-2.5 p-2 rounded-lg cursor-pointer hover:bg-bg-secondary/50 transition-colors">
+                    <input
+                      type="checkbox"
+                      checked={!!kept[v.name]}
+                      onChange={() => toggleVolume(v.name)}
+                      className="w-4 h-4 accent-primary cursor-pointer"
+                    />
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2">
+                        <span className="text-sm font-mono text-text-primary">{v.name}</span>
+                        <span className="text-xs text-text-muted font-mono">{v.mount_path}</span>
+                      </div>
+                      {v.description && <div className="text-xs text-text-muted mt-0.5">{v.description}</div>}
+                    </div>
+                    <span className={`text-xs font-mono px-1.5 py-0.5 rounded ${kept[v.name] ? 'text-primary bg-primary/10' : 'text-red-400 bg-red-500/10'}`}>
+                      {kept[v.name] ? 'keep' : 'wipe'}
+                    </span>
+                  </label>
+                ))}
+              </div>
+              <div className="text-xs text-text-muted mt-2">
+                {noneChecked
+                  ? 'All volumes will be destroyed and recreated fresh — verifies a clean first-time install.'
+                  : 'Checked volumes will be reattached to the new container. Unchecked volumes will be destroyed and recreated.'}
               </div>
             </div>
           )}
@@ -3071,15 +3147,15 @@ function TestInstallModal({ app, ctid, onConfirm, onClose }: { app: AppDetail; c
           <div className="flex items-start gap-3 p-3 rounded-lg bg-blue-500/5 border border-blue-500/20">
             <span className="text-blue-400 text-lg mt-0.5">&#9432;</span>
             <div>
-              <div className="text-sm font-semibold text-blue-400 mb-0.5">Clean slate</div>
-              <div className="text-xs text-text-muted">Your dev install script will run from scratch on a fresh container. This verifies the script works correctly end-to-end. Previous resource settings (storage, cores, memory) will be pre-filled in the wizard.</div>
+              <div className="text-sm font-semibold text-blue-400 mb-0.5">Fresh container</div>
+              <div className="text-xs text-text-muted">Your dev install script will run on a new container. Previous resource settings will be pre-filled in the wizard.</div>
             </div>
           </div>
         </div>
 
         <div className="flex gap-3 justify-end">
           <button onClick={onClose} className="px-5 py-2.5 text-sm font-semibold border border-border rounded-lg cursor-pointer text-text-secondary bg-transparent hover:border-text-secondary transition-colors font-mono">Cancel</button>
-          <button onClick={onConfirm} className="px-5 py-2.5 text-sm font-semibold border-none rounded-lg cursor-pointer bg-yellow-400 text-bg-primary hover:shadow-[0_0_20px_rgba(250,204,21,0.3)] transition-all font-mono">Replace &amp; Install</button>
+          <button onClick={() => onConfirm(managedVolumes.filter(v => kept[v.name]).map(v => v.name))} className="px-5 py-2.5 text-sm font-semibold border-none rounded-lg cursor-pointer bg-yellow-400 text-bg-primary hover:shadow-[0_0_20px_rgba(250,204,21,0.3)] transition-all font-mono">Replace &amp; Install</button>
         </div>
       </div>
     </div>
@@ -4809,6 +4885,8 @@ export function DevStatusBadge({ status }: { status: string }) {
     draft: 'border-text-muted text-text-muted',
     validated: 'border-blue-400 text-blue-400',
     deployed: 'border-primary text-primary',
+    published: 'border-yellow-400 text-yellow-400',
+    merged: 'border-purple-400 text-purple-400',
   }
   return <span className={`text-xs font-mono px-2 py-0.5 border rounded ${colors[status] || colors.draft}`}>{status}</span>
 }

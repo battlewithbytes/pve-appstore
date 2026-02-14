@@ -291,6 +291,7 @@ export interface InstallRequest {
   devices?: DevicePassthrough[];
   env_vars?: Record<string, string>;
   replace_existing?: boolean;
+  keep_volumes?: string[];
 }
 
 export interface EditRequest {
