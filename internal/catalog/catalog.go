@@ -16,6 +16,7 @@ type Catalog struct {
 	branch   string
 	localDir string
 	apps     map[string]*AppManifest
+	stacks   map[string]*StackManifest
 }
 
 // New creates a new Catalog instance.
@@ -25,6 +26,7 @@ func New(repoURL, branch, dataDir string) *Catalog {
 		branch:   branch,
 		localDir: filepath.Join(dataDir, "catalog"),
 		apps:     make(map[string]*AppManifest),
+		stacks:   make(map[string]*StackManifest),
 	}
 }
 
@@ -34,8 +36,9 @@ func (c *Catalog) Refresh() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	// Snapshot dev apps before re-indexing
-	saved := c.devApps()
+	// Snapshot dev apps and stacks before re-indexing
+	savedApps := c.devApps()
+	savedStacks := c.devStacks()
 
 	if err := c.fetchRepo(); err != nil {
 		return fmt.Errorf("fetching catalog: %w", err)
@@ -45,9 +48,14 @@ func (c *Catalog) Refresh() error {
 		return fmt.Errorf("indexing catalog: %w", err)
 	}
 
-	// Restore dev apps
-	for _, app := range saved {
+	c.indexStacks()
+
+	// Restore dev apps and stacks
+	for _, app := range savedApps {
 		c.apps[app.ID] = app
+	}
+	for _, stack := range savedStacks {
+		c.stacks[stack.ID] = stack
 	}
 
 	return nil
@@ -63,7 +71,11 @@ func (c *Catalog) LoadLocal(dir string) error {
 		return fmt.Errorf("resolving catalog path: %w", err)
 	}
 	c.localDir = abs
-	return c.indexApps()
+	if err := c.indexApps(); err != nil {
+		return err
+	}
+	c.indexStacks()
+	return nil
 }
 
 // List returns all validated apps.
@@ -252,6 +264,44 @@ func (c *Catalog) RemoveDevApp(id string) {
 	}
 }
 
+// ListStacks returns all validated stacks.
+func (c *Catalog) ListStacks() []*StackManifest {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	stacks := make([]*StackManifest, 0, len(c.stacks))
+	for _, s := range c.stacks {
+		stacks = append(stacks, s)
+	}
+	return stacks
+}
+
+// GetStack returns a single stack by ID.
+func (c *Catalog) GetStack(id string) (*StackManifest, bool) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	s, ok := c.stacks[id]
+	return s, ok
+}
+
+// MergeDevStack adds or replaces a developer stack in the catalog.
+func (c *Catalog) MergeDevStack(s *StackManifest) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	s.Source = "developer"
+	c.stacks[s.ID] = s
+}
+
+// RemoveDevStack removes a developer stack from the catalog (only if source is "developer").
+func (c *Catalog) RemoveDevStack(id string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if s, ok := c.stacks[id]; ok && s.Source == "developer" {
+		delete(c.stacks, id)
+	}
+}
+
 // devApps returns a snapshot of all developer-sourced apps (must be called with lock held).
 func (c *Catalog) devApps() []*AppManifest {
 	var devApps []*AppManifest
@@ -261,6 +311,71 @@ func (c *Catalog) devApps() []*AppManifest {
 		}
 	}
 	return devApps
+}
+
+// devStacks returns a snapshot of all developer-sourced stacks (must be called with lock held).
+func (c *Catalog) devStacks() []*StackManifest {
+	var result []*StackManifest
+	for _, s := range c.stacks {
+		if s.Source == "developer" {
+			result = append(result, s)
+		}
+	}
+	return result
+}
+
+// indexStacks scans the stacks/ directory and loads stack manifests.
+func (c *Catalog) indexStacks() {
+	stacksDir := filepath.Join(c.localDir, "stacks")
+
+	// Also check catalog/stacks/ layout
+	if _, err := os.Stat(stacksDir); os.IsNotExist(err) {
+		alt := filepath.Join(c.localDir, "catalog", "stacks")
+		if _, err := os.Stat(alt); err == nil {
+			stacksDir = alt
+		}
+	}
+
+	entries, err := os.ReadDir(stacksDir)
+	if err != nil {
+		// No stacks directory is fine — not all catalogs have stacks
+		c.stacks = make(map[string]*StackManifest)
+		return
+	}
+
+	newStacks := make(map[string]*StackManifest)
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+
+		stackDir := filepath.Join(stacksDir, entry.Name())
+		manifestPath := filepath.Join(stackDir, "stack.yml")
+
+		if _, err := os.Stat(manifestPath); os.IsNotExist(err) {
+			continue
+		}
+
+		sm, err := ParseStackManifest(manifestPath)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "warning: skipping stack %s: %v\n", entry.Name(), err)
+			continue
+		}
+
+		if err := ValidateStackManifest(sm); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: skipping stack %s: %v\n", entry.Name(), err)
+			continue
+		}
+
+		sm.DirPath = stackDir
+		if _, err := os.Stat(filepath.Join(stackDir, "icon.png")); err == nil {
+			sm.IconPath = filepath.Join(stackDir, "icon.png")
+		}
+
+		newStacks[sm.ID] = sm
+	}
+
+	c.stacks = newStacks
 }
 
 func matches(app *AppManifest, query string) bool {

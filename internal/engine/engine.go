@@ -9,7 +9,6 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -38,6 +37,7 @@ type ContainerStatusDetail struct {
 type StorageInfo struct {
 	ID        string // Proxmox storage ID (e.g. "media-storage")
 	Type      string // Storage type (e.g. "zfspool", "dir", "lvmthin")
+	Content   string // Content types (e.g. "rootdir,images")
 	Path      string // Resolved filesystem path (empty if not browsable)
 	Browsable bool   // true if the storage has a real filesystem path
 }
@@ -63,6 +63,7 @@ type ContainerManager interface {
 	UpdateConfig(ctx context.Context, ctid int, params url.Values) error
 	DetachMountPoints(ctx context.Context, ctid int, indexes []int) error
 	GetStorageInfo(ctx context.Context, storageID string) (*StorageInfo, error)
+	ListStorages(ctx context.Context) ([]StorageInfo, error)
 	ConfigureDevices(ctid int, devices []DevicePassthrough) error
 	MountHostPath(ctid int, mpIndex int, hostPath, containerPath string, readOnly bool) error
 	AppendLXCConfig(ctid int, lines []string) error
@@ -296,6 +297,9 @@ func (e *Engine) StartInstall(req InstallRequest) (*Job, error) {
 	if err := ValidateIPAddress(req.IPAddress); err != nil {
 		return nil, err
 	}
+	if err := ValidateMACAddress(req.MACAddress); err != nil {
+		return nil, err
+	}
 	if err := ValidateTags(req.ExtraTags); err != nil {
 		return nil, err
 	}
@@ -376,6 +380,7 @@ func (e *Engine) StartInstall(req InstallRequest) (*Job, error) {
 		DiskGB:       diskGB,
 		Hostname:     hostname,
 		IPAddress:    req.IPAddress,
+		MACAddress:   strings.ToUpper(req.MACAddress),
 		OnBoot:       onboot,
 		Unprivileged: unprivileged,
 		ExtraTags:    req.ExtraTags,
@@ -562,23 +567,29 @@ func (e *Engine) runUninstall(job *Job, inst *Install, keepVolumes bool) {
 	ctx.info("Starting uninstall of %s (CTID %d, keepVolumes=%v)", inst.AppName, inst.CTID, keepVolumes)
 
 	bgCtx := context.Background()
-	ctGone := false // set when we detect the container no longer exists
+	ctGone := inst.CTID <= 0 // no valid container to destroy (e.g. failed edit)
+
+	if ctGone {
+		ctx.info("No valid container (CTID %d) — skipping Proxmox cleanup", inst.CTID)
+	}
 
 	// Stop container
-	ctx.transition("stopping")
-	ctx.info("Stopping container %d...", inst.CTID)
-
-	// Force stop — no need for graceful shutdown during uninstall
-	if err := e.cm.Stop(bgCtx, inst.CTID); err != nil {
-		if isContainerGone(err) {
-			ctx.info("Container %d already removed — skipping destroy", inst.CTID)
-			ctGone = true
-		} else {
-			ctx.warn("Force stop error: %v", err)
-		}
-	}
 	if !ctGone {
-		ctx.info("Container %d stopped", inst.CTID)
+		ctx.transition("stopping")
+		ctx.info("Stopping container %d...", inst.CTID)
+
+		// Force stop — no need for graceful shutdown during uninstall
+		if err := e.cm.Stop(bgCtx, inst.CTID); err != nil {
+			if isContainerGone(err) {
+				ctx.info("Container %d already removed — skipping destroy", inst.CTID)
+				ctGone = true
+			} else {
+				ctx.warn("Force stop error: %v", err)
+			}
+		}
+		if !ctGone {
+			ctx.info("Container %d stopped", inst.CTID)
+		}
 	}
 
 	// If keeping volumes, detach managed volumes before destroy (bind mounts don't need detaching)
@@ -797,6 +808,7 @@ func (e *Engine) ListInstallsLive() ([]*Install, error) {
 }
 
 // ListInstallsEnriched returns all installations with IP and uptime from Proxmox.
+// Live data is fetched concurrently across all active installs.
 func (e *Engine) ListInstallsEnriched() ([]*InstallListItem, error) {
 	installs, err := e.store.ListInstalls()
 	if err != nil {
@@ -804,30 +816,39 @@ func (e *Engine) ListInstallsEnriched() ([]*InstallListItem, error) {
 	}
 
 	ctx := context.Background()
-	items := make([]*InstallListItem, 0, len(installs))
-	for _, inst := range installs {
-		item := &InstallListItem{Install: *inst}
-		if inst.Status == "uninstalled" || inst.CTID == 0 {
-			items = append(items, item)
-			continue
-		}
-		if sd, err := e.cm.StatusDetail(ctx, inst.CTID); err == nil {
-			item.Status = sd.Status
-			item.Uptime = sd.Uptime
-			item.Live = sd
-		}
-		if ip, err := e.cm.GetIP(inst.CTID); err == nil && ip != "" {
-			item.IP = ip
-		}
+	items := make([]*InstallListItem, len(installs))
+	var wg sync.WaitGroup
+
+	for i, inst := range installs {
+		items[i] = &InstallListItem{Install: *inst}
+
+		// Catalog version check is local — no I/O needed
 		if app, ok := e.catalog.Get(inst.AppID); ok {
-			item.CatalogVersion = app.Version
+			items[i].CatalogVersion = app.Version
 			if inst.AppVersion != "" && isNewerVersion(app.Version, inst.AppVersion) {
-				item.UpdateAvailable = true
+				items[i].UpdateAvailable = true
 			}
 		}
-		items = append(items, item)
+
+		if inst.Status == "uninstalled" || inst.CTID == 0 {
+			continue
+		}
+
+		wg.Add(1)
+		go func(item *InstallListItem, ctid int) {
+			defer wg.Done()
+			if sd, err := e.cm.StatusDetail(ctx, ctid); err == nil {
+				item.Status = sd.Status
+				item.Uptime = sd.Uptime
+				item.Live = sd
+			}
+			if ip, err := e.cm.GetIP(ctid); err == nil && ip != "" {
+				item.IP = ip
+			}
+		}(items[i], inst.CTID)
 	}
 
+	wg.Wait()
 	return items, nil
 }
 
@@ -1239,23 +1260,30 @@ func (e *Engine) EditInstall(installID string, req EditRequest) (*Job, error) {
 
 	now := time.Now()
 	job := &Job{
-		ID:          generateID(),
-		Type:        JobTypeEdit,
-		State:       StateQueued,
-		AppID:       inst.AppID,
-		AppName:     inst.AppName,
-		Node:        e.cfg.NodeName,
-		Pool:        inst.Pool,
-		Storage:     inst.Storage, // storage cannot change (volumes tied to it)
-		Bridge:      bridge,
-		Cores:       cores,
-		MemoryMB:    memoryMB,
-		DiskGB:      diskGB,
-		Inputs:      inputs,
-		Outputs:     make(map[string]string),
-		MountPoints: inst.MountPoints, // carry mount points forward
-		CreatedAt:   now,
-		UpdatedAt:   now,
+		ID:            generateID(),
+		Type:          JobTypeEdit,
+		State:         StateQueued,
+		AppID:         inst.AppID,
+		AppName:       inst.AppName,
+		Node:          e.cfg.NodeName,
+		Pool:          inst.Pool,
+		Storage:       inst.Storage, // storage cannot change (volumes tied to it)
+		Bridge:        bridge,
+		Cores:         cores,
+		MemoryMB:      memoryMB,
+		DiskGB:        diskGB,
+		Hostname:      inst.Hostname,
+		IPAddress:     inst.IPAddress,
+		MACAddress:    inst.MACAddress,
+		OnBoot:        inst.OnBoot,
+		Unprivileged:  inst.Unprivileged,
+		Inputs:        inputs,
+		Outputs:       make(map[string]string),
+		MountPoints:   inst.MountPoints, // carry mount points forward
+		Devices:       inst.Devices,
+		EnvVars:       inst.EnvVars,
+		CreatedAt:     now,
+		UpdatedAt:     now,
 	}
 
 	if err := e.store.CreateJob(job); err != nil {
@@ -1289,21 +1317,26 @@ func (e *Engine) runEdit(job *Job, inst *Install) {
 
 	bgCtx := context.Background()
 
-	// Read MAC address from current container before destroying it
-	if inst.CTID > 0 {
+	// Prefer user-set MAC from install record; fall back to extracting from container
+	if inst.MACAddress != "" {
+		ctx.hwAddr = inst.MACAddress
+		ctx.info("Using stored MAC address: %s", ctx.hwAddr)
+	} else if inst.CTID > 0 {
 		if config, err := e.cm.GetConfig(bgCtx, inst.CTID); err == nil {
 			if net0, ok := config["net0"]; ok {
 				if net0Str, ok := net0.(string); ok {
 					ctx.hwAddr = extractHWAddr(net0Str)
 					if ctx.hwAddr != "" {
-						ctx.info("Preserved MAC address: %s", ctx.hwAddr)
+						ctx.info("Preserved MAC address from container: %s", ctx.hwAddr)
 					}
 				}
 			}
 		} else {
 			ctx.warn("Could not read container config for MAC address: %v", err)
 		}
+	}
 
+	if inst.CTID > 0 {
 		// Detach managed volumes before destroy if present
 		hasDetachedVolumes := false
 		if len(inst.MountPoints) > 0 {
@@ -1382,6 +1415,13 @@ func (e *Engine) runEdit(job *Job, inst *Install) {
 			ctx.job.UpdatedAt = now
 			ctx.job.CompletedAt = &now
 			e.store.UpdateJob(ctx.job)
+
+			// The old container was already destroyed — mark install as error
+			// so the UI doesn't show a ghost "running" install.
+			inst.Status = "error"
+			inst.CTID = 0
+			e.store.UpdateInstall(inst)
+			ctx.warn("Install marked as error — old container was destroyed but recreate failed")
 			return
 		}
 	}
@@ -1398,16 +1438,24 @@ func (e *Engine) runEdit(job *Job, inst *Install) {
 	inst.Cores = ctx.job.Cores
 	inst.MemoryMB = ctx.job.MemoryMB
 	inst.DiskGB = ctx.job.DiskGB
+	inst.Hostname = ctx.job.Hostname
+	inst.IPAddress = ctx.job.IPAddress
+	inst.MACAddress = ctx.job.MACAddress
+	inst.OnBoot = ctx.job.OnBoot
+	inst.Unprivileged = ctx.job.Unprivileged
 	inst.Inputs = ctx.job.Inputs
 	inst.Outputs = ctx.job.Outputs
 	inst.MountPoints = ctx.job.MountPoints
+	inst.Devices = ctx.job.Devices
+	inst.EnvVars = ctx.job.EnvVars
 	e.store.UpdateInstall(inst)
 
 	ctx.info("Edit complete! %s CT %d recreated with preserved MAC address.", app.Name, ctx.job.CTID)
 }
 
 // validMAC matches a standard colon-separated MAC address (e.g. BC:24:11:AB:CD:EF).
-var validMAC = regexp.MustCompile(`^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$`)
+// Kept as an alias to validMACRe in security.go for use by extractHWAddr.
+var validMAC = validMACRe
 
 // extractHWAddr parses a Proxmox net0 config string and returns the hwaddr value.
 // Example input: "name=eth0,bridge=vmbr0,hwaddr=BC:24:11:AB:CD:EF,ip=dhcp"
@@ -1543,6 +1591,7 @@ func (e *Engine) ListStacks() ([]*Stack, error) {
 }
 
 // ListStacksEnriched returns all stacks with live data from Proxmox.
+// Live data is fetched concurrently across all active stacks.
 func (e *Engine) ListStacksEnriched() ([]*StackListItem, error) {
 	stacks, err := e.store.ListStacks()
 	if err != nil {
@@ -1550,24 +1599,31 @@ func (e *Engine) ListStacksEnriched() ([]*StackListItem, error) {
 	}
 
 	ctx := context.Background()
-	items := make([]*StackListItem, 0, len(stacks))
-	for _, stack := range stacks {
-		item := &StackListItem{Stack: *stack}
+	items := make([]*StackListItem, len(stacks))
+	var wg sync.WaitGroup
+
+	for i, stack := range stacks {
+		items[i] = &StackListItem{Stack: *stack}
+
 		if stack.Status == "uninstalled" || stack.CTID == 0 {
-			items = append(items, item)
 			continue
 		}
-		if sd, err := e.cm.StatusDetail(ctx, stack.CTID); err == nil {
-			item.Status = sd.Status
-			item.Uptime = sd.Uptime
-			item.Live = sd
-		}
-		if ip, err := e.cm.GetIP(stack.CTID); err == nil && ip != "" {
-			item.IP = ip
-		}
-		items = append(items, item)
+
+		wg.Add(1)
+		go func(item *StackListItem, ctid int) {
+			defer wg.Done()
+			if sd, err := e.cm.StatusDetail(ctx, ctid); err == nil {
+				item.Status = sd.Status
+				item.Uptime = sd.Uptime
+				item.Live = sd
+			}
+			if ip, err := e.cm.GetIP(ctid); err == nil && ip != "" {
+				item.IP = ip
+			}
+		}(items[i], stack.CTID)
 	}
 
+	wg.Wait()
 	return items, nil
 }
 
@@ -1649,20 +1705,26 @@ func (e *Engine) runStackUninstall(job *Job, stack *Stack) {
 	ctx.info("Starting uninstall of stack %s (CTID %d)", stack.Name, stack.CTID)
 
 	bgCtx := context.Background()
-	ctGone := false
+	ctGone := stack.CTID <= 0 // no valid container (e.g. failed edit)
+
+	if ctGone {
+		ctx.info("No valid container (CTID %d) — skipping Proxmox cleanup", stack.CTID)
+	}
 
 	// Stop container
-	ctx.transition("stopping")
-	if err := e.cm.Shutdown(bgCtx, stack.CTID, 30); err != nil {
-		if isContainerGone(err) {
-			ctx.info("Container %d already removed — skipping stop/destroy", stack.CTID)
-			ctGone = true
-		} else {
-			ctx.warn("Graceful shutdown failed: %v — forcing stop", err)
-			if err := e.cm.Stop(bgCtx, stack.CTID); err != nil {
-				if isContainerGone(err) {
-					ctx.info("Container %d already removed — skipping destroy", stack.CTID)
-					ctGone = true
+	if !ctGone {
+		ctx.transition("stopping")
+		if err := e.cm.Shutdown(bgCtx, stack.CTID, 30); err != nil {
+			if isContainerGone(err) {
+				ctx.info("Container %d already removed — skipping stop/destroy", stack.CTID)
+				ctGone = true
+			} else {
+				ctx.warn("Graceful shutdown failed: %v — forcing stop", err)
+				if err := e.cm.Stop(bgCtx, stack.CTID); err != nil {
+					if isContainerGone(err) {
+						ctx.info("Container %d already removed — skipping destroy", stack.CTID)
+						ctGone = true
+					}
 				}
 			}
 		}
@@ -1762,6 +1824,7 @@ func (e *Engine) EditStack(stackID string, req EditRequest) (*Job, error) {
 		DiskGB:      diskGB,
 		Hostname:    stack.Hostname,
 		IPAddress:   stack.IPAddress,
+		MACAddress:  stack.MACAddress,
 		OnBoot:      stack.OnBoot,
 		Unprivileged: stack.Unprivileged,
 		Inputs:      make(map[string]string),
@@ -1805,19 +1868,24 @@ func (e *Engine) runStackEdit(job *Job, stack *Stack) {
 
 	bgCtx := context.Background()
 
-	// Read MAC address before destroying
-	if stack.CTID > 0 {
+	// Prefer user-set MAC from stack record; fall back to extracting from container
+	if stack.MACAddress != "" {
+		ctx.hwAddr = stack.MACAddress
+		ctx.info("Using stored MAC address: %s", ctx.hwAddr)
+	} else if stack.CTID > 0 {
 		if config, err := e.cm.GetConfig(bgCtx, stack.CTID); err == nil {
 			if net0, ok := config["net0"]; ok {
 				if net0Str, ok := net0.(string); ok {
 					ctx.hwAddr = extractHWAddr(net0Str)
 					if ctx.hwAddr != "" {
-						ctx.info("Preserved MAC address: %s", ctx.hwAddr)
+						ctx.info("Preserved MAC address from container: %s", ctx.hwAddr)
 					}
 				}
 			}
 		}
+	}
 
+	if stack.CTID > 0 {
 		// Detach managed volumes before destroy
 		hasDetachedVolumes := false
 		if len(stack.MountPoints) > 0 {
@@ -1887,6 +1955,14 @@ func (e *Engine) runStackEdit(job *Job, stack *Stack) {
 	// Re-run the full stack install pipeline (reuses hwAddr via the installContext)
 	// We need to inject hwAddr into the stack create step — done via installContext
 	e.runStackInstallWithHWAddr(bgCtx, job, stack, manifests, ctx.hwAddr)
+
+	// If the pipeline failed after we already destroyed the old container,
+	// mark the stack as error so the UI doesn't show a ghost "running" stack.
+	if job.State == StateFailed {
+		stack.Status = "error"
+		stack.CTID = 0
+		e.store.UpdateStack(stack)
+	}
 }
 
 // runStackInstallWithHWAddr re-runs the stack install pipeline preserving the MAC address.
@@ -2218,6 +2294,11 @@ func (e *Engine) runStackInstallWithHWAddr(bgCtx context.Context, job *Job, stac
 // GetStorageInfo returns resolved storage information for a Proxmox storage ID.
 func (e *Engine) GetStorageInfo(ctx context.Context, storageID string) (*StorageInfo, error) {
 	return e.cm.GetStorageInfo(ctx, storageID)
+}
+
+// ListStorages returns all available storages suitable for containers.
+func (e *Engine) ListStorages(ctx context.Context) ([]StorageInfo, error) {
+	return e.cm.ListStorages(ctx)
 }
 
 // isNewerVersion returns true if catalog version is strictly greater than installed version.

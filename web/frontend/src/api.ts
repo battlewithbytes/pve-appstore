@@ -1,4 +1,4 @@
-import type { AppsResponse, AppDetail, CategoriesResponse, HealthResponse, JobsResponse, LogsResponse, InstallsResponse, InstallRequest, InstallDetail, Install, Job, ConfigDefaultsResponse, BrowseResponse, MountInfo, ExportResponse, ApplyResponse, ApplyPreviewResponse, AppStatusResponse, StacksResponse, StackDetail, StackCreateRequest, StackValidateResponse, EditRequest, ReconfigureRequest, Settings, SettingsUpdate, DevAppsResponse, DevApp, DevTemplate, ValidationResult, DockerfileChainEvent, GitHubStatus, PublishStatus } from './types';
+import type { AppsResponse, AppDetail, CategoriesResponse, HealthResponse, JobsResponse, LogsResponse, InstallsResponse, InstallRequest, InstallDetail, Install, Job, ConfigDefaultsResponse, BrowseResponse, MountInfo, ExportResponse, ApplyResponse, ApplyPreviewResponse, AppStatusResponse, StacksResponse, StackDetail, StackCreateRequest, StackValidateResponse, EditRequest, ReconfigureRequest, Settings, SettingsUpdate, DiscoverResponse, DevAppsResponse, DevApp, DevTemplate, ValidationResult, DockerfileChainEvent, GitHubStatus, PublishStatus, DevStacksResponse, DevStack, CatalogStacksResponse, CatalogStack, ZipImportResponse } from './types';
 
 const BASE = '/api';
 
@@ -236,6 +236,8 @@ export const api = {
       body: JSON.stringify(update),
     }),
 
+  discoverResources: () => fetchJSON<DiscoverResponse>(`${BASE}/settings/discover`),
+
   // --- Developer Mode ---
 
   devApps: () => fetchJSON<DevAppsResponse>(`${BASE}/dev/apps`),
@@ -376,4 +378,69 @@ export const api = {
     }
     return appId;
   },
+
+  // --- Import ZIP ---
+
+  devImportZip: async (file: File): Promise<ZipImportResponse> => {
+    const form = new FormData();
+    form.append('file', file);
+    const res = await fetch(`${BASE}/dev/import/zip`, { method: 'POST', body: form });
+    if (!res.ok) { const b = await res.json().catch(() => ({})); throw new Error(b.error || `HTTP ${res.status}`); }
+    return res.json();
+  },
+
+  // --- Developer Stacks ---
+
+  devStacks: () => fetchJSON<DevStacksResponse>(`${BASE}/dev/stacks`),
+
+  devCreateStack: (id: string, template?: string) =>
+    fetchJSON<DevStack>(`${BASE}/dev/stacks`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id, template }),
+    }),
+
+  devGetStack: (id: string) => fetchJSON<DevStack>(`${BASE}/dev/stacks/${id}`),
+
+  devSaveStackManifest: (id: string, content: string) =>
+    fetchJSON<{ status: string }>(`${BASE}/dev/stacks/${id}/manifest`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'text/plain' },
+      body: content,
+    }),
+
+  devDeleteStack: (id: string) =>
+    fetchJSON<{ status: string }>(`${BASE}/dev/stacks/${id}`, { method: 'DELETE' }),
+
+  devValidateStack: (id: string) =>
+    fetchJSON<ValidationResult>(`${BASE}/dev/stacks/${id}/validate`, { method: 'POST' }),
+
+  devDeployStack: (id: string) =>
+    fetchJSON<{ status: string; stack_id: string; message: string }>(`${BASE}/dev/stacks/${id}/deploy`, { method: 'POST' }),
+
+  devUndeployStack: (id: string) =>
+    fetchJSON<{ status: string }>(`${BASE}/dev/stacks/${id}/undeploy`, { method: 'POST' }),
+
+  devStackIconUrl: (id: string) => `${BASE}/dev/stacks/${id}/icon`,
+
+  devExportStackUrl: (id: string) => `${BASE}/dev/stacks/${id}/export`,
+
+  devStackPublishStatus: (id: string) =>
+    fetchJSON<PublishStatus>(`${BASE}/dev/stacks/${id}/publish-status`),
+
+  devPublishStack: (id: string) =>
+    fetchJSON<{ pr_url: string; pr_number: number }>(`${BASE}/dev/stacks/${id}/publish`, { method: 'POST' }),
+
+  // --- Catalog Stacks ---
+
+  catalogStacks: () => fetchJSON<CatalogStacksResponse>(`${BASE}/catalog-stacks`),
+
+  catalogStack: (id: string) => fetchJSON<{ stack: CatalogStack; readme: string }>(`${BASE}/catalog-stacks/${id}`),
+
+  installCatalogStack: (id: string, overrides?: { storage?: string; bridge?: string; cores?: number; memory_mb?: number; disk_gb?: number; hostname?: string }) =>
+    fetchJSON<Job>(`${BASE}/catalog-stacks/${id}/install`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(overrides || {}),
+    }),
 };

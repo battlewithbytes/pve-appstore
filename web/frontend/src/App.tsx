@@ -7,7 +7,7 @@ import Markdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { api } from './api'
 import { CodeEditor } from './CodeEditor'
-import type { AppSummary, AppDetail, AppInput, HealthResponse, Job, LogEntry, InstallDetail, InstallListItem, ContainerLiveStatus, ConfigDefaultsResponse, MountPoint, MountInfo, BrowseEntry, ExportResponse, ApplyPreviewResponse, InstallRequest, EditRequest, ReconfigureRequest, DevicePassthrough, AppStatusResponse, StackListItem, StackDetail, StackCreateRequest, StackValidateResponse, StackApp, Settings, SettingsUpdate, DevAppMeta, DevApp, DevTemplate, ValidationResult, ValidationMsg, DockerfileChainEvent, GitHubStatus, PublishStatus } from './types'
+import type { AppSummary, AppDetail, AppInput, HealthResponse, Job, LogEntry, InstallDetail, InstallListItem, ContainerLiveStatus, ConfigDefaultsResponse, MountPoint, MountInfo, BrowseEntry, ExportResponse, ApplyPreviewResponse, InstallRequest, EditRequest, ReconfigureRequest, DevicePassthrough, AppStatusResponse, StackListItem, StackDetail, StackCreateRequest, StackValidateResponse, StackApp, Settings, SettingsUpdate, DiscoverResponse, DevAppMeta, DevApp, DevTemplate, ValidationResult, ValidationMsg, DockerfileChainEvent, GitHubStatus, PublishStatus, DevStackMeta, DevStack, CatalogStack } from './types'
 
 function useHash() {
   const [hash, setHash] = useState(window.location.hash)
@@ -62,10 +62,13 @@ function App() {
   const isStacks = hash === '#/stacks'
   const isCreateStack = hash === '#/create-stack'
   const isJobs = hash === '#/jobs'
-  const isConfig = hash === '#/config'
+  const isConfig = hash === '#/backup'
   const isSettings = hash === '#/settings'
   const isDeveloper = hash === '#/developer' || hash.startsWith('#/dev/')
   const devAppMatch = hash.match(/^#\/dev\/(.+)$/)
+  const devStackMatch = hash.match(/^#\/dev\/stack\/(.+)$/)
+  const isCatalogStacks = hash === '#/catalog-stacks'
+  const catalogStackMatch = hash.match(/^#\/catalog-stack\/(.+)$/)
 
   let content
   if (jobMatch) content = <JobView id={jobMatch[1]} />
@@ -77,7 +80,10 @@ function App() {
   else if (isCreateStack) content = <StackCreateWizard requireAuth={requireAuth} />
   else if (isJobs) content = <JobsList />
   else if (isConfig) content = <ConfigView requireAuth={requireAuth} />
-  else if (isSettings) content = <SettingsView requireAuth={requireAuth} />
+  else if (isSettings) content = <SettingsView requireAuth={requireAuth} onDevModeChange={setDevMode} />
+  else if (catalogStackMatch) content = <CatalogStackDetailView id={catalogStackMatch[1]} requireAuth={requireAuth} />
+  else if (isCatalogStacks) content = <CatalogStacksList requireAuth={requireAuth} />
+  else if (devStackMatch) content = <DevStackEditor id={devStackMatch[1]} requireAuth={requireAuth} />
   else if (devAppMatch) content = <DevAppEditor id={devAppMatch[1]} requireAuth={requireAuth} />
   else if (isDeveloper) content = <DeveloperDashboard requireAuth={requireAuth} />
   else content = <AppList />
@@ -106,9 +112,10 @@ function Header({ health, authed, authRequired, devMode, onLogout, onLogin }: { 
           <a href="#/" className="text-text-secondary hover:text-primary no-underline text-sm font-mono uppercase tracking-wider transition-colors">Apps</a>
           <a href="#/installs" className="text-text-secondary hover:text-primary no-underline text-sm font-mono uppercase tracking-wider transition-colors">Installed</a>
           <a href="#/stacks" className="text-text-secondary hover:text-primary no-underline text-sm font-mono uppercase tracking-wider transition-colors">Stacks</a>
+          <a href="#/catalog-stacks" className="text-text-secondary hover:text-primary no-underline text-sm font-mono uppercase tracking-wider transition-colors">Stack Templates</a>
           <a href="#/jobs" className="text-text-secondary hover:text-primary no-underline text-sm font-mono uppercase tracking-wider transition-colors">Jobs</a>
           {devMode && <a href="#/developer" className="text-yellow-400 hover:text-yellow-300 no-underline text-sm font-mono uppercase tracking-wider transition-colors">Developer</a>}
-          <a href="#/config" className="text-text-secondary hover:text-primary no-underline text-sm font-mono uppercase tracking-wider transition-colors">Config</a>
+          <a href="#/backup" className="text-text-secondary hover:text-primary no-underline text-sm font-mono uppercase tracking-wider transition-colors">Backup</a>
           <a href="#/settings" className="text-text-secondary hover:text-primary no-underline text-sm font-mono uppercase tracking-wider transition-colors">Settings</a>
         </nav>
       </div>
@@ -445,6 +452,7 @@ function InstallWizard({ app, onClose }: { app: AppDetail; onClose: () => void }
   const [bridge, setBridge] = useState('')
   const [hostname, setHostname] = useState('')
   const [ipAddress, setIpAddress] = useState('')
+  const [macAddress, setMacAddress] = useState('')
   const [onboot, setOnboot] = useState(app.lxc.defaults.onboot ?? true)
   const [unprivileged, setUnprivileged] = useState(app.lxc.defaults.unprivileged ?? true)
   const [installing, setInstalling] = useState(false)
@@ -544,6 +552,7 @@ function InstallWizard({ app, onClose }: { app: AppDetail; onClose: () => void }
         bridge: bridge || undefined,
         hostname: hostname || undefined,
         ip_address: ipAddress || undefined,
+        mac_address: macAddress || undefined,
         onboot,
         unprivileged,
         inputs: allInputs,
@@ -957,6 +966,9 @@ function InstallWizard({ app, onClose }: { app: AppDetail; onClose: () => void }
               </FormRow>
               <FormRow label="Static IP" description="Fixed IP address for this container" help="Leave blank for DHCP">
                 <FormInput value={ipAddress} onChange={setIpAddress} placeholder="e.g. 192.168.1.100" />
+              </FormRow>
+              <FormRow label="MAC Address" description="Fixed MAC for DHCP reservations" help="Leave blank for auto-assign">
+                <FormInput value={macAddress} onChange={setMacAddress} placeholder="e.g. BC:24:11:AB:CD:EF" />
               </FormRow>
               <FormRow label="Start on Boot">
                 <label className="flex items-center gap-2 cursor-pointer">
@@ -1427,6 +1439,7 @@ function InstallDetailView({ id, requireAuth }: { id: string; requireAuth: (cb: 
           <InfoRow label="CTID" value={detail.ctid > 0 ? String(detail.ctid) : '-'} />
           <InfoRow label="Node" value={detail.node} />
           <InfoRow label="IP Address" value={detail.ip || (detail.ip_address ? `${detail.ip_address} (static)` : 'DHCP')} />
+          {detail.mac_address && <InfoRow label="MAC Address" value={detail.mac_address} />}
           <InfoRow label="Pool" value={detail.pool || '-'} />
           <InfoRow label="Storage" value={detail.storage || '-'} />
           <InfoRow label="Bridge" value={detail.bridge || '-'} />
@@ -2449,7 +2462,7 @@ function ConfigView({ requireAuth }: { requireAuth: (cb: () => void) => void }) 
 
   return (
     <div>
-      <h2 className="text-xl font-bold text-text-primary mb-5 font-mono">Configuration</h2>
+      <h2 className="text-xl font-bold text-text-primary mb-5 font-mono">Backup &amp; Restore</h2>
 
       {/* Section 1: Current Setup */}
       <InfoCard title="Current Setup">
@@ -3353,6 +3366,7 @@ function StackDetailView({ id, requireAuth }: { id: string; requireAuth: (cb: ()
           <div className="flex items-center gap-3 text-xs font-mono text-text-muted">
             <span>CT {detail.ctid}</span>
             {detail.ip && <span>{detail.ip}</span>}
+            {detail.mac_address && <span>MAC {detail.mac_address}</span>}
             <span className="flex items-center gap-1"><StatusDot running={isRunning} /><span className={isRunning ? 'text-status-running' : 'text-status-stopped'}>{detail.status}</span></span>
             {isRunning && detail.live?.uptime ? <span>up {formatUptime(detail.live.uptime)}</span> : null}
           </div>
@@ -3614,6 +3628,7 @@ function StackCreateWizard({ requireAuth }: { requireAuth: (cb: () => void) => v
   const [storage, setStorage] = useState('')
   const [bridge, setBridge] = useState('')
   const [ipAddress, setIpAddress] = useState('')
+  const [macAddress, setMacAddress] = useState('')
   const [defaults, setDefaults] = useState<{ storages: string[]; bridges: string[]; defaults: { cores: number; memory_mb: number; disk_gb: number } } | null>(null)
   const [validating, setValidating] = useState(false)
   const [validation, setValidation] = useState<StackValidateResponse | null>(null)
@@ -3691,6 +3706,7 @@ function StackCreateWizard({ requireAuth }: { requireAuth: (cb: () => void) => v
           memory_mb: memoryMB,
           disk_gb: diskGB,
           ip_address: ipAddress || undefined,
+          mac_address: macAddress || undefined,
         }
         const job = await api.createStack(req)
         window.location.hash = `#/job/${job.id}`
@@ -3831,6 +3847,11 @@ function StackCreateWizard({ requireAuth }: { requireAuth: (cb: () => void) => v
               <FormInput value={ipAddress} onChange={setIpAddress} placeholder="e.g. 192.168.1.100 (blank = DHCP)" />
             </FormField>
           </div>
+          <div className="mb-4">
+            <FormField label="MAC Address (optional)">
+              <FormInput value={macAddress} onChange={setMacAddress} placeholder="e.g. BC:24:11:AB:CD:EF (blank = auto)" />
+            </FormField>
+          </div>
 
           <div className="flex justify-between">
             <button onClick={() => setStep(1)} className="px-4 py-2 bg-transparent border border-border text-text-muted rounded text-sm font-mono cursor-pointer hover:border-primary hover:text-primary transition-colors">Back</button>
@@ -3957,7 +3978,7 @@ function formatBytesShort(bytes: number): string {
 
 // --- Settings View ---
 
-function SettingsView({ requireAuth }: { requireAuth: (cb: () => void) => void }) {
+function SettingsView({ requireAuth, onDevModeChange }: { requireAuth: (cb: () => void) => void; onDevModeChange?: (enabled: boolean) => void }) {
   const [settings, setSettings] = useState<Settings | null>(null)
   const [saving, setSaving] = useState(false)
   const [msg, setMsg] = useState('')
@@ -3965,8 +3986,18 @@ function SettingsView({ requireAuth }: { requireAuth: (cb: () => void) => void }
   const [ghStatus, setGhStatus] = useState<GitHubStatus | null>(null)
   const [ghLoading, setGhLoading] = useState(false)
   const [ghToken, setGhToken] = useState('')
+  const [discovered, setDiscovered] = useState<DiscoverResponse | null>(null)
+  const [showStorageAdd, setShowStorageAdd] = useState(false)
+  const [showBridgeAdd, setShowBridgeAdd] = useState(false)
 
   useEffect(() => { api.settings().then(setSettings).catch(() => {}) }, [])
+
+  // Fetch available storages/bridges when on general tab
+  useEffect(() => {
+    if (activeTab === 'general') {
+      api.discoverResources().then(setDiscovered).catch(() => {})
+    }
+  }, [activeTab])
 
   // Fetch GitHub status when on developer tab
   useEffect(() => {
@@ -3982,6 +4013,7 @@ function SettingsView({ requireAuth }: { requireAuth: (cb: () => void) => void }
       try {
         const updated = await api.updateSettings(update)
         setSettings(updated)
+        onDevModeChange?.(updated.developer.enabled)
         setMsg('Settings saved')
         setTimeout(() => setMsg(''), 2000)
       } catch (e: unknown) {
@@ -4062,7 +4094,8 @@ function SettingsView({ requireAuth }: { requireAuth: (cb: () => void) => void }
         <div className="flex-1 space-y-4">
           {activeTab === 'general' && (
             <>
-              <InfoCard title="Resource Defaults">
+              <InfoCard title="Default Container Resources">
+                <p className="text-xs text-text-muted mb-3">Applied when installing apps that don't specify their own defaults.</p>
                 <div className="grid grid-cols-3 gap-4">
                   <SettingsNumberField label="CPU Cores" value={settings.defaults.cores} onSave={(v) => save({ defaults: { cores: v } })} min={1} max={64} />
                   <SettingsNumberField label="Memory (MB)" value={settings.defaults.memory_mb} onSave={(v) => save({ defaults: { memory_mb: v } })} min={128} max={131072} step={128} />
@@ -4070,18 +4103,104 @@ function SettingsView({ requireAuth }: { requireAuth: (cb: () => void) => void }
                 </div>
               </InfoCard>
 
-              <InfoCard title="Storage & Network">
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <label className="text-xs text-text-muted font-mono uppercase">Storages</label>
-                    <div className="flex flex-wrap gap-1 mt-1">{settings.storages.map(s => <Badge key={s}>{s}</Badge>)}</div>
-                  </div>
-                  <div>
-                    <label className="text-xs text-text-muted font-mono uppercase">Bridges</label>
-                    <div className="flex flex-wrap gap-1 mt-1">{settings.bridges.map(b => <Badge key={b}>{b}</Badge>)}</div>
-                  </div>
+              <InfoCard title="Storages">
+                <p className="text-xs text-text-muted mb-3">Proxmox storages available for container rootfs and volumes.</p>
+                <div className="flex flex-wrap gap-2">
+                  {settings.storages.map(s => {
+                    const meta = discovered?.storages.find(d => d.id === s)
+                    return (
+                      <span key={s} className="inline-flex items-center gap-1.5 bg-bg-primary border border-border rounded px-2.5 py-1 text-sm font-mono text-text-primary">
+                        {s}
+                        {meta && <span className="text-text-muted text-xs">({meta.type})</span>}
+                        <button
+                          onClick={() => {
+                            if (settings.storages.length <= 1) return
+                            save({ storages: settings.storages.filter(x => x !== s) })
+                          }}
+                          disabled={settings.storages.length <= 1}
+                          className={`ml-1 text-xs leading-none cursor-pointer ${settings.storages.length <= 1 ? 'text-border cursor-not-allowed' : 'text-text-muted hover:text-red-400'}`}
+                          title={settings.storages.length <= 1 ? 'Cannot remove the last storage' : `Remove ${s}`}
+                        >&times;</button>
+                      </span>
+                    )
+                  })}
+                  {(() => {
+                    const available = discovered?.storages.filter(d => !settings.storages.includes(d.id)) || []
+                    if (available.length === 0) return null
+                    return showStorageAdd ? (
+                      <select
+                        autoFocus
+                        className="bg-bg-primary border border-primary rounded px-2 py-1 text-sm font-mono text-text-primary outline-none"
+                        onChange={(e) => {
+                          if (e.target.value) {
+                            save({ storages: [...settings.storages, e.target.value] })
+                          }
+                          setShowStorageAdd(false)
+                        }}
+                        onBlur={() => setShowStorageAdd(false)}
+                        defaultValue=""
+                      >
+                        <option value="" disabled>Select storage...</option>
+                        {available.map(d => (
+                          <option key={d.id} value={d.id}>{d.id} ({d.type})</option>
+                        ))}
+                      </select>
+                    ) : (
+                      <button
+                        onClick={() => setShowStorageAdd(true)}
+                        className="inline-flex items-center gap-1 border border-dashed border-border rounded px-2.5 py-1 text-sm font-mono text-text-muted hover:text-primary hover:border-primary cursor-pointer transition-colors"
+                      >+ Add</button>
+                    )
+                  })()}
                 </div>
-                <p className="text-xs text-text-muted mt-3">Storages and bridges are configured via the TUI installer.</p>
+              </InfoCard>
+
+              <InfoCard title="Network Bridges">
+                <p className="text-xs text-text-muted mb-3">Network bridges assigned to new containers.</p>
+                <div className="flex flex-wrap gap-2">
+                  {settings.bridges.map(b => (
+                    <span key={b} className="inline-flex items-center gap-1.5 bg-bg-primary border border-border rounded px-2.5 py-1 text-sm font-mono text-text-primary">
+                      {b}
+                      <button
+                        onClick={() => {
+                          if (settings.bridges.length <= 1) return
+                          save({ bridges: settings.bridges.filter(x => x !== b) })
+                        }}
+                        disabled={settings.bridges.length <= 1}
+                        className={`ml-1 text-xs leading-none cursor-pointer ${settings.bridges.length <= 1 ? 'text-border cursor-not-allowed' : 'text-text-muted hover:text-red-400'}`}
+                        title={settings.bridges.length <= 1 ? 'Cannot remove the last bridge' : `Remove ${b}`}
+                      >&times;</button>
+                    </span>
+                  ))}
+                  {(() => {
+                    const available = discovered?.bridges.filter(b => !settings.bridges.includes(b)) || []
+                    if (available.length === 0) return null
+                    return showBridgeAdd ? (
+                      <select
+                        autoFocus
+                        className="bg-bg-primary border border-primary rounded px-2 py-1 text-sm font-mono text-text-primary outline-none"
+                        onChange={(e) => {
+                          if (e.target.value) {
+                            save({ bridges: [...settings.bridges, e.target.value] })
+                          }
+                          setShowBridgeAdd(false)
+                        }}
+                        onBlur={() => setShowBridgeAdd(false)}
+                        defaultValue=""
+                      >
+                        <option value="" disabled>Select bridge...</option>
+                        {available.map(b => (
+                          <option key={b} value={b}>{b}</option>
+                        ))}
+                      </select>
+                    ) : (
+                      <button
+                        onClick={() => setShowBridgeAdd(true)}
+                        className="inline-flex items-center gap-1 border border-dashed border-border rounded px-2.5 py-1 text-sm font-mono text-text-muted hover:text-primary hover:border-primary cursor-pointer transition-colors"
+                      >+ Add</button>
+                    )
+                  })()}
+                </div>
               </InfoCard>
             </>
           )}
@@ -4272,28 +4391,62 @@ function SettingsNumberField({ label, value, onSave, min, max, step }: { label: 
 
 function DeveloperDashboard({ requireAuth }: { requireAuth: (cb: () => void) => void }) {
   const [apps, setApps] = useState<DevAppMeta[]>([])
+  const [devStacks, setDevStacks] = useState<DevStackMeta[]>([])
   const [loading, setLoading] = useState(true)
   const [showCreate, setShowCreate] = useState(false)
+  const [showCreateStack, setShowCreateStack] = useState(false)
   const [showUnraid, setShowUnraid] = useState(false)
   const [showDockerfile, setShowDockerfile] = useState(false)
 
-  const fetchApps = useCallback(async () => {
+  const fetchAll = useCallback(async () => {
     try {
-      const data = await api.devApps()
-      setApps(data.apps || [])
-    } catch { setApps([]) }
+      const [appData, stackData] = await Promise.all([api.devApps(), api.devStacks()])
+      setApps(appData.apps || [])
+      setDevStacks(stackData.stacks || [])
+    } catch { setApps([]); setDevStacks([]) }
     setLoading(false)
   }, [])
 
-  useEffect(() => { fetchApps() }, [fetchApps])
+  useEffect(() => { fetchAll() }, [fetchAll])
 
   const handleDelete = (id: string, name: string) => {
     requireAuth(async () => {
       if (!confirm(`Delete dev app "${name}"? This cannot be undone.`)) return
       try {
         await api.devDeleteApp(id)
-        fetchApps()
+        fetchAll()
       } catch (e: unknown) { alert(e instanceof Error ? e.message : 'Failed') }
+    })
+  }
+
+  const handleDeleteStack = (id: string, name: string) => {
+    requireAuth(async () => {
+      if (!confirm(`Delete dev stack "${name}"? This cannot be undone.`)) return
+      try {
+        await api.devDeleteStack(id)
+        fetchAll()
+      } catch (e: unknown) { alert(e instanceof Error ? e.message : 'Failed') }
+    })
+  }
+
+  const handleImportZip = () => {
+    requireAuth(() => {
+      const input = document.createElement('input')
+      input.type = 'file'
+      input.accept = '.zip'
+      input.onchange = async () => {
+        const file = input.files?.[0]
+        if (!file) return
+        try {
+          const result = await api.devImportZip(file)
+          if (result.type === 'stack') {
+            window.location.hash = `#/dev/stack/${result.id}`
+          } else {
+            window.location.hash = `#/dev/${result.id}`
+          }
+        } catch (e: unknown) { alert(e instanceof Error ? e.message : 'Import failed') }
+      }
+      input.click()
     })
   }
 
@@ -4302,46 +4455,89 @@ function DeveloperDashboard({ requireAuth }: { requireAuth: (cb: () => void) => 
       <div className="flex items-center justify-between mb-6">
         <h2 className="text-xl font-bold text-text-primary font-mono">Developer Dashboard</h2>
         <div className="flex gap-2">
+          <button onClick={handleImportZip} className="bg-transparent border border-border rounded px-4 py-2 text-sm font-mono text-text-secondary hover:border-primary hover:text-primary cursor-pointer transition-colors">Import ZIP</button>
           <button onClick={() => setShowDockerfile(true)} className="bg-transparent border border-border rounded px-4 py-2 text-sm font-mono text-text-secondary hover:border-primary hover:text-primary cursor-pointer transition-colors">Import Dockerfile</button>
           <button onClick={() => setShowUnraid(true)} className="bg-transparent border border-border rounded px-4 py-2 text-sm font-mono text-text-secondary hover:border-primary hover:text-primary cursor-pointer transition-colors">Import Unraid XML</button>
+          <button onClick={() => setShowCreateStack(true)} className="bg-transparent border border-border rounded px-4 py-2 text-sm font-mono text-text-secondary hover:border-primary hover:text-primary cursor-pointer transition-colors">+ New Stack</button>
           <button onClick={() => setShowCreate(true)} className="bg-primary text-bg-primary rounded px-4 py-2 text-sm font-mono font-bold cursor-pointer hover:opacity-90 transition-opacity">+ New App</button>
         </div>
       </div>
 
       {loading ? (
         <Center className="py-16"><span className="text-text-muted font-mono">Loading...</span></Center>
-      ) : apps.length === 0 ? (
+      ) : apps.length === 0 && devStacks.length === 0 ? (
         <div className="border border-dashed border-border rounded-lg p-12 text-center">
-          <p className="text-text-muted font-mono mb-4">No dev apps yet. Create your first app to get started.</p>
-          <button onClick={() => setShowCreate(true)} className="bg-primary text-bg-primary rounded px-6 py-2 text-sm font-mono font-bold cursor-pointer hover:opacity-90">Create App</button>
+          <p className="text-text-muted font-mono mb-4">No dev apps or stacks yet. Create your first one to get started.</p>
+          <div className="flex gap-2 justify-center">
+            <button onClick={() => setShowCreate(true)} className="bg-primary text-bg-primary rounded px-6 py-2 text-sm font-mono font-bold cursor-pointer hover:opacity-90">Create App</button>
+            <button onClick={() => setShowCreateStack(true)} className="bg-transparent border border-primary rounded px-6 py-2 text-sm font-mono font-bold text-primary cursor-pointer hover:opacity-90">Create Stack</button>
+          </div>
         </div>
       ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {apps.map(app => (
-            <a key={app.id} href={`#/dev/${app.id}`} className="no-underline">
-              <div className="border border-border rounded-lg p-4 hover:border-primary/50 transition-colors cursor-pointer bg-bg-card">
-                <div className="flex items-start gap-3 mb-2">
-                  <img src={api.devIconUrl(app.id)} alt="" className="w-10 h-10 rounded-lg flex-shrink-0" onError={e => { (e.target as HTMLImageElement).style.display = 'none' }} />
-                  <div className="flex-1 min-w-0 flex items-start justify-between">
-                    <div className="min-w-0">
-                      <h3 className="text-sm font-bold text-text-primary font-mono truncate">{app.name || app.id}</h3>
-                      <p className="text-xs text-text-muted font-mono mt-0.5">v{app.version || '0.0.0'}</p>
+        <>
+          {/* Dev Apps */}
+          {apps.length > 0 && (
+            <>
+              <h3 className="text-sm font-bold text-text-muted font-mono uppercase tracking-wider mb-3">Apps ({apps.length})</h3>
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 mb-8">
+                {apps.map(app => (
+                  <a key={app.id} href={`#/dev/${app.id}`} className="no-underline">
+                    <div className="border border-border rounded-lg p-4 hover:border-primary/50 transition-colors cursor-pointer bg-bg-card">
+                      <div className="flex items-start gap-3 mb-2">
+                        <img src={api.devIconUrl(app.id)} alt="" className="w-10 h-10 rounded-lg flex-shrink-0" onError={e => { (e.target as HTMLImageElement).style.display = 'none' }} />
+                        <div className="flex-1 min-w-0 flex items-start justify-between">
+                          <div className="min-w-0">
+                            <h3 className="text-sm font-bold text-text-primary font-mono truncate">{app.name || app.id}</h3>
+                            <p className="text-xs text-text-muted font-mono mt-0.5">v{app.version || '0.0.0'}</p>
+                          </div>
+                          <DevStatusBadge status={app.status} />
+                        </div>
+                      </div>
+                      <p className="text-xs text-text-secondary line-clamp-2 mb-3">{app.description || 'No description'}</p>
+                      <div className="flex items-center gap-2 text-xs text-text-muted font-mono">
+                        {app.has_readme && <span title="Has README">readme</span>}
+                        <span className="ml-auto" onClick={(e) => { e.preventDefault(); handleDelete(app.id, app.name) }}>delete</span>
+                      </div>
                     </div>
-                    <DevStatusBadge status={app.status} />
-                  </div>
-                </div>
-                <p className="text-xs text-text-secondary line-clamp-2 mb-3">{app.description || 'No description'}</p>
-                <div className="flex items-center gap-2 text-xs text-text-muted font-mono">
-                  {app.has_readme && <span title="Has README">readme</span>}
-                  <span className="ml-auto" onClick={(e) => { e.preventDefault(); handleDelete(app.id, app.name) }}>delete</span>
-                </div>
+                  </a>
+                ))}
               </div>
-            </a>
-          ))}
-        </div>
+            </>
+          )}
+
+          {/* Dev Stacks */}
+          {devStacks.length > 0 && (
+            <>
+              <h3 className="text-sm font-bold text-text-muted font-mono uppercase tracking-wider mb-3">Stacks ({devStacks.length})</h3>
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                {devStacks.map(stack => (
+                  <a key={stack.id} href={`#/dev/stack/${stack.id}`} className="no-underline">
+                    <div className="border border-border rounded-lg p-4 hover:border-primary/50 transition-colors cursor-pointer bg-bg-card">
+                      <div className="flex items-start gap-3 mb-2">
+                        <img src={api.devStackIconUrl(stack.id)} alt="" className="w-10 h-10 rounded-lg flex-shrink-0" onError={e => { (e.target as HTMLImageElement).style.display = 'none' }} />
+                        <div className="flex-1 min-w-0 flex items-start justify-between">
+                          <div className="min-w-0">
+                            <h3 className="text-sm font-bold text-text-primary font-mono truncate">{stack.name || stack.id}</h3>
+                            <p className="text-xs text-text-muted font-mono mt-0.5">v{stack.version || '0.0.0'} &middot; {stack.app_count} app{stack.app_count !== 1 ? 's' : ''}</p>
+                          </div>
+                          <DevStatusBadge status={stack.status} />
+                        </div>
+                      </div>
+                      <p className="text-xs text-text-secondary line-clamp-2 mb-3">{stack.description || 'No description'}</p>
+                      <div className="flex items-center gap-2 text-xs text-text-muted font-mono">
+                        <span className="ml-auto" onClick={(e) => { e.preventDefault(); handleDeleteStack(stack.id, stack.name) }}>delete</span>
+                      </div>
+                    </div>
+                  </a>
+                ))}
+              </div>
+            </>
+          )}
+        </>
       )}
 
       {showCreate && <DevCreateWizard onClose={() => setShowCreate(false)} onCreated={(id) => { setShowCreate(false); window.location.hash = `#/dev/${id}` }} requireAuth={requireAuth} />}
+      {showCreateStack && <DevCreateStackWizard onClose={() => setShowCreateStack(false)} onCreated={(id) => { setShowCreateStack(false); window.location.hash = `#/dev/stack/${id}` }} requireAuth={requireAuth} />}
       {showUnraid && <DevUnraidImport onClose={() => setShowUnraid(false)} onCreated={(id) => { setShowUnraid(false); window.location.hash = `#/dev/${id}` }} requireAuth={requireAuth} />}
       {showDockerfile && <DevDockerfileImport onClose={() => setShowDockerfile(false)} onCreated={(id) => { setShowDockerfile(false); window.location.hash = `#/dev/${id}` }} requireAuth={requireAuth} />}
     </div>
@@ -5016,7 +5212,7 @@ function SdkReferencePanel() {
   )
 }
 
-function DevSubmitDialog({ id, appName, onClose, requireAuth }: { id: string; appName: string; onClose: () => void; requireAuth: (cb: () => void) => void }) {
+function DevSubmitDialog({ id, appName, onClose, requireAuth, isStack }: { id: string; appName: string; onClose: () => void; requireAuth: (cb: () => void) => void; isStack?: boolean }) {
   const [publishStatus, setPublishStatus] = useState<PublishStatus | null>(null)
   const [loading, setLoading] = useState(true)
   const [publishing, setPublishing] = useState(false)
@@ -5024,18 +5220,19 @@ function DevSubmitDialog({ id, appName, onClose, requireAuth }: { id: string; ap
   const [error, setError] = useState('')
 
   useEffect(() => {
-    api.devPublishStatus(id)
+    const fetchStatus = isStack ? api.devStackPublishStatus(id) : api.devPublishStatus(id)
+    fetchStatus
       .then(s => { setPublishStatus(s); if (s.pr_url) setPrUrl(s.pr_url) })
       .catch(() => {})
       .finally(() => setLoading(false))
-  }, [id])
+  }, [id, isStack])
 
   const handlePublish = () => {
     requireAuth(async () => {
       setPublishing(true)
       setError('')
       try {
-        const result = await api.devPublish(id)
+        const result = isStack ? await api.devPublishStack(id) : await api.devPublish(id)
         setPrUrl(result.pr_url)
       } catch (e: unknown) {
         setError(e instanceof Error ? e.message : 'Publish failed')
@@ -5048,14 +5245,15 @@ function DevSubmitDialog({ id, appName, onClose, requireAuth }: { id: string; ap
     requireAuth(() => {
       const form = document.createElement('form')
       form.method = 'POST'
-      form.action = api.devExportUrl(id)
+      form.action = isStack ? api.devExportStackUrl(id) : api.devExportUrl(id)
       form.target = '_blank'
       document.body.appendChild(form)
       form.submit()
       document.body.removeChild(form)
 
-      const title = encodeURIComponent(`New App: ${appName}`)
-      const body = encodeURIComponent(`## App Submission\n\n**App ID:** ${id}\n**App Name:** ${appName}\n\nPlease attach the exported zip file to this issue.`)
+      const kind = isStack ? 'Stack' : 'App'
+      const title = encodeURIComponent(`New ${kind}: ${appName}`)
+      const body = encodeURIComponent(`## ${kind} Submission\n\n**${kind} ID:** ${id}\n**${kind} Name:** ${appName}\n\nPlease attach the exported zip file to this issue.`)
       window.open(`https://github.com/battlewithbytes/pve-appstore-catalog/issues/new?title=${title}&body=${body}`, '_blank')
       onClose()
     })
@@ -5078,6 +5276,7 @@ function DevSubmitDialog({ id, appName, onClose, requireAuth }: { id: string; ap
             <div className="flex items-center gap-2 mb-4">
               <span className="text-primary text-lg">[OK]</span>
               <span className="text-sm font-mono text-text-primary">Pull request created!</span>
+              {publishStatus?.pr_state && <PRStateBadge state={publishStatus.pr_state} />}
             </div>
             <a href={prUrl} target="_blank" rel="noopener noreferrer" className="text-sm font-mono text-primary underline break-all">{prUrl}</a>
             <div className="flex justify-end mt-4">
@@ -5142,6 +5341,338 @@ function DevValidationMsg({ msg, type }: { msg: ValidationMsg; type: 'error' | '
     <div className={`border-l-2 ${color} px-2 py-1.5 my-1 text-xs font-mono`}>
       <div className="text-text-muted">{msg.file}{msg.line ? `:${msg.line}` : ''}</div>
       <div className={type === 'error' ? 'text-red-300' : 'text-yellow-300'}>{msg.message}</div>
+    </div>
+  )
+}
+
+// --- PR State Badge ---
+
+function PRStateBadge({ state }: { state: string }) {
+  const styles: Record<string, string> = {
+    pr_open: 'border-yellow-400 text-yellow-400',
+    pr_merged: 'border-primary text-primary',
+    pr_closed: 'border-red-400 text-red-400',
+  }
+  const labels: Record<string, string> = {
+    pr_open: 'PR Open',
+    pr_merged: 'PR Merged',
+    pr_closed: 'PR Closed',
+  }
+  if (!state || !labels[state]) return null
+  return <span className={`text-xs font-mono px-2 py-0.5 border rounded ${styles[state] || ''}`}>{labels[state]}</span>
+}
+
+// --- Dev Create Stack Wizard ---
+
+function DevCreateStackWizard({ onClose, onCreated, requireAuth }: { onClose: () => void; onCreated: (id: string) => void; requireAuth: (cb: () => void) => void }) {
+  const [stackId, setStackId] = useState('')
+  const [template, setTemplate] = useState('blank')
+  const [creating, setCreating] = useState(false)
+  const [error, setError] = useState('')
+
+  const handleCreate = () => {
+    requireAuth(async () => {
+      if (!stackId) { setError('Stack ID is required'); return }
+      setCreating(true)
+      setError('')
+      try {
+        await api.devCreateStack(stackId, template)
+        onCreated(stackId)
+      } catch (e: unknown) {
+        setError(e instanceof Error ? e.message : 'Failed')
+        setCreating(false)
+      }
+    })
+  }
+
+  return (
+    <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50" onClick={onClose}>
+      <div className="bg-bg-card border border-border rounded-lg p-6 w-full max-w-md" onClick={(e) => e.stopPropagation()}>
+        <h3 className="text-lg font-bold text-text-primary font-mono mb-4">New Stack</h3>
+        <label className="block text-xs text-text-muted font-mono mb-1">Stack ID (kebab-case)</label>
+        <input
+          type="text" value={stackId} onChange={e => setStackId(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ''))}
+          placeholder="my-stack" className="w-full bg-bg-primary border border-border rounded px-3 py-2 text-sm font-mono text-text-primary mb-4 outline-none focus:border-primary"
+        />
+        <label className="block text-xs text-text-muted font-mono mb-1">Template</label>
+        <select value={template} onChange={e => setTemplate(e.target.value)} className="w-full bg-bg-primary border border-border rounded px-3 py-2 text-sm font-mono text-text-primary mb-4 outline-none focus:border-primary">
+          <option value="blank">Blank</option>
+          <option value="web-database">Web + Database</option>
+        </select>
+        {error && <p className="text-xs text-red-400 font-mono mb-3">{error}</p>}
+        <div className="flex justify-end gap-2">
+          <button onClick={onClose} className="bg-transparent border border-border rounded px-4 py-2 text-sm font-mono text-text-secondary cursor-pointer hover:border-primary transition-colors">Cancel</button>
+          <button onClick={handleCreate} disabled={creating} className="bg-primary text-bg-primary rounded px-4 py-2 text-sm font-mono font-bold cursor-pointer hover:opacity-90 disabled:opacity-50">{creating ? 'Creating...' : 'Create Stack'}</button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// --- Dev Stack Editor ---
+
+function DevStackEditor({ id, requireAuth }: { id: string; requireAuth: (cb: () => void) => void }) {
+  const [stack, setStack] = useState<DevStack | null>(null)
+  const [manifest, setManifest] = useState('')
+  const [dirty, setDirty] = useState(false)
+  const [validation, setValidation] = useState<ValidationResult | null>(null)
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState('')
+  const [showSubmit, setShowSubmit] = useState(false)
+
+  const fetchStack = useCallback(async () => {
+    try {
+      const data = await api.devGetStack(id)
+      setStack(data)
+      setManifest(data.manifest || '')
+    } catch (e: unknown) { setError(e instanceof Error ? e.message : 'Not found') }
+  }, [id])
+
+  useEffect(() => { fetchStack() }, [fetchStack])
+
+  const handleSave = () => {
+    requireAuth(async () => {
+      setSaving(true)
+      try {
+        await api.devSaveStackManifest(id, manifest)
+        setDirty(false)
+        fetchStack()
+      } catch (e: unknown) { setError(e instanceof Error ? e.message : 'Save failed') }
+      setSaving(false)
+    })
+  }
+
+  const handleValidate = () => {
+    requireAuth(async () => {
+      try {
+        const result = await api.devValidateStack(id)
+        setValidation(result)
+      } catch (e: unknown) { setError(e instanceof Error ? e.message : 'Validation failed') }
+    })
+  }
+
+  const handleDeploy = () => {
+    requireAuth(async () => {
+      try {
+        await api.devDeployStack(id)
+        fetchStack()
+      } catch (e: unknown) { alert(e instanceof Error ? e.message : 'Deploy failed') }
+    })
+  }
+
+  const handleUndeploy = () => {
+    requireAuth(async () => {
+      try {
+        await api.devUndeployStack(id)
+        fetchStack()
+      } catch (e: unknown) { alert(e instanceof Error ? e.message : 'Undeploy failed') }
+    })
+  }
+
+  const handleExport = () => {
+    requireAuth(() => {
+      const form = document.createElement('form')
+      form.method = 'POST'
+      form.action = api.devExportStackUrl(id)
+      form.target = '_blank'
+      document.body.appendChild(form)
+      form.submit()
+      document.body.removeChild(form)
+    })
+  }
+
+  if (error && !stack) return <Center className="py-16"><span className="text-red-400 font-mono text-sm">{error}</span></Center>
+  if (!stack) return <Center className="py-16"><span className="text-text-muted font-mono">Loading...</span></Center>
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-4">
+        <div className="flex items-center gap-3">
+          <a href="#/developer" className="text-text-muted hover:text-primary text-sm font-mono">&larr; Dashboard</a>
+          <h2 className="text-lg font-bold text-text-primary font-mono">{stack.name || id}</h2>
+          <DevStatusBadge status={stack.status} />
+          <span className="text-xs text-text-muted font-mono">{stack.app_count} app{stack.app_count !== 1 ? 's' : ''}</span>
+        </div>
+        <div className="flex gap-2">
+          <button onClick={handleExport} className="bg-transparent border border-border rounded px-3 py-1.5 text-xs font-mono text-text-secondary cursor-pointer hover:border-primary transition-colors">Export</button>
+          <button onClick={() => setShowSubmit(true)} className="bg-transparent border border-border rounded px-3 py-1.5 text-xs font-mono text-text-secondary cursor-pointer hover:border-primary transition-colors">Submit</button>
+          {stack.deployed ? (
+            <button onClick={handleUndeploy} className="bg-transparent border border-yellow-400 rounded px-3 py-1.5 text-xs font-mono text-yellow-400 cursor-pointer hover:opacity-80">Undeploy</button>
+          ) : (
+            <button onClick={handleDeploy} className="bg-primary text-bg-primary rounded px-3 py-1.5 text-xs font-mono font-bold cursor-pointer hover:opacity-90">Deploy</button>
+          )}
+        </div>
+      </div>
+
+      {error && <p className="text-xs text-red-400 font-mono mb-3">{error}</p>}
+
+      {/* Stack Manifest Editor */}
+      <div className="border border-border rounded-lg overflow-hidden mb-4">
+        <div className="flex items-center justify-between bg-bg-card px-4 py-2 border-b border-border">
+          <span className="text-xs font-mono text-text-muted">stack.yml</span>
+          <div className="flex gap-2">
+            <button onClick={handleValidate} className="bg-transparent border border-border rounded px-3 py-1 text-xs font-mono text-text-secondary cursor-pointer hover:border-primary transition-colors">Validate</button>
+            <button onClick={handleSave} disabled={saving || !dirty} className="bg-primary text-bg-primary rounded px-3 py-1 text-xs font-mono font-bold cursor-pointer hover:opacity-90 disabled:opacity-50">{saving ? 'Saving...' : dirty ? 'Save *' : 'Save'}</button>
+          </div>
+        </div>
+        <CodeEditor value={manifest} onChange={(v) => { setManifest(v); setDirty(true) }} filename="stack.yml" onSave={handleSave} />
+      </div>
+
+      {/* Validation Results */}
+      {validation && (
+        <div className="border border-border rounded-lg p-4 mb-4 bg-bg-card">
+          <div className="flex items-center gap-2 mb-3">
+            <span className={`text-sm font-mono font-bold ${validation.valid ? 'text-primary' : 'text-red-400'}`}>
+              {validation.valid ? 'Valid' : 'Invalid'}
+            </span>
+          </div>
+          {validation.errors.length > 0 && validation.errors.map((e, i) => <DevValidationMsg key={i} msg={e} type="error" />)}
+          {validation.warnings.length > 0 && validation.warnings.map((w, i) => <DevValidationMsg key={i} msg={w} type="warning" />)}
+          {validation.checklist && (
+            <div className="mt-3 border-t border-border pt-3">
+              {validation.checklist.map((c, i) => (
+                <div key={i} className="flex items-center gap-2 py-0.5 text-xs font-mono">
+                  <span className={c.passed ? 'text-primary' : 'text-red-400'}>{c.passed ? '[x]' : '[ ]'}</span>
+                  <span className="text-text-secondary">{c.label}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {showSubmit && <DevSubmitDialog id={id} appName={stack.name || id} onClose={() => setShowSubmit(false)} requireAuth={requireAuth} isStack />}
+    </div>
+  )
+}
+
+// --- Catalog Stacks List ---
+
+function CatalogStacksList(_props: { requireAuth: (cb: () => void) => void }) {
+  const [stacks, setStacks] = useState<CatalogStack[]>([])
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    api.catalogStacks().then(d => setStacks(d.stacks || [])).catch(() => {}).finally(() => setLoading(false))
+  }, [])
+
+  if (loading) return <Center className="py-16"><span className="text-text-muted font-mono">Loading...</span></Center>
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-6">
+        <h2 className="text-xl font-bold text-text-primary font-mono">Stack Templates</h2>
+        <p className="text-xs text-text-muted font-mono">Pre-configured multi-app stacks for one-click install</p>
+      </div>
+
+      {stacks.length === 0 ? (
+        <div className="border border-dashed border-border rounded-lg p-12 text-center">
+          <p className="text-text-muted font-mono">No stack templates available in the catalog yet.</p>
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+          {stacks.map(stack => (
+            <a key={stack.id} href={`#/catalog-stack/${stack.id}`} className="no-underline">
+              <div className="border border-border rounded-lg p-4 hover:border-primary/50 transition-colors cursor-pointer bg-bg-card">
+                <h3 className="text-sm font-bold text-text-primary font-mono mb-1">{stack.name}</h3>
+                <p className="text-xs text-text-muted font-mono mb-2">v{stack.version} &middot; {stack.apps.length} app{stack.apps.length !== 1 ? 's' : ''}</p>
+                <p className="text-xs text-text-secondary line-clamp-2 mb-3">{stack.description}</p>
+                <div className="flex flex-wrap gap-1">
+                  {stack.categories?.map(cat => (
+                    <span key={cat} className="text-[10px] font-mono px-1.5 py-0.5 border border-border rounded text-text-muted">{cat}</span>
+                  ))}
+                </div>
+              </div>
+            </a>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// --- Catalog Stack Detail ---
+
+function CatalogStackDetailView({ id, requireAuth }: { id: string; requireAuth: (cb: () => void) => void }) {
+  const [stack, setStack] = useState<CatalogStack | null>(null)
+  const [readme, setReadme] = useState('')
+  const [loading, setLoading] = useState(true)
+  const [installing, setInstalling] = useState(false)
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    api.catalogStack(id)
+      .then(d => { setStack(d.stack); setReadme(d.readme || '') })
+      .catch(() => setError('Stack not found'))
+      .finally(() => setLoading(false))
+  }, [id])
+
+  const handleInstall = () => {
+    requireAuth(async () => {
+      setInstalling(true)
+      try {
+        const job = await api.installCatalogStack(id)
+        window.location.hash = `#/job/${job.id}`
+      } catch (e: unknown) {
+        setError(e instanceof Error ? e.message : 'Install failed')
+        setInstalling(false)
+      }
+    })
+  }
+
+  if (loading) return <Center className="py-16"><span className="text-text-muted font-mono">Loading...</span></Center>
+  if (error || !stack) return <Center className="py-16"><span className="text-red-400 font-mono text-sm">{error || 'Not found'}</span></Center>
+
+  return (
+    <div>
+      <a href="#/catalog-stacks" className="text-text-muted hover:text-primary text-sm font-mono mb-4 inline-block">&larr; All Stack Templates</a>
+
+      <div className="border border-border rounded-lg p-6 bg-bg-card mb-6">
+        <h2 className="text-xl font-bold text-text-primary font-mono mb-2">{stack.name}</h2>
+        <p className="text-sm text-text-secondary mb-4">{stack.description}</p>
+
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
+          <div>
+            <span className="text-xs text-text-muted font-mono block">Version</span>
+            <span className="text-sm font-mono text-text-primary">{stack.version}</span>
+          </div>
+          <div>
+            <span className="text-xs text-text-muted font-mono block">Apps</span>
+            <span className="text-sm font-mono text-text-primary">{stack.apps.length}</span>
+          </div>
+          <div>
+            <span className="text-xs text-text-muted font-mono block">Default Resources</span>
+            <span className="text-sm font-mono text-text-primary">{stack.lxc.defaults.cores}c / {stack.lxc.defaults.memory_mb}MB / {stack.lxc.defaults.disk_gb}GB</span>
+          </div>
+          <div>
+            <span className="text-xs text-text-muted font-mono block">OS Template</span>
+            <span className="text-sm font-mono text-text-primary truncate">{stack.lxc.ostemplate.split('/').pop()}</span>
+          </div>
+        </div>
+
+        <div className="mb-4">
+          <span className="text-xs text-text-muted font-mono block mb-2">Component Apps</span>
+          <div className="flex flex-wrap gap-2">
+            {stack.apps.map((app, i) => (
+              <span key={i} className="text-xs font-mono px-2 py-1 border border-border rounded text-text-secondary">{app.app_id}</span>
+            ))}
+          </div>
+        </div>
+
+        <button
+          onClick={handleInstall}
+          disabled={installing}
+          className="bg-primary text-bg-primary rounded px-6 py-2 text-sm font-mono font-bold cursor-pointer hover:opacity-90 disabled:opacity-50"
+        >
+          {installing ? 'Installing...' : 'Install Stack'}
+        </button>
+      </div>
+
+      {readme && (
+        <div className="border border-border rounded-lg p-6 bg-bg-card prose prose-invert max-w-none">
+          <Markdown remarkPlugins={[remarkGfm]}>{readme}</Markdown>
+        </div>
+      )}
     </div>
   )
 }

@@ -196,6 +196,43 @@ func TestValidateExtraConfigNoDelimiter(t *testing.T) {
 	}
 }
 
+// --- ValidateMACAddress ---
+
+func TestValidateMACAddressValid(t *testing.T) {
+	valid := []string{
+		"BC:24:11:AB:CD:EF",
+		"bc:24:11:ab:cd:ef",
+		"00:00:00:00:00:00",
+		"02:00:00:00:00:01", // locally administered unicast
+		"",
+	}
+	for _, mac := range valid {
+		if err := ValidateMACAddress(mac); err != nil {
+			t.Errorf("ValidateMACAddress(%q) = %v, want nil", mac, err)
+		}
+	}
+}
+
+func TestValidateMACAddressInvalid(t *testing.T) {
+	invalid := []string{
+		"not-a-mac",
+		"BC:24:11:AB:CD",          // too short
+		"BC:24:11:AB:CD:EF:00",    // too long
+		"BC-24-11-AB-CD-EF",       // dashes instead of colons
+		"GG:24:11:AB:CD:EF",       // invalid hex
+		"BC:24:11:AB:CD:E",        // incomplete octet
+		"BC:24:11:AB:CD:EFG",      // extra char
+		"FF:FF:FF:FF:FF:FF",       // multicast (broadcast)
+		"FF:DD:AA:12:23:45",       // multicast (first octet odd)
+		"01:00:00:00:00:00",       // multicast (LSB set)
+	}
+	for _, mac := range invalid {
+		if err := ValidateMACAddress(mac); err == nil {
+			t.Errorf("ValidateMACAddress(%q) = nil, want error", mac)
+		}
+	}
+}
+
 // --- ValidateHostname ---
 
 func TestValidateHostnameValid(t *testing.T) {

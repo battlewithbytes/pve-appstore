@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/url"
+	"strings"
 
 	"github.com/battlewithbytes/pve-appstore/internal/engine"
 	"github.com/battlewithbytes/pve-appstore/internal/pct"
@@ -152,6 +153,36 @@ func (m *Manager) MountHostPath(ctid int, mpIndex int, hostPath, containerPath s
 
 func (m *Manager) AppendLXCConfig(ctid int, lines []string) error {
 	return pct.AppendConf(ctid, lines)
+}
+
+func (m *Manager) ListStorages(ctx context.Context) ([]engine.StorageInfo, error) {
+	storages, err := m.client.ListStorages(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var result []engine.StorageInfo
+	for _, si := range storages {
+		if !strings.Contains(si.Content, "rootdir") && !strings.Contains(si.Content, "images") {
+			continue
+		}
+		info := engine.StorageInfo{
+			ID:      si.ID,
+			Type:    si.Type,
+			Content: si.Content,
+		}
+		switch si.Type {
+		case "zfspool":
+			info.Path = si.Mountpoint
+			info.Browsable = si.Mountpoint != ""
+		case "dir", "nfs", "nfs4", "cifs":
+			info.Path = si.Path
+			info.Browsable = si.Path != ""
+		default:
+			info.Browsable = false
+		}
+		result = append(result, info)
+	}
+	return result, nil
 }
 
 func (m *Manager) GetStorageInfo(ctx context.Context, storageID string) (*engine.StorageInfo, error) {

@@ -40,6 +40,9 @@ func (e *Engine) StartStack(req StackCreateRequest) (*Job, error) {
 	if err := ValidateIPAddress(req.IPAddress); err != nil {
 		return nil, err
 	}
+	if err := ValidateMACAddress(req.MACAddress); err != nil {
+		return nil, err
+	}
 	if err := ValidateEnvVars(req.EnvVars); err != nil {
 		return nil, err
 	}
@@ -216,6 +219,7 @@ func (e *Engine) StartStack(req StackCreateRequest) (*Job, error) {
 		DiskGB:       diskGB,
 		Hostname:     hostname,
 		IPAddress:    req.IPAddress,
+		MACAddress:   strings.ToUpper(req.MACAddress),
 		OnBoot:       onboot,
 		Unprivileged: unprivileged,
 		Inputs:       make(map[string]string),
@@ -338,6 +342,7 @@ func (e *Engine) runStackInstall(bgCtx context.Context, job *Job, stackID, osTem
 		ctx:    bgCtx,
 		engine: e,
 		job:    job,
+		hwAddr: job.MACAddress,
 	}
 
 	ctx.info("Starting stack install: %s (%d apps)", job.AppName, len(apps))
@@ -400,6 +405,7 @@ func (e *Engine) runStackInstall(bgCtx context.Context, job *Job, stackID, osTem
 		Cores:        job.Cores,
 		MemoryMB:     job.MemoryMB,
 		Bridge:       job.Bridge,
+		HWAddr:       job.MACAddress,
 		Hostname:     job.Hostname,
 		IPAddress:    job.IPAddress,
 		Unprivileged: job.Unprivileged,
@@ -723,6 +729,7 @@ func (e *Engine) runStackInstall(bgCtx context.Context, job *Job, stackID, osTem
 		DiskGB:       job.DiskGB,
 		Hostname:     job.Hostname,
 		IPAddress:    job.IPAddress,
+		MACAddress:   job.MACAddress,
 		OnBoot:       job.OnBoot,
 		Unprivileged: job.Unprivileged,
 		OSTemplate:   osTemplate,

@@ -207,6 +207,25 @@ func (c *Client) DeleteFile(owner, repo, path, branch, sha, msg string) error {
 	return c.doJSON("DELETE", apiPath, body, nil)
 }
 
+// GetPRState returns the state of a pull request: "pr_open", "pr_merged", or "pr_closed".
+func (c *Client) GetPRState(owner, repo string, number int) (string, error) {
+	var pr struct {
+		State  string `json:"state"`
+		Merged bool   `json:"merged"`
+	}
+	path := fmt.Sprintf("/repos/%s/%s/pulls/%d", owner, repo, number)
+	if err := c.doJSON("GET", path, nil, &pr); err != nil {
+		return "", err
+	}
+	if pr.State == "open" {
+		return "pr_open", nil
+	}
+	if pr.Merged {
+		return "pr_merged", nil
+	}
+	return "pr_closed", nil
+}
+
 // CreatePullRequest opens a pull request on the upstream repository.
 func (c *Client) CreatePullRequest(upstream, repo, title, body, head, base string) (*PRResult, error) {
 	reqBody := map[string]string{

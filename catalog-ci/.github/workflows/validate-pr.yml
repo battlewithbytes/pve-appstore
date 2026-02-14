@@ -1,0 +1,99 @@
+name: Validate App PR
+
+on:
+  pull_request:
+    paths:
+      - 'apps/**'
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install PyYAML
+        run: pip install pyyaml
+
+      - name: Find changed apps
+        id: changed
+        run: |
+          apps=$(git diff --name-only ${{ github.event.pull_request.base.sha }} ${{ github.sha }} \
+            | grep '^apps/' | cut -d'/' -f2 | sort -u)
+          echo "apps=$apps" >> "$GITHUB_OUTPUT"
+          echo "Changed apps: $apps"
+
+      - name: Validate manifests
+        run: |
+          set -e
+          exit_code=0
+          for app_id in ${{ steps.changed.outputs.apps }}; do
+            manifest="apps/${app_id}/app.yml"
+            if [ ! -f "$manifest" ]; then
+              echo "::error file=${manifest}::Manifest not found"
+              exit_code=1
+              continue
+            fi
+
+            echo "--- Validating ${app_id} ---"
+
+            # Validate YAML structure and required fields
+            python3 - "$manifest" <<'PYEOF'
+          import sys, yaml
+
+          path = sys.argv[1]
+          with open(path) as f:
+              data = yaml.safe_load(f)
+
+          errors = []
+          for field in ('id', 'name', 'version', 'description', 'categories'):
+              if not data.get(field):
+                  errors.append(f"Missing required field: {field}")
+
+          lxc = data.get('lxc', {})
+          if not lxc.get('ostemplate'):
+              errors.append("Missing lxc.ostemplate")
+
+          defaults = lxc.get('defaults', {})
+          if defaults.get('cores', 0) < 1:
+              errors.append("lxc.defaults.cores must be >= 1")
+          if defaults.get('memory_mb', 0) < 128:
+              errors.append("lxc.defaults.memory_mb must be >= 128")
+          if defaults.get('disk_gb', 0) < 1:
+              errors.append("lxc.defaults.disk_gb must be >= 1")
+
+          prov = data.get('provisioning', {})
+          if prov.get('script', '') != 'provision/install.py':
+              errors.append("provisioning.script must be 'provision/install.py'")
+
+          if errors:
+              for e in errors:
+                  print(f"::error file={path}::{e}")
+              sys.exit(1)
+
+          print(f"  Manifest OK: {data['name']} v{data['version']}")
+          PYEOF
+
+            # Check install script exists and is valid Python
+            script="apps/${app_id}/provision/install.py"
+            if [ ! -f "$script" ]; then
+              echo "::error file=${script}::Install script not found"
+              exit_code=1
+            else
+              python3 -c "
+          import py_compile, sys
+          try:
+              py_compile.compile('${script}', doraise=True)
+              print('  Script OK: ${script}')
+          except py_compile.PyCompileError as e:
+              print(f'::error file=${script}::{e}')
+              sys.exit(1)
+          "
+              if [ $? -ne 0 ]; then exit_code=1; fi
+            fi
+          done
+          exit $exit_code

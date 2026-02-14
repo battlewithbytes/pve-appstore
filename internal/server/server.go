@@ -107,26 +107,32 @@ func New(cfg *config.Config, cat *catalog.Catalog, eng *engine.Engine, spaFS fs.
 				log.Printf("[dev] restored deployed app %q into catalog", meta.ID)
 			}
 		}
+		// Also restore deployed dev stacks
+		if stacks, err := s.devSvc.ListStacks(); err == nil {
+			for _, meta := range stacks {
+				if meta.Status != "deployed" {
+					continue
+				}
+				sm, err := s.devSvc.ParseStackManifest(meta.ID)
+				if err != nil {
+					log.Printf("[dev] warning: could not restore deployed stack %q: %v", meta.ID, err)
+					continue
+				}
+				stackDir := s.devSvc.AppDir(meta.ID)
+				sm.DirPath = stackDir
+				if _, err := os.Stat(filepath.Join(stackDir, "icon.png")); err == nil {
+					sm.IconPath = filepath.Join(stackDir, "icon.png")
+				}
+				if s.catalogSvc != nil {
+					s.catalogSvc.MergeDevStack(sm)
+				}
+				log.Printf("[dev] restored deployed stack %q into catalog", meta.ID)
+			}
+		}
 	}
 
 	// Resolve configured storages to filesystem paths via Proxmox API
-	if eng != nil {
-		ctx := context.Background()
-		for _, storageID := range cfg.Storages {
-			si, err := eng.GetStorageInfo(ctx, storageID)
-			if err != nil {
-				log.Printf("[server] warning: could not resolve storage %q: %v", storageID, err)
-				continue
-			}
-			s.storageMetas = append(s.storageMetas, *si)
-			if si.Browsable && si.Path != "" {
-				s.allowedPaths = append(s.allowedPaths, filepath.Clean(si.Path))
-			}
-		}
-		if len(s.storageMetas) > 0 {
-			log.Printf("[server] resolved %d storage(s), %d browsable path(s)", len(s.storageMetas), len(s.allowedPaths))
-		}
-	}
+	s.resolveStorageMetas()
 
 	mux := http.NewServeMux()
 
@@ -150,6 +156,7 @@ func New(cfg *config.Config, cat *catalog.Catalog, eng *engine.Engine, spaFS fs.
 	// API routes — settings
 	mux.HandleFunc("GET /api/settings", s.handleGetSettings)
 	mux.HandleFunc("PUT /api/settings", s.withAuth(s.handleUpdateSettings))
+	mux.HandleFunc("GET /api/settings/discover", s.withAuth(s.handleDiscoverResources))
 
 	// API routes — developer mode
 	mux.HandleFunc("GET /api/dev/apps", s.withDevMode(s.withAuth(s.handleDevListApps)))
@@ -170,7 +177,22 @@ func New(cfg *config.Config, cat *catalog.Catalog, eng *engine.Engine, spaFS fs.
 	mux.HandleFunc("POST /api/dev/import/unraid", s.withDevMode(s.withAuth(s.handleDevImportUnraid)))
 	mux.HandleFunc("POST /api/dev/import/dockerfile", s.withDevMode(s.withAuth(s.handleDevImportDockerfile)))
 	mux.HandleFunc("POST /api/dev/import/dockerfile/stream", s.withDevMode(s.withAuth(s.handleDevImportDockerfileStream)))
+	mux.HandleFunc("POST /api/dev/import/zip", s.withDevMode(s.withAuth(s.handleDevImportZip)))
 	mux.HandleFunc("GET /api/dev/templates", s.withDevMode(s.handleDevListTemplates))
+
+	// API routes — developer stacks
+	mux.HandleFunc("GET /api/dev/stacks", s.withDevMode(s.withAuth(s.handleDevListStacks)))
+	mux.HandleFunc("POST /api/dev/stacks", s.withDevMode(s.withAuth(s.handleDevCreateStack)))
+	mux.HandleFunc("GET /api/dev/stacks/{id}", s.withDevMode(s.withAuth(s.handleDevGetStack)))
+	mux.HandleFunc("PUT /api/dev/stacks/{id}/manifest", s.withDevMode(s.withAuth(s.handleDevSaveStackManifest)))
+	mux.HandleFunc("DELETE /api/dev/stacks/{id}", s.withDevMode(s.withAuth(s.handleDevDeleteStack)))
+	mux.HandleFunc("GET /api/dev/stacks/{id}/icon", s.withDevMode(s.handleDevGetStackIcon))
+	mux.HandleFunc("POST /api/dev/stacks/{id}/validate", s.withDevMode(s.withAuth(s.handleDevValidateStack)))
+	mux.HandleFunc("POST /api/dev/stacks/{id}/deploy", s.withDevMode(s.withAuth(s.handleDevDeployStack)))
+	mux.HandleFunc("POST /api/dev/stacks/{id}/undeploy", s.withDevMode(s.withAuth(s.handleDevUndeployStack)))
+	mux.HandleFunc("POST /api/dev/stacks/{id}/export", s.withDevMode(s.withAuth(s.handleDevExportStack)))
+	mux.HandleFunc("GET /api/dev/stacks/{id}/publish-status", s.withDevMode(s.withAuth(s.handleDevStackPublishStatus)))
+	mux.HandleFunc("POST /api/dev/stacks/{id}/publish", s.withDevMode(s.withAuth(s.handleDevPublishStack)))
 
 	// API routes — developer GitHub integration
 	mux.HandleFunc("GET /api/dev/github/status", s.withDevMode(s.withAuth(s.handleDevGitHubStatus)))
@@ -206,7 +228,12 @@ func New(cfg *config.Config, cat *catalog.Catalog, eng *engine.Engine, spaFS fs.
 	mux.HandleFunc("POST /api/installs/{id}/edit", s.withAuth(s.handleEditInstall))
 	mux.HandleFunc("POST /api/installs/{id}/reconfigure", s.withAuth(s.handleReconfigure))
 
-	// API routes — stacks
+	// API routes — catalog stack definitions
+	mux.HandleFunc("GET /api/catalog-stacks", s.handleListCatalogStacks)
+	mux.HandleFunc("GET /api/catalog-stacks/{id}", s.handleGetCatalogStack)
+	mux.HandleFunc("POST /api/catalog-stacks/{id}/install", s.withAuth(s.handleInstallCatalogStack))
+
+	// API routes — stacks (installed stacks)
 	mux.HandleFunc("POST /api/stacks", s.withAuth(s.handleCreateStack))
 	mux.HandleFunc("GET /api/stacks", s.handleListStacks)
 	mux.HandleFunc("GET /api/stacks/{id}", s.handleGetStack)
@@ -261,6 +288,31 @@ func (s *Server) Shutdown(ctx context.Context) error {
 // Addr returns the configured listen address.
 func (s *Server) Addr() string {
 	return s.http.Addr
+}
+
+// resolveStorageMetas re-resolves configured storages to filesystem paths.
+// Called at startup and after storages are changed in settings.
+func (s *Server) resolveStorageMetas() {
+	s.storageMetas = nil
+	s.allowedPaths = nil
+	if s.engine == nil {
+		return
+	}
+	ctx := context.Background()
+	for _, storageID := range s.cfg.Storages {
+		si, err := s.engine.GetStorageInfo(ctx, storageID)
+		if err != nil {
+			log.Printf("[server] warning: could not resolve storage %q: %v", storageID, err)
+			continue
+		}
+		s.storageMetas = append(s.storageMetas, *si)
+		if si.Browsable && si.Path != "" {
+			s.allowedPaths = append(s.allowedPaths, filepath.Clean(si.Path))
+		}
+	}
+	if len(s.storageMetas) > 0 {
+		log.Printf("[server] resolved %d storage(s), %d browsable path(s)", len(s.storageMetas), len(s.allowedPaths))
+	}
 }
 
 func maxBodyMiddleware(next http.Handler, maxBytes int64) http.Handler {

@@ -181,6 +181,7 @@ export interface Job {
   disk_gb: number;
   hostname?: string;
   ip_address?: string;
+  mac_address?: string;
   onboot: boolean;
   unprivileged: boolean;
   inputs?: Record<string, string>;
@@ -214,6 +215,7 @@ export interface Install {
   disk_gb: number;
   hostname?: string;
   ip_address?: string;
+  mac_address?: string;
   onboot?: boolean;
   unprivileged?: boolean;
   inputs?: Record<string, string>;
@@ -277,6 +279,7 @@ export interface InstallRequest {
   disk_gb?: number;
   hostname?: string;
   ip_address?: string;
+  mac_address?: string;
   onboot?: boolean;
   unprivileged?: boolean;
   inputs?: Record<string, string>;
@@ -394,6 +397,7 @@ export interface Stack {
   disk_gb: number;
   hostname?: string;
   ip_address?: string;
+  mac_address?: string;
   onboot: boolean;
   unprivileged: boolean;
   ostemplate: string;
@@ -431,6 +435,7 @@ export interface StackCreateRequest {
   disk_gb?: number;
   hostname?: string;
   ip_address?: string;
+  mac_address?: string;
   onboot?: boolean;
   unprivileged?: boolean;
   bind_mounts?: Record<string, string>;
@@ -463,9 +468,16 @@ export interface Settings {
 
 export interface SettingsUpdate {
   defaults?: { cores?: number; memory_mb?: number; disk_gb?: number };
+  storages?: string[];
+  bridges?: string[];
   developer?: { enabled: boolean };
   catalog?: { refresh?: string };
   gpu?: { enabled?: boolean; policy?: string };
+}
+
+export interface DiscoverResponse {
+  storages: { id: string; type: string }[];
+  bridges: string[];
 }
 
 // --- Developer Mode ---
@@ -478,14 +490,10 @@ export interface GitHubStatus {
 
 export interface PublishStatus {
   ready: boolean;
-  checks: {
-    github_connected: boolean;
-    validation_passed: boolean;
-    test_installed: boolean;
-    fork_exists: boolean;
-  };
+  checks: Record<string, boolean>;
   published: boolean;
   pr_url?: string;
+  pr_state?: string;
 }
 
 export interface DevAppMeta {
@@ -546,6 +554,68 @@ export interface ValidationResult {
   errors: ValidationMsg[];
   warnings: ValidationMsg[];
   checklist: ChecklistItem[];
+}
+
+// --- Developer Stacks ---
+
+export interface DevStackMeta {
+  id: string;
+  name: string;
+  version: string;
+  description: string;
+  status: string;
+  app_count: number;
+  has_icon: boolean;
+  github_branch?: string;
+  github_pr_url?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface DevStack extends DevStackMeta {
+  manifest: string;
+  deployed: boolean;
+  files: DevFile[];
+}
+
+export interface DevStacksResponse {
+  stacks: DevStackMeta[];
+  total: number;
+}
+
+// --- Catalog Stacks ---
+
+export interface CatalogStack {
+  id: string;
+  name: string;
+  description: string;
+  version: string;
+  categories: string[];
+  tags: string[];
+  icon?: string;
+  apps: { app_id: string; inputs?: Record<string, string> }[];
+  lxc: {
+    ostemplate: string;
+    defaults: {
+      cores: number;
+      memory_mb: number;
+      disk_gb: number;
+    };
+  };
+  icon_path?: string;
+  source?: string;
+}
+
+export interface CatalogStacksResponse {
+  stacks: CatalogStack[];
+  total: number;
+}
+
+export interface ZipImportResponse {
+  type: 'app' | 'stack';
+  id: string;
+  app?: DevApp;
+  stack?: DevStack;
 }
 
 // --- Dockerfile Chain Resolution ---

@@ -1,9 +1,12 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os/exec"
+	"strings"
 )
 
 // --- Settings handlers ---
@@ -69,6 +72,8 @@ func (s *Server) handleGetSettings(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Defaults  *settingsDefaults  `json:"defaults"`
+		Storages  *[]string          `json:"storages"`
+		Bridges   *[]string          `json:"bridges"`
 		Developer *settingsDeveloper `json:"developer"`
 		Catalog   *settingsCatalog   `json:"catalog"`
 		GPU       *settingsGPU       `json:"gpu"`
@@ -89,7 +94,44 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 			s.cfg.Defaults.DiskGB = req.Defaults.DiskGB
 		}
 	}
+	if req.Storages != nil {
+		if len(*req.Storages) == 0 {
+			writeError(w, http.StatusBadRequest, "at least one storage is required")
+			return
+		}
+		s.cfg.Storages = *req.Storages
+	}
+	if req.Bridges != nil {
+		if len(*req.Bridges) == 0 {
+			writeError(w, http.StatusBadRequest, "at least one bridge is required")
+			return
+		}
+		s.cfg.Bridges = *req.Bridges
+	}
 	if req.Developer != nil {
+		// When disabling developer mode, undeploy all dev apps (and stacks) from catalog
+		if !req.Developer.Enabled && s.cfg.Developer.Enabled && s.devSvc != nil {
+			if apps, err := s.devSvc.List(); err == nil {
+				for _, meta := range apps {
+					if meta.Status == "deployed" {
+						if s.catalogSvc != nil {
+							s.catalogSvc.RemoveDevApp(meta.ID)
+						}
+						s.devSvc.SetStatus(meta.ID, "draft")
+					}
+				}
+			}
+			if stacks, err := s.devSvc.ListStacks(); err == nil {
+				for _, meta := range stacks {
+					if meta.Status == "deployed" {
+						if s.catalogSvc != nil {
+							s.catalogSvc.RemoveDevStack(meta.ID)
+						}
+						s.devSvc.SetStackStatus(meta.ID, "draft")
+					}
+				}
+			}
+		}
 		s.cfg.Developer.Enabled = req.Developer.Enabled
 	}
 	if req.Catalog != nil && req.Catalog.Refresh != "" {
@@ -112,6 +154,57 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Re-resolve storage metadata if storages changed
+	if req.Storages != nil {
+		s.resolveStorageMetas()
+	}
+
 	s.handleGetSettings(w, r)
 }
 
+// handleDiscoverResources returns available storages and bridges from the system.
+func (s *Server) handleDiscoverResources(w http.ResponseWriter, r *http.Request) {
+	type storageItem struct {
+		ID   string `json:"id"`
+		Type string `json:"type"`
+	}
+
+	var storages []storageItem
+	if s.engine != nil {
+		ctx := context.Background()
+		if list, err := s.engine.ListStorages(ctx); err == nil {
+			for _, si := range list {
+				storages = append(storages, storageItem{ID: si.ID, Type: si.Type})
+			}
+		}
+	}
+	if storages == nil {
+		storages = []storageItem{}
+	}
+
+	bridges := discoverBridges()
+	if bridges == nil {
+		bridges = []string{}
+	}
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"storages": storages,
+		"bridges":  bridges,
+	})
+}
+
+// discoverBridges returns all vmbr* network interfaces on the host.
+func discoverBridges() []string {
+	out, err := exec.Command("ip", "-brief", "link", "show").Output()
+	if err != nil {
+		return nil
+	}
+	var bridges []string
+	for _, line := range strings.Split(string(out), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) >= 1 && strings.HasPrefix(fields[0], "vmbr") {
+			bridges = append(bridges, fields[0])
+		}
+	}
+	return bridges
+}

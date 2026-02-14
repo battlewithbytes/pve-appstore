@@ -63,6 +63,12 @@ func (m *mockCM) MountHostPath(ctid int, mpIndex int, hostPath, containerPath st
 	return nil
 }
 func (m *mockCM) AppendLXCConfig(ctid int, lines []string) error { return nil }
+func (m *mockCM) ListStorages(ctx context.Context) ([]engine.StorageInfo, error) {
+	return []engine.StorageInfo{
+		{ID: "local-lvm", Type: "lvmthin", Content: "rootdir,images"},
+		{ID: "local", Type: "dir", Content: "iso,vztmpl,rootdir", Path: "/var/lib/vz", Browsable: true},
+	}, nil
+}
 func (m *mockCM) GetStorageInfo(ctx context.Context, storageID string) (*engine.StorageInfo, error) {
 	path := m.storagePath
 	if path == "" {
@@ -168,14 +174,18 @@ func waitForJobTerminalState(t *testing.T, srv *Server, jobID string) {
 
 type catalogSvcStub struct {
 	CatalogService
-	appCountFn    func() int
-	listFn        func() []*catalog.AppManifest
-	getAppFn      func(id string) (*catalog.AppManifest, bool)
-	searchFn      func(query string) []*catalog.AppManifest
-	categoriesFn  func() []string
-	refreshFn     func() error
-	mergeDevAppFn func(app *catalog.AppManifest)
-	removeDevAppFn func(id string)
+	appCountFn      func() int
+	listFn          func() []*catalog.AppManifest
+	getAppFn        func(id string) (*catalog.AppManifest, bool)
+	searchFn        func(query string) []*catalog.AppManifest
+	categoriesFn    func() []string
+	refreshFn       func() error
+	mergeDevAppFn   func(app *catalog.AppManifest)
+	removeDevAppFn  func(id string)
+	listStacksFn    func() []*catalog.StackManifest
+	getStackFn      func(id string) (*catalog.StackManifest, bool)
+	mergeDevStackFn func(s *catalog.StackManifest)
+	removeDevStackFn func(id string)
 }
 
 func (s catalogSvcStub) AppCount() int {
@@ -229,6 +239,32 @@ func (s catalogSvcStub) MergeDevApp(app *catalog.AppManifest) {
 func (s catalogSvcStub) RemoveDevApp(id string) {
 	if s.removeDevAppFn != nil {
 		s.removeDevAppFn(id)
+	}
+}
+
+func (s catalogSvcStub) ListStacks() []*catalog.StackManifest {
+	if s.listStacksFn != nil {
+		return s.listStacksFn()
+	}
+	return nil
+}
+
+func (s catalogSvcStub) GetStack(id string) (*catalog.StackManifest, bool) {
+	if s.getStackFn != nil {
+		return s.getStackFn(id)
+	}
+	return nil, false
+}
+
+func (s catalogSvcStub) MergeDevStack(sm *catalog.StackManifest) {
+	if s.mergeDevStackFn != nil {
+		s.mergeDevStackFn(sm)
+	}
+}
+
+func (s catalogSvcStub) RemoveDevStack(id string) {
+	if s.removeDevStackFn != nil {
+		s.removeDevStackFn(id)
 	}
 }
 
@@ -350,6 +386,19 @@ func (s devSvcStub) EnsureIcon(id string) {
 		s.ensureIconFn(id)
 	}
 }
+
+func (s devSvcStub) ListStacks() ([]devmode.DevStackMeta, error) { return nil, nil }
+func (s devSvcStub) CreateStack(id, template string) error       { return nil }
+func (s devSvcStub) GetStack(id string) (*devmode.DevStack, error) {
+	return nil, fmt.Errorf("not found")
+}
+func (s devSvcStub) SaveStackManifest(id string, data []byte) error          { return nil }
+func (s devSvcStub) ParseStackManifest(id string) (*catalog.StackManifest, error) {
+	return &catalog.StackManifest{ID: id}, nil
+}
+func (s devSvcStub) DeleteStack(id string) error         { return nil }
+func (s devSvcStub) SetStackStatus(id, status string) error { return nil }
+func (s devSvcStub) IsStackDeployed(id string) bool      { return false }
 
 type engineSvcStub struct {
 	EngineService

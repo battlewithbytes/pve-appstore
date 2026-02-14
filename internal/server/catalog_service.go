@@ -12,6 +12,10 @@ type CatalogService interface {
 	Refresh() error
 	MergeDevApp(app *catalog.AppManifest)
 	RemoveDevApp(id string)
+	ListStacks() []*catalog.StackManifest
+	GetStack(id string) (*catalog.StackManifest, bool)
+	MergeDevStack(s *catalog.StackManifest)
+	RemoveDevStack(id string)
 }
 
 type defaultCatalogService struct {
@@ -42,4 +46,16 @@ func (s *defaultCatalogService) MergeDevApp(app *catalog.AppManifest) {
 }
 func (s *defaultCatalogService) RemoveDevApp(id string) {
 	s.cat.RemoveDevApp(id)
+}
+func (s *defaultCatalogService) ListStacks() []*catalog.StackManifest {
+	return s.cat.ListStacks()
+}
+func (s *defaultCatalogService) GetStack(id string) (*catalog.StackManifest, bool) {
+	return s.cat.GetStack(id)
+}
+func (s *defaultCatalogService) MergeDevStack(sm *catalog.StackManifest) {
+	s.cat.MergeDevStack(sm)
+}
+func (s *defaultCatalogService) RemoveDevStack(id string) {
+	s.cat.RemoveDevStack(id)
 }

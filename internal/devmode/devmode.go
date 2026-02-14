@@ -17,6 +17,29 @@ import (
 //go:embed assets/default-icon.png
 var defaultIconPNG []byte
 
+// DevStackMeta is the summary for listing dev stacks.
+type DevStackMeta struct {
+	ID            string    `json:"id"`
+	Name          string    `json:"name"`
+	Version       string    `json:"version"`
+	Description   string    `json:"description"`
+	Status        string    `json:"status"`
+	AppCount      int       `json:"app_count"`
+	HasIcon       bool      `json:"has_icon"`
+	GitHubBranch  string    `json:"github_branch,omitempty"`
+	GitHubPRURL   string    `json:"github_pr_url,omitempty"`
+	CreatedAt     time.Time `json:"created_at"`
+	UpdatedAt     time.Time `json:"updated_at"`
+}
+
+// DevStack is the full dev stack with file contents.
+type DevStack struct {
+	DevStackMeta
+	Manifest string    `json:"manifest"` // stack.yml content
+	Deployed bool      `json:"deployed"`
+	Files    []DevFile `json:"files"`
+}
+
 // DevAppMeta is the summary for listing dev apps.
 type DevAppMeta struct {
 	ID            string    `json:"id"`
@@ -74,6 +97,10 @@ func (d *DevStore) List() ([]DevAppMeta, error) {
 	var apps []DevAppMeta
 	for _, entry := range entries {
 		if !entry.IsDir() {
+			continue
+		}
+		// Skip stack directories (contain stack.yml instead of app.yml)
+		if _, err := os.Stat(filepath.Join(d.baseDir, entry.Name(), "stack.yml")); err == nil {
 			continue
 		}
 		meta, err := d.readMeta(entry.Name())
@@ -429,6 +456,207 @@ func copyDir(src, dst string) error {
 		}
 	}
 	return nil
+}
+
+// ListStacks returns metadata for all dev stacks.
+func (d *DevStore) ListStacks() ([]DevStackMeta, error) {
+	entries, err := os.ReadDir(d.baseDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return []DevStackMeta{}, nil
+		}
+		return nil, err
+	}
+
+	var stacks []DevStackMeta
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		// Only include directories containing stack.yml
+		if _, err := os.Stat(filepath.Join(d.baseDir, entry.Name(), "stack.yml")); err != nil {
+			continue
+		}
+		meta, err := d.readStackMeta(entry.Name())
+		if err != nil {
+			continue
+		}
+		stacks = append(stacks, *meta)
+	}
+	sort.Slice(stacks, func(i, j int) bool { return stacks[i].Name < stacks[j].Name })
+	return stacks, nil
+}
+
+// GetStack returns the full dev stack.
+func (d *DevStore) GetStack(id string) (*DevStack, error) {
+	if !isValidID(id) {
+		return nil, fmt.Errorf("invalid stack id")
+	}
+	stackDir := filepath.Join(d.baseDir, id)
+	if _, err := os.Stat(filepath.Join(stackDir, "stack.yml")); os.IsNotExist(err) {
+		return nil, fmt.Errorf("dev stack %q not found", id)
+	}
+
+	meta, err := d.readStackMeta(id)
+	if err != nil {
+		return nil, err
+	}
+
+	stack := &DevStack{DevStackMeta: *meta}
+
+	if data, err := os.ReadFile(filepath.Join(stackDir, "stack.yml")); err == nil {
+		stack.Manifest = string(data)
+	}
+
+	stack.Files = d.listFiles(stackDir, "")
+	stack.Deployed = d.IsStackDeployed(id)
+
+	return stack, nil
+}
+
+// CreateStack scaffolds a new dev stack.
+func (d *DevStore) CreateStack(id, template string) error {
+	if !isValidID(id) {
+		return fmt.Errorf("invalid stack id: must be kebab-case")
+	}
+	stackDir := filepath.Join(d.baseDir, id)
+	if _, err := os.Stat(stackDir); err == nil {
+		return fmt.Errorf("stack %q already exists", id)
+	}
+
+	if err := os.MkdirAll(stackDir, 0755); err != nil {
+		return err
+	}
+
+	name := titleFromID(id)
+	manifest := GenerateStackManifest(id, name, template)
+
+	if err := os.WriteFile(filepath.Join(stackDir, "stack.yml"), []byte(manifest), 0644); err != nil {
+		return err
+	}
+
+	// Create default icon
+	if err := os.WriteFile(filepath.Join(stackDir, "icon.png"), defaultIconPNG, 0644); err != nil {
+		return err
+	}
+
+	readme := fmt.Sprintf("# %s\n\nTODO: Add description for your stack.\n", name)
+	if err := os.WriteFile(filepath.Join(stackDir, "README.md"), []byte(readme), 0644); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// SaveStackManifest writes stack.yml.
+func (d *DevStore) SaveStackManifest(id string, data []byte) error {
+	if !isValidID(id) {
+		return fmt.Errorf("invalid stack id")
+	}
+	stackDir := filepath.Join(d.baseDir, id)
+	if _, err := os.Stat(stackDir); os.IsNotExist(err) {
+		return fmt.Errorf("dev stack %q not found", id)
+	}
+	return os.WriteFile(filepath.Join(stackDir, "stack.yml"), data, 0644)
+}
+
+// ParseStackManifest reads and parses the stack.yml for a dev stack.
+func (d *DevStore) ParseStackManifest(id string) (*catalog.StackManifest, error) {
+	if !isValidID(id) {
+		return nil, fmt.Errorf("invalid stack id")
+	}
+	manifestPath := filepath.Join(d.baseDir, id, "stack.yml")
+	return catalog.ParseStackManifest(manifestPath)
+}
+
+// DeleteStack removes a dev stack directory.
+func (d *DevStore) DeleteStack(id string) error {
+	if !isValidID(id) {
+		return fmt.Errorf("invalid stack id")
+	}
+	stackDir := filepath.Join(d.baseDir, id)
+	if _, err := os.Stat(filepath.Join(stackDir, "stack.yml")); os.IsNotExist(err) {
+		return fmt.Errorf("dev stack %q not found", id)
+	}
+	return os.RemoveAll(stackDir)
+}
+
+// IsStackDeployed returns true if the dev stack is currently deployed to the catalog.
+func (d *DevStore) IsStackDeployed(id string) bool {
+	data, err := os.ReadFile(filepath.Join(d.baseDir, id, ".devstatus"))
+	if err != nil {
+		return false
+	}
+	var s struct{ Status string `json:"status"` }
+	if json.Unmarshal(data, &s) != nil {
+		return false
+	}
+	return s.Status == "deployed"
+}
+
+// SetStackStatus writes the dev stack status file.
+func (d *DevStore) SetStackStatus(id, status string) error {
+	return d.SetGitHubMeta(id, map[string]string{"status": status})
+}
+
+// readStackMeta reads summary info from a dev stack directory.
+func (d *DevStore) readStackMeta(id string) (*DevStackMeta, error) {
+	stackDir := filepath.Join(d.baseDir, id)
+	manifestPath := filepath.Join(stackDir, "stack.yml")
+
+	data, err := os.ReadFile(manifestPath)
+	if err != nil {
+		return nil, err
+	}
+
+	var manifest struct {
+		ID          string `yaml:"id"`
+		Name        string `yaml:"name"`
+		Version     string `yaml:"version"`
+		Description string `yaml:"description"`
+		Apps        []struct {
+			AppID string `yaml:"app_id"`
+		} `yaml:"apps"`
+	}
+	if err := yaml.Unmarshal(data, &manifest); err != nil {
+		return nil, err
+	}
+
+	info, _ := os.Stat(manifestPath)
+	createdAt := info.ModTime()
+
+	_, hasIcon := os.Stat(filepath.Join(stackDir, "icon.png"))
+
+	status := "draft"
+	var githubBranch, githubPRURL string
+	if statusData, err := os.ReadFile(filepath.Join(stackDir, ".devstatus")); err == nil {
+		var s struct {
+			Status       string `json:"status"`
+			GitHubBranch string `json:"github_branch"`
+			GitHubPRURL  string `json:"github_pr_url"`
+		}
+		if json.Unmarshal(statusData, &s) == nil {
+			if s.Status != "" {
+				status = s.Status
+			}
+			githubBranch = s.GitHubBranch
+			githubPRURL = s.GitHubPRURL
+		}
+	}
+
+	return &DevStackMeta{
+		ID:           manifest.ID,
+		Name:         manifest.Name,
+		Version:      manifest.Version,
+		Description:  manifest.Description,
+		Status:       status,
+		AppCount:     len(manifest.Apps),
+		HasIcon:      hasIcon == nil,
+		GitHubBranch: githubBranch,
+		GitHubPRURL:  githubPRURL,
+		CreatedAt:    createdAt,
+		UpdatedAt:    info.ModTime(),
+	}, nil
 }
 
 // EnsureIcon writes the default icon.png if one doesn't already exist.

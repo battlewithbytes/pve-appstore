@@ -2,6 +2,7 @@ package server
 
 import (
 	"archive/zip"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -9,7 +10,10 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/battlewithbytes/pve-appstore/internal/config"
 	"github.com/battlewithbytes/pve-appstore/internal/devmode"
+	"github.com/battlewithbytes/pve-appstore/internal/engine"
+	gh "github.com/battlewithbytes/pve-appstore/internal/github"
 )
 
 func (s *Server) handleDevValidate(w http.ResponseWriter, r *http.Request) {
@@ -122,4 +126,538 @@ func (s *Server) handleDevExport(w http.ResponseWriter, r *http.Request) {
 		io.Copy(writer, file)
 		return nil
 	})
+}
+
+func (s *Server) handleDevImportZip(w http.ResponseWriter, r *http.Request) {
+	// Accept up to 10 MB for ZIP uploads
+	r.Body = http.MaxBytesReader(w, r.Body, 10<<20)
+
+	file, _, err := r.FormFile("file")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "file field is required (multipart form)")
+		return
+	}
+	defer file.Close()
+
+	// Read the entire ZIP into memory (already limited to 10 MB)
+	data, err := io.ReadAll(file)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "failed to read uploaded file")
+		return
+	}
+
+	zr, err := zip.NewReader(strings.NewReader(string(data)), int64(len(data)))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid ZIP file")
+		return
+	}
+
+	// Determine the single top-level directory
+	topDirs := map[string]bool{}
+	for _, f := range zr.File {
+		parts := strings.SplitN(filepath.ToSlash(f.Name), "/", 2)
+		if len(parts) > 0 && parts[0] != "" {
+			topDirs[parts[0]] = true
+		}
+	}
+	if len(topDirs) != 1 {
+		writeError(w, http.StatusBadRequest, "ZIP must contain exactly one top-level directory")
+		return
+	}
+
+	var topDir string
+	for d := range topDirs {
+		topDir = d
+	}
+
+	// Validate the ID
+	id := topDir
+	if id == "" || len(id) > 64 {
+		writeError(w, http.StatusBadRequest, "invalid app id from ZIP directory name")
+		return
+	}
+
+	// Check if already exists
+	appDir := s.devSvc.AppDir(id)
+	if _, err := os.Stat(appDir); err == nil {
+		writeError(w, http.StatusConflict, fmt.Sprintf("dev app %q already exists", id))
+		return
+	}
+
+	// Determine type: app.yml → app, stack.yml → stack
+	hasAppYml := false
+	hasStackYml := false
+	for _, f := range zr.File {
+		rel := strings.TrimPrefix(filepath.ToSlash(f.Name), topDir+"/")
+		if rel == "app.yml" {
+			hasAppYml = true
+		}
+		if rel == "stack.yml" {
+			hasStackYml = true
+		}
+	}
+	if !hasAppYml && !hasStackYml {
+		writeError(w, http.StatusBadRequest, "ZIP must contain app.yml or stack.yml")
+		return
+	}
+
+	// Extract files to dev-apps/{id}/
+	if err := os.MkdirAll(appDir, 0755); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to create app directory")
+		return
+	}
+
+	for _, f := range zr.File {
+		rel := strings.TrimPrefix(filepath.ToSlash(f.Name), topDir+"/")
+		if rel == "" || rel == "." {
+			continue
+		}
+		// Skip dotfiles
+		if strings.HasPrefix(filepath.Base(rel), ".") {
+			continue
+		}
+		// Prevent path traversal
+		if strings.Contains(rel, "..") {
+			continue
+		}
+
+		target := filepath.Join(appDir, rel)
+		if f.FileInfo().IsDir() {
+			os.MkdirAll(target, 0755)
+			continue
+		}
+
+		os.MkdirAll(filepath.Dir(target), 0755)
+		rc, err := f.Open()
+		if err != nil {
+			continue
+		}
+		out, err := os.Create(target)
+		if err != nil {
+			rc.Close()
+			continue
+		}
+		io.Copy(out, rc)
+		out.Close()
+		rc.Close()
+	}
+
+	// Return the appropriate response
+	if hasStackYml {
+		stack, err := s.devSvc.GetStack(id)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, fmt.Sprintf("imported but failed to read stack: %v", err))
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"type":  "stack",
+			"id":    id,
+			"stack": stack,
+		})
+		return
+	}
+
+	// Ensure icon exists
+	s.devSvc.EnsureIcon(id)
+
+	app, err := s.devSvc.Get(id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("imported but failed to read app: %v", err))
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"type": "app",
+		"id":   id,
+		"app":  app,
+	})
+}
+
+func (s *Server) handleDevExportStack(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	appDir := s.devSvc.AppDir(id)
+	if _, err := os.Stat(filepath.Join(appDir, "stack.yml")); os.IsNotExist(err) {
+		writeError(w, http.StatusNotFound, fmt.Sprintf("dev stack %q not found", id))
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/zip")
+	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s.zip"`, id))
+
+	zw := zip.NewWriter(w)
+	defer zw.Close()
+
+	filepath.Walk(appDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil || info.IsDir() {
+			return nil
+		}
+		if strings.HasPrefix(info.Name(), ".") {
+			return nil
+		}
+
+		relPath, _ := filepath.Rel(appDir, path)
+		zipPath := filepath.Join(id, relPath)
+
+		header, err := zip.FileInfoHeader(info)
+		if err != nil {
+			return nil
+		}
+		header.Name = zipPath
+		header.Method = zip.Deflate
+
+		writer, err := zw.CreateHeader(header)
+		if err != nil {
+			return nil
+		}
+
+		file, err := os.Open(path)
+		if err != nil {
+			return nil
+		}
+		defer file.Close()
+		io.Copy(writer, file)
+		return nil
+	})
+}
+
+func (s *Server) handleDevValidateStack(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	appDir := s.devSvc.AppDir(id)
+	if _, err := os.Stat(filepath.Join(appDir, "stack.yml")); os.IsNotExist(err) {
+		writeError(w, http.StatusNotFound, fmt.Sprintf("dev stack %q not found", id))
+		return
+	}
+
+	result := devmode.ValidateStack(appDir)
+	writeJSON(w, http.StatusOK, result)
+}
+
+func (s *Server) handleDevDeployStack(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	appDir := s.devSvc.AppDir(id)
+
+	// Validate first
+	result := devmode.ValidateStack(appDir)
+	if !result.Valid {
+		writeJSON(w, http.StatusBadRequest, map[string]interface{}{
+			"error":      "stack has validation errors",
+			"validation": result,
+		})
+		return
+	}
+
+	// Parse stack manifest
+	sm, err := s.devSvc.ParseStackManifest(id)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	// Set computed paths
+	sm.DirPath = appDir
+	if _, err := os.Stat(filepath.Join(appDir, "icon.png")); err == nil {
+		sm.IconPath = filepath.Join(appDir, "icon.png")
+	}
+
+	// Merge into catalog
+	if s.catalogSvc != nil {
+		s.catalogSvc.MergeDevStack(sm)
+	}
+	s.devSvc.SetStackStatus(id, "deployed")
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"status":   "deployed",
+		"stack_id": sm.ID,
+		"message":  fmt.Sprintf("Stack %q is now available in the catalog", sm.Name),
+	})
+}
+
+func (s *Server) handleDevUndeployStack(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if s.catalogSvc != nil {
+		s.catalogSvc.RemoveDevStack(id)
+	}
+	s.devSvc.SetStackStatus(id, "draft")
+	writeJSON(w, http.StatusOK, map[string]string{"status": "undeployed"})
+}
+
+// handleDevPublishStack publishes a dev stack to GitHub as a PR.
+func (s *Server) handleDevPublishStack(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+
+	if s.githubStore == nil {
+		writeError(w, http.StatusServiceUnavailable, "store not available")
+		return
+	}
+
+	tokenEnc, _ := s.githubStore.GetGitHubState("github_token")
+	if tokenEnc == "" {
+		writeError(w, http.StatusBadRequest, "GitHub not connected")
+		return
+	}
+
+	hmacSecret := s.cfg.Auth.HMACSecret
+	if hmacSecret == "" {
+		hmacSecret = "pve-appstore-default-key"
+	}
+	token, err := gh.DecryptToken(tokenEnc, hmacSecret)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to decrypt GitHub token")
+		return
+	}
+
+	sm, err := s.devSvc.ParseStackManifest(id)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("stack manifest validation failed: %v", err))
+		return
+	}
+
+	// Verify all referenced apps exist in the catalog (not just dev-deployed)
+	if s.catalogSvc != nil {
+		for _, sa := range sm.Apps {
+			if app, ok := s.catalogSvc.GetApp(sa.AppID); !ok {
+				writeError(w, http.StatusBadRequest, fmt.Sprintf("referenced app %q not found in catalog", sa.AppID))
+				return
+			} else if app.Source == "developer" {
+				writeError(w, http.StatusBadRequest, fmt.Sprintf("referenced app %q must be published first (still in dev mode)", sa.AppID))
+				return
+			}
+		}
+	}
+
+	catalogOwner, catalogRepo, err := config.ParseGitHubRepo(s.cfg.Catalog.URL)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("cannot parse catalog URL: %v", err))
+		return
+	}
+
+	client := gh.NewClient(token)
+
+	forkResult, err := client.ForkRepo(catalogOwner, catalogRepo)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, fmt.Sprintf("failed to fork catalog repo: %v", err))
+		return
+	}
+
+	forkJSON, _ := json.Marshal(forkResult)
+	s.githubStore.SetGitHubState("github_fork", string(forkJSON))
+
+	baseSHA, defaultBranch, err := client.GetDefaultBranchSHA(forkResult.Owner, catalogRepo)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, fmt.Sprintf("failed to get branch SHA: %v", err))
+		return
+	}
+
+	branchName := "stack/" + id
+	if err := client.CreateBranch(forkResult.Owner, catalogRepo, branchName, baseSHA); err != nil {
+		writeError(w, http.StatusBadGateway, fmt.Sprintf("failed to create branch: %v", err))
+		return
+	}
+
+	appDir := s.devSvc.AppDir(id)
+	prefix := "stacks/" + id
+	if err := pushDirToGitHub(client, forkResult.Owner, catalogRepo, branchName, appDir, prefix); err != nil {
+		writeError(w, http.StatusBadGateway, fmt.Sprintf("failed to push files: %v", err))
+		return
+	}
+
+	title := fmt.Sprintf("Add stack %s v%s", sm.Name, sm.Version)
+	body := fmt.Sprintf("## New Stack: %s\n\n%s\n\n- Version: %s\n- Apps: %d\n\nSubmitted via PVE App Store Developer Mode.",
+		sm.Name, sm.Description, sm.Version, len(sm.Apps))
+
+	head := fmt.Sprintf("%s:%s", forkResult.Owner, branchName)
+	pr, err := client.CreatePullRequest(catalogOwner, catalogRepo, title, body, head, defaultBranch)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, fmt.Sprintf("failed to create PR: %v", err))
+		return
+	}
+
+	s.devSvc.SetGitHubMeta(id, map[string]string{
+		"status":        "published",
+		"github_branch": branchName,
+		"github_pr_url": pr.HTMLURL,
+	})
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"pr_url":    pr.HTMLURL,
+		"pr_number": pr.Number,
+	})
+}
+
+// handleDevStackPublishStatus checks the publish readiness and PR state for a dev stack.
+func (s *Server) handleDevStackPublishStatus(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+
+	checks := map[string]bool{
+		"github_connected":  false,
+		"validation_passed": false,
+		"fork_exists":       false,
+	}
+
+	if s.githubStore != nil {
+		if tokenEnc, _ := s.githubStore.GetGitHubState("github_token"); tokenEnc != "" {
+			checks["github_connected"] = true
+		}
+		if forkJSON, _ := s.githubStore.GetGitHubState("github_fork"); forkJSON != "" {
+			checks["fork_exists"] = true
+		}
+	}
+
+	appDir := s.devSvc.AppDir(id)
+	if _, err := os.Stat(filepath.Join(appDir, "stack.yml")); err == nil {
+		if _, err := s.devSvc.ParseStackManifest(id); err == nil {
+			checks["validation_passed"] = true
+		}
+	}
+
+	// Check all referenced apps are published
+	appsPublished := true
+	if sm, err := s.devSvc.ParseStackManifest(id); err == nil && s.catalogSvc != nil {
+		for _, sa := range sm.Apps {
+			if app, ok := s.catalogSvc.GetApp(sa.AppID); !ok || app.Source == "developer" {
+				appsPublished = false
+				break
+			}
+		}
+	} else {
+		appsPublished = false
+	}
+	checks["apps_published"] = appsPublished
+
+	ready := checks["github_connected"] && checks["validation_passed"] && checks["fork_exists"] && checks["apps_published"]
+
+	published := false
+	prURL := ""
+	prState := ""
+	if stack, err := s.devSvc.GetStack(id); err == nil && stack != nil {
+		if stack.GitHubPRURL != "" {
+			published = true
+			prURL = stack.GitHubPRURL
+			prState = s.getPRState(prURL)
+		}
+	}
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"ready":     ready,
+		"checks":    checks,
+		"published": published,
+		"pr_url":    prURL,
+		"pr_state":  prState,
+	})
+}
+
+// Catalog stack handlers
+
+func (s *Server) handleListCatalogStacks(w http.ResponseWriter, r *http.Request) {
+	if s.catalogSvc == nil {
+		writeJSON(w, http.StatusOK, map[string]interface{}{"stacks": []interface{}{}, "total": 0})
+		return
+	}
+	stacks := s.catalogSvc.ListStacks()
+	writeJSON(w, http.StatusOK, map[string]interface{}{"stacks": stacks, "total": len(stacks)})
+}
+
+func (s *Server) handleGetCatalogStack(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if s.catalogSvc == nil {
+		writeError(w, http.StatusNotFound, "catalog not available")
+		return
+	}
+	sm, ok := s.catalogSvc.GetStack(id)
+	if !ok {
+		writeError(w, http.StatusNotFound, fmt.Sprintf("stack %q not found", id))
+		return
+	}
+
+	// Read README if available
+	readme := ""
+	if sm.DirPath != "" {
+		if data, err := os.ReadFile(filepath.Join(sm.DirPath, "README.md")); err == nil {
+			readme = string(data)
+		}
+	}
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"stack":  sm,
+		"readme": readme,
+	})
+}
+
+func (s *Server) handleInstallCatalogStack(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if s.catalogSvc == nil {
+		writeError(w, http.StatusNotFound, "catalog not available")
+		return
+	}
+	sm, ok := s.catalogSvc.GetStack(id)
+	if !ok {
+		writeError(w, http.StatusNotFound, fmt.Sprintf("stack %q not found", id))
+		return
+	}
+
+	// Validate all referenced apps exist
+	for _, sa := range sm.Apps {
+		if _, ok := s.catalogSvc.GetApp(sa.AppID); !ok {
+			writeError(w, http.StatusBadRequest, fmt.Sprintf("stack references app %q which is not in catalog", sa.AppID))
+			return
+		}
+	}
+
+	// Parse user overrides from body
+	var overrides struct {
+		Storage  string `json:"storage"`
+		Bridge   string `json:"bridge"`
+		Cores    int    `json:"cores"`
+		MemoryMB int    `json:"memory_mb"`
+		DiskGB   int    `json:"disk_gb"`
+		Hostname string `json:"hostname"`
+	}
+	json.NewDecoder(r.Body).Decode(&overrides)
+
+	// Build stack create request from manifest + overrides
+	apps := make([]engine.StackAppRequest, len(sm.Apps))
+	for i, sa := range sm.Apps {
+		apps[i] = engine.StackAppRequest{
+			AppID:  sa.AppID,
+			Inputs: sa.Inputs,
+		}
+	}
+
+	cores := sm.LXC.Defaults.Cores
+	if overrides.Cores > 0 {
+		cores = overrides.Cores
+	}
+	memoryMB := sm.LXC.Defaults.MemoryMB
+	if overrides.MemoryMB > 0 {
+		memoryMB = overrides.MemoryMB
+	}
+	diskGB := sm.LXC.Defaults.DiskGB
+	if overrides.DiskGB > 0 {
+		diskGB = overrides.DiskGB
+	}
+	storage := overrides.Storage
+	if storage == "" && len(s.cfg.Storages) > 0 {
+		storage = s.cfg.Storages[0]
+	}
+	bridge := overrides.Bridge
+	if bridge == "" && len(s.cfg.Bridges) > 0 {
+		bridge = s.cfg.Bridges[0]
+	}
+
+	req := engine.StackCreateRequest{
+		Name:     sm.Name,
+		Apps:     apps,
+		Storage:  storage,
+		Bridge:   bridge,
+		Cores:    cores,
+		MemoryMB: memoryMB,
+		DiskGB:   diskGB,
+		Hostname: overrides.Hostname,
+	}
+
+	job, err := s.engineStackSvc.StartStack(req)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusAccepted, job)
 }

@@ -72,6 +72,7 @@ type Job struct {
 	DiskGB       int               `json:"disk_gb"`
 	Hostname     string            `json:"hostname,omitempty"`
 	IPAddress    string            `json:"ip_address,omitempty"`
+	MACAddress   string            `json:"mac_address,omitempty"`
 	OnBoot       bool              `json:"onboot"`
 	Unprivileged bool              `json:"unprivileged"`
 	Inputs       map[string]string `json:"inputs,omitempty"`
@@ -111,6 +112,7 @@ type Install struct {
 	DiskGB       int                 `json:"disk_gb"`
 	Hostname     string              `json:"hostname,omitempty"`
 	IPAddress    string              `json:"ip_address,omitempty"`
+	MACAddress   string              `json:"mac_address,omitempty"`
 	OnBoot       bool                `json:"onboot"`
 	Unprivileged bool                `json:"unprivileged"`
 	Inputs       map[string]string   `json:"inputs,omitempty"`
@@ -132,6 +134,7 @@ type InstallRequest struct {
 	DiskGB         int                  `json:"disk_gb,omitempty"`
 	Hostname       string               `json:"hostname,omitempty"`
 	IPAddress      string               `json:"ip_address,omitempty"`
+	MACAddress     string               `json:"mac_address,omitempty"`
 	OnBoot         *bool                `json:"onboot,omitempty"`
 	Unprivileged   *bool                `json:"unprivileged,omitempty"`
 	Inputs         map[string]string    `json:"inputs,omitempty"`
@@ -208,6 +211,7 @@ type Stack struct {
 	DiskGB       int                 `json:"disk_gb"`
 	Hostname     string              `json:"hostname,omitempty"`
 	IPAddress    string              `json:"ip_address,omitempty"`
+	MACAddress   string              `json:"mac_address,omitempty"`
 	OnBoot       bool                `json:"onboot"`
 	Unprivileged bool                `json:"unprivileged"`
 	OSTemplate   string              `json:"ostemplate"`
@@ -230,6 +234,7 @@ type StackCreateRequest struct {
 	DiskGB       int                  `json:"disk_gb,omitempty"`
 	Hostname     string               `json:"hostname,omitempty"`
 	IPAddress    string               `json:"ip_address,omitempty"`
+	MACAddress   string               `json:"mac_address,omitempty"`
 	OnBoot       *bool                `json:"onboot,omitempty"`
 	Unprivileged *bool                `json:"unprivileged,omitempty"`
 	BindMounts   map[string]string    `json:"bind_mounts,omitempty"`

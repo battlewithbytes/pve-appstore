@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/battlewithbytes/pve-appstore/internal/config"
@@ -167,10 +169,12 @@ func (s *Server) handleDevPublishStatus(w http.ResponseWriter, r *http.Request) 
 	// Check if already published
 	published := false
 	prURL := ""
+	prState := ""
 	if meta, err := s.devSvc.Get(id); err == nil && meta != nil {
 		if meta.GitHubPRURL != "" {
 			published = true
 			prURL = meta.GitHubPRURL
+			prState = s.getPRState(prURL)
 		}
 	}
 
@@ -179,6 +183,7 @@ func (s *Server) handleDevPublishStatus(w http.ResponseWriter, r *http.Request) 
 		"checks":    checks,
 		"published": published,
 		"pr_url":    prURL,
+		"pr_state":  prState,
 	})
 }
 
@@ -385,4 +390,47 @@ func pushDirToGitHub(client *gh.Client, owner, repo, branch, localDir, remotePre
 
 		return client.CreateOrUpdateFile(owner, repo, remotePath, branch, content, msg, sha)
 	})
+}
+
+// prURLRe matches GitHub PR URLs like https://github.com/owner/repo/pull/123
+var prURLRe = regexp.MustCompile(`github\.com/([^/]+)/([^/]+)/pull/(\d+)`)
+
+// getPRState polls the GitHub API to get the current state of a PR from its URL.
+// Returns "pr_open", "pr_merged", "pr_closed", or "" on error.
+func (s *Server) getPRState(prURL string) string {
+	if prURL == "" || s.githubStore == nil {
+		return ""
+	}
+
+	m := prURLRe.FindStringSubmatch(prURL)
+	if m == nil {
+		return ""
+	}
+	owner, repo := m[1], m[2]
+	number, err := strconv.Atoi(m[3])
+	if err != nil {
+		return ""
+	}
+
+	tokenEnc, _ := s.githubStore.GetGitHubState("github_token")
+	if tokenEnc == "" {
+		return ""
+	}
+
+	hmacSecret := s.cfg.Auth.HMACSecret
+	if hmacSecret == "" {
+		hmacSecret = "pve-appstore-default-key"
+	}
+	token, err := gh.DecryptToken(tokenEnc, hmacSecret)
+	if err != nil {
+		return ""
+	}
+
+	client := gh.NewClient(token)
+	state, err := client.GetPRState(owner, repo, number)
+	if err != nil {
+		log.Printf("[github] failed to get PR state for %s: %v", prURL, err)
+		return ""
+	}
+	return state
 }

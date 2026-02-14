@@ -95,6 +95,7 @@ func (e *Engine) runInstall(bgCtx context.Context, job *Job) {
 		engine:   e,
 		job:      job,
 		manifest: app,
+		hwAddr:   job.MACAddress,
 	}
 
 	ctx.info("Starting install of %s (%s)", app.Name, app.ID)
@@ -174,6 +175,7 @@ func (e *Engine) runInstall(bgCtx context.Context, job *Job) {
 		DiskGB:       ctx.job.DiskGB,
 		Hostname:     ctx.job.Hostname,
 		IPAddress:    ctx.job.IPAddress,
+		MACAddress:   ctx.job.MACAddress,
 		OnBoot:       ctx.job.OnBoot,
 		Unprivileged: ctx.job.Unprivileged,
 		Inputs:       ctx.job.Inputs,

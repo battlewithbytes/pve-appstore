@@ -22,6 +22,16 @@ type DevService interface {
 	SetStatus(id, status string) error
 	SetGitHubMeta(id string, meta map[string]string) error
 	EnsureIcon(id string)
+
+	// Stack methods
+	ListStacks() ([]devmode.DevStackMeta, error)
+	CreateStack(id, template string) error
+	GetStack(id string) (*devmode.DevStack, error)
+	SaveStackManifest(id string, data []byte) error
+	ParseStackManifest(id string) (*catalog.StackManifest, error)
+	DeleteStack(id string) error
+	SetStackStatus(id, status string) error
+	IsStackDeployed(id string) bool
 }
 
 type defaultDevService struct {
@@ -66,3 +76,28 @@ func (s *defaultDevService) SetGitHubMeta(id string, meta map[string]string) err
 	return s.store.SetGitHubMeta(id, meta)
 }
 func (s *defaultDevService) EnsureIcon(id string) { s.store.EnsureIcon(id) }
+
+func (s *defaultDevService) ListStacks() ([]devmode.DevStackMeta, error) {
+	return s.store.ListStacks()
+}
+func (s *defaultDevService) CreateStack(id, template string) error {
+	return s.store.CreateStack(id, template)
+}
+func (s *defaultDevService) GetStack(id string) (*devmode.DevStack, error) {
+	return s.store.GetStack(id)
+}
+func (s *defaultDevService) SaveStackManifest(id string, data []byte) error {
+	return s.store.SaveStackManifest(id, data)
+}
+func (s *defaultDevService) ParseStackManifest(id string) (*catalog.StackManifest, error) {
+	return s.store.ParseStackManifest(id)
+}
+func (s *defaultDevService) DeleteStack(id string) error {
+	return s.store.DeleteStack(id)
+}
+func (s *defaultDevService) SetStackStatus(id, status string) error {
+	return s.store.SetStackStatus(id, status)
+}
+func (s *defaultDevService) IsStackDeployed(id string) bool {
+	return s.store.IsStackDeployed(id)
+}

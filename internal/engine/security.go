@@ -167,6 +167,7 @@ var (
 	validBridgeRe   = regexp.MustCompile(`^vmbr[0-9]+$`)
 	validIPRe       = regexp.MustCompile(`^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}(/[0-9]{1,2})?$`)
 	validTagsRe     = regexp.MustCompile(`^[a-zA-Z0-9\-_;]+$`)
+	validMACRe      = regexp.MustCompile(`^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$`)
 )
 
 // ValidateHostname checks hostname format.
@@ -198,6 +199,26 @@ func ValidateIPAddress(ip string) error {
 	}
 	if !validIPRe.MatchString(ip) {
 		return fmt.Errorf("invalid IP address %q", ip)
+	}
+	return nil
+}
+
+// ValidateMACAddress checks MAC address format and ensures it is a unicast address.
+// Empty string is valid (means auto-assign).
+// Proxmox requires unicast MACs (bit 0 of first octet must be 0).
+func ValidateMACAddress(mac string) error {
+	if mac == "" {
+		return nil
+	}
+	upper := strings.ToUpper(mac)
+	if !validMACRe.MatchString(upper) {
+		return fmt.Errorf("invalid MAC address %q (expected XX:XX:XX:XX:XX:XX)", mac)
+	}
+	// Parse first octet and check unicast bit (LSB of first byte must be 0)
+	var firstOctet uint8
+	fmt.Sscanf(upper[:2], "%02X", &firstOctet)
+	if firstOctet&0x01 != 0 {
+		return fmt.Errorf("invalid MAC address %q: must be a unicast address (first octet %02X has multicast bit set)", mac, firstOctet)
 	}
 	return nil
 }
