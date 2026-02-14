@@ -24,6 +24,7 @@ type AppManifest struct {
 	License     string   `yaml:"license,omitempty" json:"license,omitempty"`
 	Icon        string   `yaml:"icon,omitempty" json:"icon,omitempty"` // URL to app icon
 	Official    bool     `yaml:"official,omitempty" json:"official"`
+	Featured    bool     `yaml:"featured,omitempty" json:"featured"`
 	Maintainers []string `yaml:"maintainers,omitempty" json:"maintainers,omitempty"`
 
 	LXC          LXCConfig        `yaml:"lxc" json:"lxc"`

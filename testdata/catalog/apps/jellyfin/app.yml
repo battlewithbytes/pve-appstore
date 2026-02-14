@@ -22,6 +22,7 @@ maintainers:
   - PVE App Store
 
 official: true
+featured: true
 lxc:
   ostemplate: debian-12
   defaults:

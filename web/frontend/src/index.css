@@ -15,6 +15,7 @@
   --color-status-running: #00FF9D;
   --color-status-stopped: #FF4D4D;
   --color-status-warning: #FFB800;
+  --color-status-featured: #3B82F6;
   --font-sans: 'Inter', ui-sans-serif, system-ui, sans-serif;
   --font-mono: 'JetBrains Mono', ui-monospace, monospace;
 }

@@ -7,6 +7,7 @@ export interface AppSummary {
   tags: string[];
   has_icon: boolean;
   official?: boolean;
+  featured?: boolean;
   gpu_required: boolean;
   gpu_support?: string[];
   source?: string;
@@ -23,6 +24,7 @@ export interface AppDetail {
   homepage?: string;
   license?: string;
   official?: boolean;
+  featured?: boolean;
   maintainers?: string[];
   lxc: {
     ostemplate: string;

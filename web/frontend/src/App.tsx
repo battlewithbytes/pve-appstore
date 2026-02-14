@@ -187,7 +187,11 @@ function AppList() {
 
 function AppCard({ app }: { app: AppSummary }) {
   return (
-    <a href={`#/app/${app.id}`} className="block bg-bg-card border border-border rounded-lg p-5 no-underline text-inherit transition-all duration-200 hover:border-border-hover hover:shadow-[0_0_20px_rgba(0,255,157,0.15)] hover:-translate-y-0.5 group">
+    <a href={`#/app/${app.id}`} className="relative block bg-bg-card border border-border rounded-lg p-5 no-underline text-inherit transition-all duration-200 hover:border-border-hover hover:shadow-[0_0_20px_rgba(0,255,157,0.15)] hover:-translate-y-0.5 group overflow-hidden">
+      <RibbonStack ribbons={[
+        ...(app.featured ? [{ label: 'featured', color: 'bg-status-featured' }] : []),
+        ...(app.source === 'developer' ? [{ label: 'DEV', color: 'bg-yellow-400' }] : app.official ? [{ label: 'official', color: 'bg-primary' }] : []),
+      ]} />
       <div className="flex items-start gap-4">
         <div className="w-12 h-12 rounded-lg bg-bg-secondary flex items-center justify-center text-xl shrink-0 overflow-hidden">
           {app.has_icon ? <img src={`/api/apps/${app.id}/icon`} alt="" className="w-10 h-10 rounded-lg" /> : <span className="text-primary font-mono">{app.name[0]}</span>}
@@ -196,8 +200,6 @@ function AppCard({ app }: { app: AppSummary }) {
           <div className="flex items-center gap-2">
             <h3 className="text-base font-semibold text-text-primary group-hover:text-primary transition-colors">{app.name}</h3>
             <span className="text-xs text-text-muted font-mono">v{app.version}</span>
-            {app.official && <Badge className="bg-primary/10 text-primary">official</Badge>}
-            {app.source === 'developer' && <Badge className="bg-yellow-400/10 text-yellow-400">DEV</Badge>}
           </div>
           <p className="text-sm text-text-secondary mt-1 overflow-hidden text-ellipsis line-clamp-2">{app.description}</p>
           <div className="flex gap-1.5 mt-2 flex-wrap">
@@ -290,6 +292,7 @@ function AppDetailView({ id, requireAuth, devMode }: { id: string; requireAuth: 
         <div className="flex-1">
           <div className="flex items-center gap-3">
             <h1 className="text-2xl font-bold text-text-primary">{app.name}</h1>
+            {app.featured && <Badge className="bg-status-featured/10 text-status-featured">featured</Badge>}
             {app.official && <Badge className="bg-primary/10 text-primary">official</Badge>}
           </div>
           <p className="text-sm text-text-secondary mt-1">{app.description}</p>
@@ -2985,6 +2988,23 @@ function Center({ children, className }: { children: React.ReactNode; className?
 
 function BackLink({ href = '#/', label = 'Back to apps' }: { href?: string; label?: string }) {
   return <a href={href} className="text-primary text-sm no-underline font-mono hover:underline">&larr; {label}</a>
+}
+
+function CornerRibbon({ label, color, index = 0 }: { label: string; color: string; index?: number }) {
+  const offset = index * 20
+  return (
+    <div className="absolute top-0 right-0 w-28 h-28 overflow-hidden pointer-events-none rounded-tr-lg">
+      <div className={`${color} text-black absolute right-[-30px] w-[130px] text-center text-[9px] font-mono font-bold uppercase tracking-wider py-[5px] rotate-45 shadow-sm leading-none`} style={{ top: 22 + offset }}>
+        {label}
+      </div>
+    </div>
+  )
+}
+
+function RibbonStack({ ribbons }: { ribbons: { label: string; color: string }[] }) {
+  if (ribbons.length === 0) return null
+  const sorted = [...ribbons].sort((a, b) => a.label.length - b.label.length)
+  return <>{sorted.map((r, i) => <CornerRibbon key={r.label} label={r.label} color={r.color} index={i} />)}</>
 }
 
 function Badge({ children, className }: { children: React.ReactNode; className?: string }) {

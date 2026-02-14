@@ -188,6 +188,7 @@ type appResponse struct {
 	Tags        []string `json:"tags"`
 	HasIcon     bool     `json:"has_icon"`
 	Official    bool     `json:"official"`
+	Featured    bool     `json:"featured"`
 	GPURequired bool     `json:"gpu_required"`
 	GPUSupport  []string `json:"gpu_support,omitempty"`
 	Source      string   `json:"source,omitempty"`
@@ -203,6 +204,7 @@ func toAppResponse(app *catalog.AppManifest) *appResponse {
 		Tags:        app.Tags,
 		HasIcon:     true, // default icon served when app has none
 		Official:    app.Official,
+		Featured:    app.Featured,
 		GPURequired: app.GPU.Required,
 		GPUSupport:  app.GPU.Supported,
 		Source:      app.Source,
