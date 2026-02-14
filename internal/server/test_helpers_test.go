@@ -168,9 +168,14 @@ func waitForJobTerminalState(t *testing.T, srv *Server, jobID string) {
 
 type catalogSvcStub struct {
 	CatalogService
-	appCountFn func() int
-	listFn     func() []*catalog.AppManifest
-	getAppFn   func(id string) (*catalog.AppManifest, bool)
+	appCountFn    func() int
+	listFn        func() []*catalog.AppManifest
+	getAppFn      func(id string) (*catalog.AppManifest, bool)
+	searchFn      func(query string) []*catalog.AppManifest
+	categoriesFn  func() []string
+	refreshFn     func() error
+	mergeDevAppFn func(app *catalog.AppManifest)
+	removeDevAppFn func(id string)
 }
 
 func (s catalogSvcStub) AppCount() int {
@@ -194,11 +199,55 @@ func (s catalogSvcStub) GetApp(id string) (*catalog.AppManifest, bool) {
 	return nil, false
 }
 
+func (s catalogSvcStub) SearchApps(query string) []*catalog.AppManifest {
+	if s.searchFn != nil {
+		return s.searchFn(query)
+	}
+	return nil
+}
+
+func (s catalogSvcStub) Categories() []string {
+	if s.categoriesFn != nil {
+		return s.categoriesFn()
+	}
+	return nil
+}
+
+func (s catalogSvcStub) Refresh() error {
+	if s.refreshFn != nil {
+		return s.refreshFn()
+	}
+	return nil
+}
+
+func (s catalogSvcStub) MergeDevApp(app *catalog.AppManifest) {
+	if s.mergeDevAppFn != nil {
+		s.mergeDevAppFn(app)
+	}
+}
+
+func (s catalogSvcStub) RemoveDevApp(id string) {
+	if s.removeDevAppFn != nil {
+		s.removeDevAppFn(id)
+	}
+}
+
 type devSvcStub struct {
 	DevService
-	listFn func() ([]devmode.DevAppMeta, error)
-	forkFn func(newID, sourceDir string) error
-	getFn  func(id string) (*devmode.DevApp, error)
+	listFn          func() ([]devmode.DevAppMeta, error)
+	forkFn          func(newID, sourceDir string) error
+	getFn           func(id string) (*devmode.DevApp, error)
+	createFn        func(id, template string) error
+	saveManifestFn  func(id string, data []byte) error
+	saveScriptFn    func(id string, data []byte) error
+	isDeployedFn    func(id string) bool
+	parseManifestFn func(id string) (*catalog.AppManifest, error)
+	appDirFn        func(id string) string
+	saveFileFn      func(id, relPath string, data []byte) error
+	readFileFn      func(id, relPath string) ([]byte, error)
+	deleteFn        func(id string) error
+	setStatusFn     func(id, status string) error
+	ensureIconFn    func(id string)
 }
 
 func (s devSvcStub) List() ([]devmode.DevAppMeta, error) {
@@ -222,6 +271,82 @@ func (s devSvcStub) Get(id string) (*devmode.DevApp, error) {
 	return nil, fmt.Errorf("not found")
 }
 
+func (s devSvcStub) Create(id, template string) error {
+	if s.createFn != nil {
+		return s.createFn(id, template)
+	}
+	return nil
+}
+
+func (s devSvcStub) SaveManifest(id string, data []byte) error {
+	if s.saveManifestFn != nil {
+		return s.saveManifestFn(id, data)
+	}
+	return nil
+}
+
+func (s devSvcStub) SaveScript(id string, data []byte) error {
+	if s.saveScriptFn != nil {
+		return s.saveScriptFn(id, data)
+	}
+	return nil
+}
+
+func (s devSvcStub) IsDeployed(id string) bool {
+	if s.isDeployedFn != nil {
+		return s.isDeployedFn(id)
+	}
+	return false
+}
+
+func (s devSvcStub) ParseManifest(id string) (*catalog.AppManifest, error) {
+	if s.parseManifestFn != nil {
+		return s.parseManifestFn(id)
+	}
+	return &catalog.AppManifest{ID: id}, nil
+}
+
+func (s devSvcStub) AppDir(id string) string {
+	if s.appDirFn != nil {
+		return s.appDirFn(id)
+	}
+	return "/tmp/dev-apps/" + id
+}
+
+func (s devSvcStub) SaveFile(id, relPath string, data []byte) error {
+	if s.saveFileFn != nil {
+		return s.saveFileFn(id, relPath, data)
+	}
+	return nil
+}
+
+func (s devSvcStub) ReadFile(id, relPath string) ([]byte, error) {
+	if s.readFileFn != nil {
+		return s.readFileFn(id, relPath)
+	}
+	return nil, fmt.Errorf("not found")
+}
+
+func (s devSvcStub) Delete(id string) error {
+	if s.deleteFn != nil {
+		return s.deleteFn(id)
+	}
+	return nil
+}
+
+func (s devSvcStub) SetStatus(id, status string) error {
+	if s.setStatusFn != nil {
+		return s.setStatusFn(id, status)
+	}
+	return nil
+}
+
+func (s devSvcStub) EnsureIcon(id string) {
+	if s.ensureIconFn != nil {
+		s.ensureIconFn(id)
+	}
+}
+
 type engineSvcStub struct {
 	EngineService
 	listJobsFn           func() ([]*engine.Job, error)
@@ -233,6 +358,21 @@ type engineSvcStub struct {
 	listStacksEnrichedFn func() ([]*engine.StackListItem, error)
 	getStackDetailFn     func(id string) (*engine.StackDetail, error)
 	validateStackFn      func(req engine.StackCreateRequest) map[string]interface{}
+	cancelJobFn          func(id string) error
+	clearJobsFn          func() (int64, error)
+	getJobFn             func(id string) (*engine.Job, error)
+	startContainerFn     func(id string) error
+	stopContainerFn      func(id string) error
+	restartContainerFn   func(id string) error
+	uninstallFn          func(id string, keepVolumes bool) (*engine.Job, error)
+	purgeInstallFn       func(id string) error
+	getInstallFn         func(id string) (*engine.Install, error)
+	getInstallDetailFn   func(id string) (*engine.InstallDetail, error)
+	startStackContFn     func(id string) error
+	stopStackContFn      func(id string) error
+	restartStackContFn   func(id string) error
+	uninstallStackFn     func(id string) (*engine.Job, error)
+	getStackFn           func(id string) (*engine.Stack, error)
 }
 
 func (s engineSvcStub) ListJobs() ([]*engine.Job, error) {
@@ -302,4 +442,109 @@ func (s engineSvcStub) ValidateStack(req engine.StackCreateRequest) map[string]i
 		return s.validateStackFn(req)
 	}
 	return map[string]interface{}{"valid": false}
+}
+
+func (s engineSvcStub) CancelJob(id string) error {
+	if s.cancelJobFn != nil {
+		return s.cancelJobFn(id)
+	}
+	return nil
+}
+
+func (s engineSvcStub) ClearJobs() (int64, error) {
+	if s.clearJobsFn != nil {
+		return s.clearJobsFn()
+	}
+	return 0, nil
+}
+
+func (s engineSvcStub) GetJob(id string) (*engine.Job, error) {
+	if s.getJobFn != nil {
+		return s.getJobFn(id)
+	}
+	return nil, fmt.Errorf("not found")
+}
+
+func (s engineSvcStub) StartContainer(id string) error {
+	if s.startContainerFn != nil {
+		return s.startContainerFn(id)
+	}
+	return nil
+}
+
+func (s engineSvcStub) StopContainer(id string) error {
+	if s.stopContainerFn != nil {
+		return s.stopContainerFn(id)
+	}
+	return nil
+}
+
+func (s engineSvcStub) RestartContainer(id string) error {
+	if s.restartContainerFn != nil {
+		return s.restartContainerFn(id)
+	}
+	return nil
+}
+
+func (s engineSvcStub) Uninstall(id string, keepVolumes bool) (*engine.Job, error) {
+	if s.uninstallFn != nil {
+		return s.uninstallFn(id, keepVolumes)
+	}
+	return nil, fmt.Errorf("not found")
+}
+
+func (s engineSvcStub) PurgeInstall(id string) error {
+	if s.purgeInstallFn != nil {
+		return s.purgeInstallFn(id)
+	}
+	return nil
+}
+
+func (s engineSvcStub) GetInstall(id string) (*engine.Install, error) {
+	if s.getInstallFn != nil {
+		return s.getInstallFn(id)
+	}
+	return nil, fmt.Errorf("not found")
+}
+
+func (s engineSvcStub) GetInstallDetail(id string) (*engine.InstallDetail, error) {
+	if s.getInstallDetailFn != nil {
+		return s.getInstallDetailFn(id)
+	}
+	return nil, fmt.Errorf("not found")
+}
+
+func (s engineSvcStub) StartStackContainer(id string) error {
+	if s.startStackContFn != nil {
+		return s.startStackContFn(id)
+	}
+	return nil
+}
+
+func (s engineSvcStub) StopStackContainer(id string) error {
+	if s.stopStackContFn != nil {
+		return s.stopStackContFn(id)
+	}
+	return nil
+}
+
+func (s engineSvcStub) RestartStackContainer(id string) error {
+	if s.restartStackContFn != nil {
+		return s.restartStackContFn(id)
+	}
+	return nil
+}
+
+func (s engineSvcStub) UninstallStack(id string) (*engine.Job, error) {
+	if s.uninstallStackFn != nil {
+		return s.uninstallStackFn(id)
+	}
+	return nil, fmt.Errorf("not found")
+}
+
+func (s engineSvcStub) GetStack(id string) (*engine.Stack, error) {
+	if s.getStackFn != nil {
+		return s.getStackFn(id)
+	}
+	return nil, fmt.Errorf("not found")
 }

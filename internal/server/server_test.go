@@ -1508,6 +1508,380 @@ func TestReconfigureInstallNotFound(t *testing.T) {
 	}
 }
 
+// --- Settings ---
+
+func TestGetSettingsEndpoint(t *testing.T) {
+	srv := testServer(t)
+	w := doRequest(t, srv, "GET", "/api/settings", "")
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", w.Code, http.StatusOK)
+	}
+
+	body := decodeJSON(t, w)
+	defaults := body["defaults"].(map[string]interface{})
+	if defaults["cores"].(float64) != 2 {
+		t.Errorf("defaults.cores = %v, want 2", defaults["cores"])
+	}
+	if defaults["memory_mb"].(float64) != 2048 {
+		t.Errorf("defaults.memory_mb = %v, want 2048", defaults["memory_mb"])
+	}
+	storages := body["storages"].([]interface{})
+	if len(storages) != 1 || storages[0] != "local-lvm" {
+		t.Errorf("storages = %v, want [local-lvm]", storages)
+	}
+	bridges := body["bridges"].([]interface{})
+	if len(bridges) != 1 || bridges[0] != "vmbr0" {
+		t.Errorf("bridges = %v, want [vmbr0]", bridges)
+	}
+}
+
+// --- Cancel Job ---
+
+func TestCancelJobViaStub(t *testing.T) {
+	cfg := testConfig()
+	srv := New(cfg, nil, nil, nil)
+	cancelled := false
+	setEngineServices(srv, engineSvcStub{
+		cancelJobFn: func(id string) error {
+			if id == "job-1" {
+				cancelled = true
+				return nil
+			}
+			return fmt.Errorf("not found")
+		},
+	})
+
+	w := doRequest(t, srv, "POST", "/api/jobs/job-1/cancel", "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d (body: %s)", w.Code, http.StatusOK, w.Body.String())
+	}
+	if !cancelled {
+		t.Error("expected cancel to be called")
+	}
+}
+
+func TestCancelJobNotFound(t *testing.T) {
+	cfg := testConfig()
+	srv := New(cfg, nil, nil, nil)
+	setEngineServices(srv, engineSvcStub{
+		cancelJobFn: func(id string) error {
+			return fmt.Errorf("job %q not found", id)
+		},
+	})
+
+	w := doRequest(t, srv, "POST", "/api/jobs/nonexistent/cancel", "")
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d", w.Code, http.StatusBadRequest)
+	}
+}
+
+func TestCancelJobNoEngine(t *testing.T) {
+	cfg := testConfig()
+	srv := New(cfg, nil, nil, nil)
+
+	w := doRequest(t, srv, "POST", "/api/jobs/job-1/cancel", "")
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want %d", w.Code, http.StatusServiceUnavailable)
+	}
+}
+
+// --- Clear Jobs ---
+
+func TestClearJobsViaStub(t *testing.T) {
+	cfg := testConfig()
+	srv := New(cfg, nil, nil, nil)
+	setEngineServices(srv, engineSvcStub{
+		clearJobsFn: func() (int64, error) {
+			return 3, nil
+		},
+	})
+
+	w := doRequest(t, srv, "DELETE", "/api/jobs", "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d (body: %s)", w.Code, http.StatusOK, w.Body.String())
+	}
+	body := decodeJSON(t, w)
+	if body["deleted"].(float64) != 3 {
+		t.Errorf("deleted = %v, want 3", body["deleted"])
+	}
+}
+
+func TestClearJobsNoEngine(t *testing.T) {
+	cfg := testConfig()
+	srv := New(cfg, nil, nil, nil)
+
+	w := doRequest(t, srv, "DELETE", "/api/jobs", "")
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want %d", w.Code, http.StatusServiceUnavailable)
+	}
+}
+
+// --- Container Lifecycle via Stubs ---
+
+func TestStartContainerViaStub(t *testing.T) {
+	cfg := testConfig()
+	srv := New(cfg, nil, nil, nil)
+	setEngineServices(srv, engineSvcStub{
+		startContainerFn: func(id string) error { return nil },
+	})
+
+	w := doRequest(t, srv, "POST", "/api/installs/inst-1/start", "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d (body: %s)", w.Code, http.StatusOK, w.Body.String())
+	}
+	body := decodeJSON(t, w)
+	if body["status"] != "started" {
+		t.Errorf("status = %v, want started", body["status"])
+	}
+}
+
+func TestStopContainerViaStub(t *testing.T) {
+	cfg := testConfig()
+	srv := New(cfg, nil, nil, nil)
+	setEngineServices(srv, engineSvcStub{
+		stopContainerFn: func(id string) error { return nil },
+	})
+
+	w := doRequest(t, srv, "POST", "/api/installs/inst-1/stop", "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d (body: %s)", w.Code, http.StatusOK, w.Body.String())
+	}
+	body := decodeJSON(t, w)
+	if body["status"] != "stopped" {
+		t.Errorf("status = %v, want stopped", body["status"])
+	}
+}
+
+func TestRestartContainerViaStub(t *testing.T) {
+	cfg := testConfig()
+	srv := New(cfg, nil, nil, nil)
+	setEngineServices(srv, engineSvcStub{
+		restartContainerFn: func(id string) error { return nil },
+	})
+
+	w := doRequest(t, srv, "POST", "/api/installs/inst-1/restart", "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d (body: %s)", w.Code, http.StatusOK, w.Body.String())
+	}
+	body := decodeJSON(t, w)
+	if body["status"] != "restarted" {
+		t.Errorf("status = %v, want restarted", body["status"])
+	}
+}
+
+func TestContainerLifecycleNoEngine(t *testing.T) {
+	cfg := testConfig()
+	srv := New(cfg, nil, nil, nil)
+
+	for _, op := range []string{"start", "stop", "restart"} {
+		w := doRequest(t, srv, "POST", "/api/installs/inst-1/"+op, "")
+		if w.Code != http.StatusServiceUnavailable {
+			t.Errorf("%s: status = %d, want %d", op, w.Code, http.StatusServiceUnavailable)
+		}
+	}
+}
+
+// --- Stack Lifecycle via Stubs ---
+
+func TestStartStackViaStub(t *testing.T) {
+	cfg := testConfig()
+	srv := New(cfg, nil, nil, nil)
+	setEngineServices(srv, engineSvcStub{
+		startStackContFn: func(id string) error { return nil },
+	})
+
+	w := doRequest(t, srv, "POST", "/api/stacks/stack-1/start", "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d (body: %s)", w.Code, http.StatusOK, w.Body.String())
+	}
+	body := decodeJSON(t, w)
+	if body["status"] != "started" {
+		t.Errorf("status = %v, want started", body["status"])
+	}
+}
+
+func TestStopStackViaStub(t *testing.T) {
+	cfg := testConfig()
+	srv := New(cfg, nil, nil, nil)
+	setEngineServices(srv, engineSvcStub{
+		stopStackContFn: func(id string) error { return nil },
+	})
+
+	w := doRequest(t, srv, "POST", "/api/stacks/stack-1/stop", "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d (body: %s)", w.Code, http.StatusOK, w.Body.String())
+	}
+	body := decodeJSON(t, w)
+	if body["status"] != "stopped" {
+		t.Errorf("status = %v, want stopped", body["status"])
+	}
+}
+
+func TestRestartStackViaStub(t *testing.T) {
+	cfg := testConfig()
+	srv := New(cfg, nil, nil, nil)
+	setEngineServices(srv, engineSvcStub{
+		restartStackContFn: func(id string) error { return nil },
+	})
+
+	w := doRequest(t, srv, "POST", "/api/stacks/stack-1/restart", "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d (body: %s)", w.Code, http.StatusOK, w.Body.String())
+	}
+	body := decodeJSON(t, w)
+	if body["status"] != "restarted" {
+		t.Errorf("status = %v, want restarted", body["status"])
+	}
+}
+
+func TestUninstallStackViaStub(t *testing.T) {
+	cfg := testConfig()
+	srv := New(cfg, nil, nil, nil)
+	setEngineServices(srv, engineSvcStub{
+		uninstallStackFn: func(id string) (*engine.Job, error) {
+			return &engine.Job{ID: "uninstall-job-1", Type: "uninstall"}, nil
+		},
+	})
+
+	w := doRequest(t, srv, "POST", "/api/stacks/stack-1/uninstall", "")
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want %d (body: %s)", w.Code, http.StatusAccepted, w.Body.String())
+	}
+}
+
+func TestStackLifecycleNoEngine(t *testing.T) {
+	cfg := testConfig()
+	srv := New(cfg, nil, nil, nil)
+
+	for _, op := range []string{"start", "stop", "restart", "uninstall"} {
+		w := doRequest(t, srv, "POST", "/api/stacks/stack-1/"+op, "")
+		if w.Code != http.StatusServiceUnavailable {
+			t.Errorf("%s: status = %d, want %d", op, w.Code, http.StatusServiceUnavailable)
+		}
+	}
+}
+
+// --- Browse Storages / Mounts ---
+
+func TestBrowseStorages(t *testing.T) {
+	srv := testServer(t)
+	w := doRequest(t, srv, "GET", "/api/browse/storages", "")
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", w.Code, http.StatusOK)
+	}
+	body := decodeJSON(t, w)
+	storages := body["storages"].([]interface{})
+	if len(storages) != 1 || storages[0] != "local-lvm" {
+		t.Errorf("storages = %v, want [local-lvm]", storages)
+	}
+}
+
+func TestBrowseMounts(t *testing.T) {
+	srv := testServer(t)
+	w := doRequest(t, srv, "GET", "/api/browse/mounts", "")
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", w.Code, http.StatusOK)
+	}
+	body := decodeJSON(t, w)
+	mounts := body["mounts"].([]interface{})
+	// We have 1 storage with a browsable path from the mock
+	if len(mounts) != 1 {
+		t.Fatalf("mounts count = %d, want 1", len(mounts))
+	}
+	mount := mounts[0].(map[string]interface{})
+	if mount["device"] != "local-lvm" {
+		t.Errorf("mount device = %v, want local-lvm", mount["device"])
+	}
+}
+
+// --- Dev Mode Gating ---
+
+func TestDevModeDisabledReturns403(t *testing.T) {
+	cfg := testConfig()
+	cfg.Developer.Enabled = false
+	srv := New(cfg, nil, nil, nil)
+
+	endpoints := []struct {
+		method string
+		path   string
+	}{
+		{"GET", "/api/dev/apps"},
+		{"POST", "/api/dev/apps"},
+		{"POST", "/api/dev/fork"},
+		{"GET", "/api/dev/templates"},
+	}
+
+	for _, ep := range endpoints {
+		w := doRequest(t, srv, ep.method, ep.path, "")
+		if w.Code != http.StatusForbidden {
+			t.Errorf("%s %s: status = %d, want %d", ep.method, ep.path, w.Code, http.StatusForbidden)
+		}
+	}
+}
+
+// --- Purge Install ---
+
+func TestPurgeInstallViaStub(t *testing.T) {
+	cfg := testConfig()
+	srv := New(cfg, nil, nil, nil)
+	setEngineServices(srv, engineSvcStub{
+		purgeInstallFn: func(id string) error { return nil },
+	})
+
+	w := doRequest(t, srv, "DELETE", "/api/installs/inst-1", "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d (body: %s)", w.Code, http.StatusOK, w.Body.String())
+	}
+	body := decodeJSON(t, w)
+	if body["status"] != "purged" {
+		t.Errorf("status = %v, want purged", body["status"])
+	}
+}
+
+func TestPurgeInstallNoEngine(t *testing.T) {
+	cfg := testConfig()
+	srv := New(cfg, nil, nil, nil)
+
+	w := doRequest(t, srv, "DELETE", "/api/installs/inst-1", "")
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want %d", w.Code, http.StatusServiceUnavailable)
+	}
+}
+
+// --- App Icon ---
+
+func TestGetAppIconDefault(t *testing.T) {
+	srv := testServer(t)
+	// nginx app exists but has no custom icon — should serve default icon
+	w := doRequest(t, srv, "GET", "/api/apps/nginx/icon", "")
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", w.Code, http.StatusOK)
+	}
+
+	ct := w.Header().Get("Content-Type")
+	if !strings.Contains(ct, "image/png") {
+		t.Errorf("Content-Type = %q, want image/png", ct)
+	}
+	if w.Body.Len() == 0 {
+		t.Error("expected non-empty icon body")
+	}
+}
+
+func TestGetAppIconNotFound(t *testing.T) {
+	srv := testServer(t)
+	w := doRequest(t, srv, "GET", "/api/apps/nonexistent/icon", "")
+
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want %d", w.Code, http.StatusNotFound)
+	}
+}
+
+// --- App Status ---
+
 func TestAppStatusEndpoint(t *testing.T) {
 	srv := testServer(t)
 
@@ -1538,5 +1912,358 @@ func TestAppStatusEndpoint(t *testing.T) {
 	}
 	if body2["job_id"] == nil || body2["job_id"] == "" {
 		t.Error("expected job_id in status response")
+	}
+}
+
+// --- Dev Handler Tests ---
+
+func devServer(t *testing.T, devSvc devSvcStub, catSvc *catalogSvcStub) *Server {
+	t.Helper()
+	cfg := testConfig()
+	cfg.Developer.Enabled = true
+	srv := New(cfg, nil, nil, nil)
+	srv.devSvc = devSvc
+	if catSvc != nil {
+		srv.catalogSvc = *catSvc
+	}
+	return srv
+}
+
+func TestDevCreateAppSuccess(t *testing.T) {
+	srv := devServer(t, devSvcStub{
+		createFn: func(id, template string) error { return nil },
+		getFn: func(id string) (*devmode.DevApp, error) {
+			return &devmode.DevApp{DevAppMeta: devmode.DevAppMeta{ID: id, Name: "Test"}}, nil
+		},
+	}, nil)
+
+	w := doRequest(t, srv, "POST", "/api/dev/apps", `{"id":"my-app","template":"basic"}`)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want %d (body: %s)", w.Code, http.StatusCreated, w.Body.String())
+	}
+	body := decodeJSON(t, w)
+	if body["id"] != "my-app" {
+		t.Errorf("id = %v, want my-app", body["id"])
+	}
+}
+
+func TestDevCreateAppInvalidBody(t *testing.T) {
+	srv := devServer(t, devSvcStub{}, nil)
+
+	w := doRequest(t, srv, "POST", "/api/dev/apps", `{bad json}`)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d", w.Code, http.StatusBadRequest)
+	}
+}
+
+func TestDevCreateAppMissingID(t *testing.T) {
+	srv := devServer(t, devSvcStub{}, nil)
+
+	w := doRequest(t, srv, "POST", "/api/dev/apps", `{"template":"basic"}`)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d", w.Code, http.StatusBadRequest)
+	}
+}
+
+func TestDevCreateAppDevModeOff(t *testing.T) {
+	cfg := testConfig()
+	cfg.Developer.Enabled = false
+	srv := New(cfg, nil, nil, nil)
+
+	w := doRequest(t, srv, "POST", "/api/dev/apps", `{"id":"test"}`)
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want %d", w.Code, http.StatusForbidden)
+	}
+}
+
+func TestDevGetAppFound(t *testing.T) {
+	srv := devServer(t, devSvcStub{
+		getFn: func(id string) (*devmode.DevApp, error) {
+			return &devmode.DevApp{DevAppMeta: devmode.DevAppMeta{ID: id, Name: "My App"}}, nil
+		},
+	}, nil)
+
+	w := doRequest(t, srv, "GET", "/api/dev/apps/my-app", "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d (body: %s)", w.Code, http.StatusOK, w.Body.String())
+	}
+	body := decodeJSON(t, w)
+	if body["id"] != "my-app" {
+		t.Errorf("id = %v, want my-app", body["id"])
+	}
+}
+
+func TestDevGetAppNotFound(t *testing.T) {
+	srv := devServer(t, devSvcStub{
+		getFn: func(id string) (*devmode.DevApp, error) {
+			return nil, fmt.Errorf("not found")
+		},
+	}, nil)
+
+	w := doRequest(t, srv, "GET", "/api/dev/apps/nonexistent", "")
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want %d", w.Code, http.StatusNotFound)
+	}
+}
+
+func TestDevSaveManifestSuccess(t *testing.T) {
+	saved := false
+	srv := devServer(t, devSvcStub{
+		saveManifestFn: func(id string, data []byte) error {
+			saved = true
+			return nil
+		},
+		isDeployedFn: func(id string) bool { return false },
+	}, nil)
+
+	w := doRequest(t, srv, "PUT", "/api/dev/apps/my-app/manifest", "id: my-app\nname: My App")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d (body: %s)", w.Code, http.StatusOK, w.Body.String())
+	}
+	if !saved {
+		t.Error("expected save to be called")
+	}
+}
+
+func TestDevSaveManifestError(t *testing.T) {
+	srv := devServer(t, devSvcStub{
+		saveManifestFn: func(id string, data []byte) error {
+			return fmt.Errorf("invalid YAML")
+		},
+	}, nil)
+
+	w := doRequest(t, srv, "PUT", "/api/dev/apps/my-app/manifest", "bad: [yaml")
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d", w.Code, http.StatusBadRequest)
+	}
+}
+
+func TestDevSaveScriptSuccess(t *testing.T) {
+	saved := false
+	srv := devServer(t, devSvcStub{
+		saveScriptFn: func(id string, data []byte) error {
+			saved = true
+			return nil
+		},
+		isDeployedFn: func(id string) bool { return false },
+	}, nil)
+
+	w := doRequest(t, srv, "PUT", "/api/dev/apps/my-app/script", "#!/usr/bin/env python3\nprint('hello')")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d (body: %s)", w.Code, http.StatusOK, w.Body.String())
+	}
+	if !saved {
+		t.Error("expected save to be called")
+	}
+}
+
+func TestDevDeleteAppSuccess(t *testing.T) {
+	deleted := false
+	srv := devServer(t, devSvcStub{
+		deleteFn: func(id string) error {
+			deleted = true
+			return nil
+		},
+	}, &catalogSvcStub{
+		removeDevAppFn: func(id string) {},
+	})
+
+	w := doRequest(t, srv, "DELETE", "/api/dev/apps/my-app", "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d (body: %s)", w.Code, http.StatusOK, w.Body.String())
+	}
+	if !deleted {
+		t.Error("expected delete to be called")
+	}
+}
+
+func TestDevDeleteAppError(t *testing.T) {
+	srv := devServer(t, devSvcStub{
+		deleteFn: func(id string) error {
+			return fmt.Errorf("not found")
+		},
+	}, &catalogSvcStub{
+		removeDevAppFn: func(id string) {},
+	})
+
+	w := doRequest(t, srv, "DELETE", "/api/dev/apps/nonexistent", "")
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d", w.Code, http.StatusBadRequest)
+	}
+}
+
+func TestDevDeploySuccess(t *testing.T) {
+	// Create a temp dir that passes devmode.Validate()
+	appDir := t.TempDir()
+	manifest := `id: test-app
+name: Test App
+version: '1.0.0'
+description: A test application
+categories:
+  - utility
+lxc:
+  ostemplate: debian-12
+  defaults:
+    cores: 1
+    memory_mb: 512
+    disk_gb: 4
+provisioning:
+  script: install.py
+`
+	script := `from appstore import BaseApp, run
+
+class TestApp(BaseApp):
+    def install(self):
+        pass
+
+run(TestApp)
+`
+	os.WriteFile(filepath.Join(appDir, "app.yml"), []byte(manifest), 0644)
+	os.MkdirAll(filepath.Join(appDir, "provision"), 0755)
+	os.WriteFile(filepath.Join(appDir, "provision", "install.py"), []byte(script), 0644)
+
+	srv := devServer(t, devSvcStub{
+		appDirFn:    func(id string) string { return appDir },
+		setStatusFn: func(id, status string) error { return nil },
+		parseManifestFn: func(id string) (*catalog.AppManifest, error) {
+			return &catalog.AppManifest{ID: "test-app", Name: "Test App"}, nil
+		},
+	}, &catalogSvcStub{
+		mergeDevAppFn: func(app *catalog.AppManifest) {},
+	})
+
+	w := doRequest(t, srv, "POST", "/api/dev/apps/test-app/deploy", "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d (body: %s)", w.Code, http.StatusOK, w.Body.String())
+	}
+	body := decodeJSON(t, w)
+	if body["status"] != "deployed" {
+		t.Errorf("status = %v, want deployed", body["status"])
+	}
+}
+
+func TestDevUndeploySuccess(t *testing.T) {
+	statusSet := ""
+	srv := devServer(t, devSvcStub{
+		setStatusFn: func(id, status string) error {
+			statusSet = status
+			return nil
+		},
+	}, &catalogSvcStub{
+		removeDevAppFn: func(id string) {},
+	})
+
+	w := doRequest(t, srv, "POST", "/api/dev/apps/test/undeploy", "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d (body: %s)", w.Code, http.StatusOK, w.Body.String())
+	}
+	if statusSet != "draft" {
+		t.Errorf("status set to %q, want %q", statusSet, "draft")
+	}
+}
+
+func TestDevValidateSuccess(t *testing.T) {
+	appDir := t.TempDir()
+	os.WriteFile(filepath.Join(appDir, "app.yml"), []byte("id: test\nname: Test\nversion: '1.0'\ndescription: test\ncategories:\n  - utility\nlxc:\n  ostemplate: debian-12\n  defaults:\n    cores: 1\n    memory_mb: 512\n    disk_gb: 4\n"), 0644)
+	os.MkdirAll(filepath.Join(appDir, "provision"), 0755)
+	os.WriteFile(filepath.Join(appDir, "provision", "install.py"), []byte("from appstore import BaseApp, run\nclass T(BaseApp):\n    def install(self):\n        pass\nrun(T)\n"), 0644)
+
+	srv := devServer(t, devSvcStub{
+		appDirFn: func(id string) string { return appDir },
+	}, nil)
+
+	w := doRequest(t, srv, "POST", "/api/dev/apps/test/validate", "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d (body: %s)", w.Code, http.StatusOK, w.Body.String())
+	}
+}
+
+func TestDevValidateNotFound(t *testing.T) {
+	srv := devServer(t, devSvcStub{
+		appDirFn: func(id string) string { return "/nonexistent/path" },
+	}, nil)
+
+	w := doRequest(t, srv, "POST", "/api/dev/apps/test/validate", "")
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want %d", w.Code, http.StatusNotFound)
+	}
+}
+
+func TestDevListTemplates(t *testing.T) {
+	srv := devServer(t, devSvcStub{}, nil)
+
+	w := doRequest(t, srv, "GET", "/api/dev/templates", "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d (body: %s)", w.Code, http.StatusOK, w.Body.String())
+	}
+	body := decodeJSON(t, w)
+	if body["templates"] == nil {
+		t.Error("expected templates in response")
+	}
+}
+
+func TestDevGetFileSuccess(t *testing.T) {
+	srv := devServer(t, devSvcStub{
+		readFileFn: func(id, relPath string) ([]byte, error) {
+			return []byte("file content"), nil
+		},
+	}, nil)
+
+	w := doRequest(t, srv, "GET", "/api/dev/apps/my-app/file?path=provision/install.py", "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d (body: %s)", w.Code, http.StatusOK, w.Body.String())
+	}
+	body := decodeJSON(t, w)
+	if body["content"] != "file content" {
+		t.Errorf("content = %v, want 'file content'", body["content"])
+	}
+}
+
+func TestDevGetFileNotFound(t *testing.T) {
+	srv := devServer(t, devSvcStub{
+		readFileFn: func(id, relPath string) ([]byte, error) {
+			return nil, fmt.Errorf("file not found")
+		},
+	}, nil)
+
+	w := doRequest(t, srv, "GET", "/api/dev/apps/my-app/file?path=nonexistent.py", "")
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want %d", w.Code, http.StatusNotFound)
+	}
+}
+
+func TestDevGetFileMissingPath(t *testing.T) {
+	srv := devServer(t, devSvcStub{}, nil)
+
+	w := doRequest(t, srv, "GET", "/api/dev/apps/my-app/file", "")
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d", w.Code, http.StatusBadRequest)
+	}
+}
+
+func TestDevSaveFileSuccess(t *testing.T) {
+	saved := false
+	srv := devServer(t, devSvcStub{
+		saveFileFn: func(id, relPath string, data []byte) error {
+			saved = true
+			return nil
+		},
+	}, nil)
+
+	w := doRequest(t, srv, "PUT", "/api/dev/apps/my-app/file", `{"path":"provision/helper.py","content":"# helper"}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d (body: %s)", w.Code, http.StatusOK, w.Body.String())
+	}
+	if !saved {
+		t.Error("expected save to be called")
+	}
+}
+
+func TestDevSaveFileMissingPath(t *testing.T) {
+	srv := devServer(t, devSvcStub{}, nil)
+
+	w := doRequest(t, srv, "PUT", "/api/dev/apps/my-app/file", `{"content":"data"}`)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d", w.Code, http.StatusBadRequest)
 	}
 }

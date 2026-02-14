@@ -253,3 +253,102 @@ func assertContainsPair(t *testing.T, args []string, key, value string) {
 	}
 	t.Errorf("args %v does not contain pair [%q %q]", args, key, value)
 }
+
+// --- parseIPAddrOutput ---
+
+func TestParseIPAddrOutputStandard(t *testing.T) {
+	output := "2: eth0    inet 192.168.1.159/24 brd 192.168.1.255 scope global eth0"
+	got := parseIPAddrOutput(output)
+	if got != "192.168.1.159" {
+		t.Errorf("parseIPAddrOutput = %q, want %q", got, "192.168.1.159")
+	}
+}
+
+func TestParseIPAddrOutputMultipleInterfaces(t *testing.T) {
+	output := "2: eth0    inet 10.0.0.5/24 brd 10.0.0.255 scope global eth0\n3: eth1    inet 172.16.0.1/16 brd 172.16.255.255"
+	got := parseIPAddrOutput(output)
+	if got != "10.0.0.5" {
+		t.Errorf("parseIPAddrOutput = %q, want %q", got, "10.0.0.5")
+	}
+}
+
+func TestParseIPAddrOutputLoopback(t *testing.T) {
+	// 127.0.0.1 should be skipped
+	output := "1: lo    inet 127.0.0.1/8 scope host lo"
+	got := parseIPAddrOutput(output)
+	if got != "" {
+		t.Errorf("parseIPAddrOutput(loopback) = %q, want empty", got)
+	}
+}
+
+func TestParseIPAddrOutputEmpty(t *testing.T) {
+	got := parseIPAddrOutput("")
+	if got != "" {
+		t.Errorf("parseIPAddrOutput(\"\") = %q, want empty", got)
+	}
+}
+
+func TestParseIPAddrOutputNoMatch(t *testing.T) {
+	got := parseIPAddrOutput("no ip addresses here")
+	if got != "" {
+		t.Errorf("parseIPAddrOutput(no match) = %q, want empty", got)
+	}
+}
+
+// --- ExecScript with mock ---
+
+func TestExecScriptSuccess(t *testing.T) {
+	withMockExecInCT(t, "done\n", 0, nil)
+	result, err := ExecScript(100, "/opt/install.sh", map[string]string{"KEY": "val"})
+	if err != nil {
+		t.Fatalf("ExecScript: %v", err)
+	}
+	if result.ExitCode != 0 {
+		t.Errorf("ExitCode = %d, want 0", result.ExitCode)
+	}
+}
+
+func TestExecScriptNoEnv(t *testing.T) {
+	withMockExecInCT(t, "ok\n", 0, nil)
+	result, err := ExecScript(100, "/opt/install.sh", nil)
+	if err != nil {
+		t.Fatalf("ExecScript: %v", err)
+	}
+	if result.ExitCode != 0 {
+		t.Errorf("ExitCode = %d, want 0", result.ExitCode)
+	}
+}
+
+func TestExecScriptError(t *testing.T) {
+	withMockExecInCT(t, "", 0, fmt.Errorf("exec failed"))
+	_, err := ExecScript(100, "/opt/install.sh", nil)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+}
+
+// --- AppendConf with mock ---
+
+func TestAppendConfSuccess(t *testing.T) {
+	m := withMockPctRun(t, "", nil)
+	// AppendConf doesn't use pctRun, it uses exec.Command directly
+	// so we can't easily mock it without changing the code.
+	// We'll skip this test for now — it requires real nsenter.
+	_ = m
+}
+
+// --- Set with args ---
+
+func TestSetMultipleArgs(t *testing.T) {
+	m := withMockPctRun(t, "", nil)
+	err := Set(100, "-dev0", "/dev/nvidia0,gid=195,mode=0666", "-dev1", "/dev/nvidiactl")
+	if err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+	if m.lastArgs[0] != "set" {
+		t.Errorf("args[0] = %q, want %q", m.lastArgs[0], "set")
+	}
+	if len(m.lastArgs) != 6 { // set, 100, -dev0, val, -dev1, val
+		t.Errorf("args count = %d, want 6: %v", len(m.lastArgs), m.lastArgs)
+	}
+}

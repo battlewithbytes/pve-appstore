@@ -17,7 +17,7 @@ const (
 
 // Well-known host paths for NVIDIA libraries (Debian/Proxmox).
 var nvidiaHostLibDirs = []string{
-	"/usr/lib/x86_64-linux-gnu/nvidia/current", // Debian NVIDIA driver package (curated)
+	"/usr/lib/x86_64-linux-gnu/nvidia/current",  // Debian NVIDIA driver package (curated)
 	"/usr/lib/aarch64-linux-gnu/nvidia/current", // ARM64 equivalent
 }
 
@@ -46,18 +46,6 @@ func hasNvidiaDevices(devices []DevicePassthrough) bool {
 		}
 	}
 	return false
-}
-
-// hostHasNvidiaGPU checks if the host has NVIDIA GPU device nodes.
-func hostHasNvidiaGPU() bool {
-	_, err := os.Stat("/dev/nvidia0")
-	return err == nil
-}
-
-// hostHasDRIRender checks if the host has DRI render device nodes (Intel/AMD GPU).
-func hostHasDRIRender() bool {
-	_, err := os.Stat("/dev/dri/renderD128")
-	return err == nil
 }
 
 // deviceNodeExists checks if a specific device node exists on the host.
