@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """GitLab CE — self-hosted DevOps platform."""
 import os
+import time
 from urllib.parse import urlparse
 from appstore import BaseApp, run
 
@@ -81,14 +82,31 @@ class GitLabApp(BaseApp):
 
         # Apply settings to database — gitlab.rb values are only initial defaults,
         # after first reconfigure the database takes precedence.
+        # Wait for GitLab services to be ready before running rails commands.
+        self.log.info("Waiting for GitLab services to start...")
+        self.wait_for_gitlab_ready()
+
         email_setting = "hard" if require_email else "off"
         self.log.info("Applying sign-up settings to database...")
-        self.run_command(["gitlab-rails", "runner",
+        rails_cmd = [
+            "gitlab-rails", "runner",
             "ApplicationSetting.current.update!("
             "require_admin_approval_after_user_signup: false, "
             f"email_confirmation_setting: '{email_setting}'"
             ")"
-        ], check=False)
+        ]
+        # Retry — Rails may still be warming up after reconfigure
+        for attempt in range(5):
+            result = self.run_command(rails_cmd, check=False)
+            if result.returncode == 0:
+                break
+            if attempt < 4:
+                self.log.warning(f"Rails runner failed (attempt {attempt + 1}/5), retrying in 15s...")
+                time.sleep(15)
+            else:
+                self.log.error("Failed to apply sign-up settings after 5 attempts — "
+                               "users may need email confirmation or admin approval to sign in. "
+                               "Fix via Admin > Settings > Sign-up restrictions.")
         self.log.info("GitLab reconfigured successfully")
 
 

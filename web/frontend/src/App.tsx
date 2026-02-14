@@ -595,6 +595,36 @@ function InstallWizard({ app, onClose, replaceExisting, keepVolumes, existingIns
   }, [inputs, app.inputs])
   const hasInputErrors = Object.keys(inputErrors).length > 0
 
+  // Mount path validation — detect duplicate host paths across all bind mounts
+  const mountErrors = useMemo(() => {
+    const errors: Record<string, string> = {}
+    // Collect all bind mount host paths: manifest binds + volume-to-bind overrides
+    const pathMap: Record<string, string[]> = {} // host_path -> [vol names]
+    for (const vol of bindVolumes) {
+      const hp = bindMounts[vol.name]
+      if (hp) {
+        if (!pathMap[hp]) pathMap[hp] = []
+        pathMap[hp].push(vol.name)
+      }
+    }
+    for (const vol of volumeVolumes) {
+      const hp = volumeBindOverrides[vol.name]
+      if (hp) {
+        if (!pathMap[hp]) pathMap[hp] = []
+        pathMap[hp].push(vol.name)
+      }
+    }
+    for (const [hp, names] of Object.entries(pathMap)) {
+      if (names.length > 1) {
+        for (const name of names) {
+          errors[name] = `Duplicate host path "${hp}" — each volume must use a unique directory`
+        }
+      }
+    }
+    return errors
+  }, [bindMounts, volumeBindOverrides, bindVolumes, volumeVolumes])
+  const hasMountErrors = Object.keys(mountErrors).length > 0
+
   const openBrowser = (target: string, currentPath?: string) => {
     setBrowseTarget(target)
     setBrowseInitPath(currentPath || '')
@@ -783,17 +813,6 @@ function InstallWizard({ app, onClose, replaceExisting, keepVolumes, existingIns
                     }} className="text-[11px] text-primary bg-transparent border-none cursor-pointer p-0 font-mono hover:underline whitespace-nowrap">
                       {isBind ? 'use pve volume' : 'use host path'}
                     </button>
-                    {/* LVM-thin note when switching to host path on non-browsable storage */}
-                    {isBind && defaults?.storage_details && (() => {
-                      const volStorage = volumeStorages[vol.name] || storage
-                      const sd = defaults.storage_details.find(s => s.id === volStorage)
-                      if (sd && !sd.browsable) return (
-                        <span className="text-[10px] text-status-warning font-mono">
-                          {volStorage} is block storage ({sd.type}) — no host filesystem to browse
-                        </span>
-                      )
-                      return null
-                    })()}
                     {isBind ? (
                       <>
                         <Badge className="bg-status-warning/10 text-status-warning">host path</Badge>
@@ -822,6 +841,7 @@ function InstallWizard({ app, onClose, replaceExisting, keepVolumes, existingIns
                       </button>
                     </div>
                   )}
+                  {mountErrors[vol.name] && <div className="text-status-stopped text-xs mt-1 font-mono">{mountErrors[vol.name]}</div>}
                 </div>
               )
             })}
@@ -844,6 +864,7 @@ function InstallWizard({ app, onClose, replaceExisting, keepVolumes, existingIns
                   </button>
                 </div>
                 <div className="text-[11px] text-text-muted font-mono">Container path: {vol.mount_path}</div>
+                {mountErrors[vol.name] && <div className="text-status-stopped text-xs mt-1 font-mono">{mountErrors[vol.name]}</div>}
               </div>
             ))}
 
@@ -1094,7 +1115,7 @@ function InstallWizard({ app, onClose, replaceExisting, keepVolumes, existingIns
 
         <div className="flex gap-3 mt-6 justify-end">
           <button onClick={onClose} className="px-5 py-2.5 text-sm font-semibold border border-border rounded-lg cursor-pointer text-text-secondary bg-transparent hover:border-text-secondary transition-colors font-mono">Cancel</button>
-          <button onClick={handleInstall} disabled={installing || hasInputErrors} className="px-5 py-2.5 text-sm font-semibold border-none rounded-lg cursor-pointer bg-primary text-bg-primary hover:shadow-[0_0_20px_rgba(0,255,157,0.3)] transition-all disabled:opacity-50 disabled:cursor-not-allowed font-mono">
+          <button onClick={handleInstall} disabled={installing || hasInputErrors || hasMountErrors} className="px-5 py-2.5 text-sm font-semibold border-none rounded-lg cursor-pointer bg-primary text-bg-primary hover:shadow-[0_0_20px_rgba(0,255,157,0.3)] transition-all disabled:opacity-50 disabled:cursor-not-allowed font-mono">
             {installing ? 'Installing...' : 'Install'}
           </button>
         </div>
@@ -1991,6 +2012,7 @@ function InstallsList({ requireAuth }: { requireAuth: (cb: () => void) => void }
   const [showLogs, setShowLogs] = useState<string | null>(null)
   const [showStackLogs, setShowStackLogs] = useState<string | null>(null)
   const [actionLoading, setActionLoading] = useState<string | null>(null)
+  const [uninstallTarget, setUninstallTarget] = useState<InstallListItem | null>(null)
 
   const fetchInstalls = useCallback(async () => {
     try {
@@ -2007,18 +2029,31 @@ function InstallsList({ requireAuth }: { requireAuth: (cb: () => void) => void }
     return () => clearInterval(interval)
   }, [fetchInstalls])
 
+  const handleUninstallConfirm = async (keepVolumes: boolean) => {
+    if (!uninstallTarget) return
+    const id = uninstallTarget.id
+    setUninstallTarget(null)
+    setActionLoading(id)
+    try {
+      const job = await api.uninstall(id, keepVolumes)
+      window.location.hash = `#/job/${job.id}`
+    } catch (e) {
+      alert(e instanceof Error ? e.message : 'Uninstall failed')
+    }
+    setActionLoading(null)
+  }
+
   const handleAction = async (action: string, installId: string) => {
+    if (action === 'uninstall') {
+      const inst = installs.find(i => i.id === installId)
+      if (inst) { setUninstallTarget(inst); return }
+    }
     setActionLoading(installId)
     try {
       switch (action) {
         case 'start': await api.startContainer(installId); break
         case 'stop': await api.stopContainer(installId); break
         case 'restart': await api.restartContainer(installId); break
-        case 'uninstall': {
-          const job = await api.uninstall(installId)
-          window.location.hash = `#/job/${job.id}`
-          return
-        }
         case 'purge': {
           if (!confirm('Delete this install record? Any preserved volumes will NOT be removed from storage.')) break
           await api.purgeInstall(installId)
@@ -2280,7 +2315,7 @@ function InstallsList({ requireAuth }: { requireAuth: (cb: () => void) => void }
           requireAuth={requireAuth}
           onAction={(action, id) => { setContextMenu(null); requireAuth(() => handleAction(action, id)) }}
           onShell={id => { setContextMenu(null); requireAuth(() => setShowTerminal(id)) }}
-          onLogs={id => { setContextMenu(null); setShowLogs(id) }}
+          onLogs={id => { setContextMenu(null); requireAuth(() => setShowLogs(id)) }}
         />
       )}
 
@@ -2293,7 +2328,7 @@ function InstallsList({ requireAuth }: { requireAuth: (cb: () => void) => void }
           onClose={() => setStackMenu(null)}
           onAction={(action, id) => { setStackMenu(null); requireAuth(() => handleStackAction(action, id)) }}
           onShell={id => { setStackMenu(null); requireAuth(() => setShowStackTerminal(id)) }}
-          onLogs={id => { setStackMenu(null); setShowStackLogs(id) }}
+          onLogs={id => { setStackMenu(null); requireAuth(() => setShowStackLogs(id)) }}
         />
       )}
 
@@ -2301,6 +2336,15 @@ function InstallsList({ requireAuth }: { requireAuth: (cb: () => void) => void }
       {showStackTerminal && <StackTerminalModal stackId={showStackTerminal} onClose={() => setShowStackTerminal(null)} />}
       {showLogs && <LogViewerModal installId={showLogs} onClose={() => setShowLogs(null)} />}
       {showStackLogs && <StackLogViewerModal stackId={showStackLogs} onClose={() => setShowStackLogs(null)} />}
+      {uninstallTarget && (
+        <UninstallDialog
+          appName={uninstallTarget.app_name}
+          ctid={uninstallTarget.ctid}
+          mountPoints={(uninstallTarget.mount_points || []).filter(mp => mp.type === 'volume')}
+          onConfirm={handleUninstallConfirm}
+          onCancel={() => setUninstallTarget(null)}
+        />
+      )}
     </div>
   )
 }
@@ -3445,7 +3489,7 @@ function StacksList({ requireAuth }: { requireAuth: (cb: () => void) => void }) 
           onClose={() => setContextMenu(null)}
           onAction={(action, id) => { setContextMenu(null); requireAuth(() => handleAction(action, id)) }}
           onShell={id => { setContextMenu(null); requireAuth(() => setShowTerminal(id)) }}
-          onLogs={id => { setContextMenu(null); setShowLogs(id) }}
+          onLogs={id => { setContextMenu(null); requireAuth(() => setShowLogs(id)) }}
         />
       )}
 
@@ -3584,7 +3628,7 @@ function StackDetailView({ id, requireAuth }: { id: string; requireAuth: (cb: ()
               <ActionButton label="Stop" onClick={() => requireAuth(() => handleAction('stop'))} />
               <ActionButton label="Restart" onClick={() => requireAuth(() => handleAction('restart'))} />
               <ActionButton label="Shell" onClick={() => requireAuth(() => setShowTerminal(true))} accent />
-              <ActionButton label="Logs" onClick={() => setShowLogs(true)} />
+              <ActionButton label="Logs" onClick={() => requireAuth(() => setShowLogs(true))} />
             </>
           )}
           <ActionButton label={editing ? 'Editing...' : 'Edit'} onClick={() => setShowEditDialog(true)} />

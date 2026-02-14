@@ -27,6 +27,22 @@ func (s *Server) handleDevValidate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	result := devmode.Validate(appDir)
+
+	// If this app ID exists in the official catalog, the dev version must have a different version number
+	if s.catalogSvc != nil {
+		if official, ok := s.catalogSvc.GetApp(id); ok && official.Source != "developer" {
+			devManifest, err := s.devSvc.ParseManifest(id)
+			if err == nil && devManifest.Version == official.Version {
+				result.Errors = append(result.Errors, devmode.ValidationMsg{
+					File:    "app.yml",
+					Message: fmt.Sprintf("Version %q is the same as the official catalog app — bump the version to differentiate your branch", devManifest.Version),
+					Code:    "VERSION_SAME_AS_OFFICIAL",
+				})
+				result.Valid = false
+			}
+		}
+	}
+
 	writeJSON(w, http.StatusOK, result)
 }
 
@@ -36,6 +52,22 @@ func (s *Server) handleDevDeploy(w http.ResponseWriter, r *http.Request) {
 
 	// Validate first
 	result := devmode.Validate(appDir)
+
+	// Block deploy if version matches the official catalog app
+	if s.catalogSvc != nil {
+		if official, ok := s.catalogSvc.GetApp(id); ok && official.Source != "developer" {
+			devManifest, parseErr := s.devSvc.ParseManifest(id)
+			if parseErr == nil && devManifest.Version == official.Version {
+				result.Errors = append(result.Errors, devmode.ValidationMsg{
+					File:    "app.yml",
+					Message: fmt.Sprintf("Version %q is the same as the official catalog app — bump the version to differentiate your branch", devManifest.Version),
+					Code:    "VERSION_SAME_AS_OFFICIAL",
+				})
+				result.Valid = false
+			}
+		}
+	}
+
 	if !result.Valid {
 		writeJSON(w, http.StatusBadRequest, map[string]interface{}{
 			"error":      "app has validation errors",
