@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/battlewithbytes/pve-appstore/internal/catalog"
+	"github.com/battlewithbytes/pve-appstore/internal/pct"
 )
 
 // installSteps defines the ordered state machine for an install job.
@@ -183,6 +184,7 @@ func (e *Engine) runInstall(bgCtx context.Context, job *Job) {
 		MountPoints:  ctx.job.MountPoints,
 		Devices:      ctx.job.Devices,
 		EnvVars:      ctx.job.EnvVars,
+		AppSource:    ctx.job.AppSource,
 		Status:       "running",
 		CreatedAt:    now,
 	})
@@ -343,7 +345,10 @@ func stepCreateContainer(ctx *installContext) error {
 		Tags:         buildTags("appstore;managed", ctx.job.ExtraTags),
 	}
 
-	// Mount points are pre-built on the job (by StartInstall or Reinstall)
+	// Mount points are pre-built on the job (by StartInstall or Reinstall).
+	// Bind mounts must be applied post-creation via pct set because the
+	// Proxmox API restricts "mount point type bind" to root@pam only.
+	var bindMounts []MountPointOption
 	for _, mp := range ctx.job.MountPoints {
 		mpStorage := mp.Storage
 		if mpStorage == "" {
@@ -359,10 +364,14 @@ func stepCreateContainer(ctx *installContext) error {
 			HostPath:  mp.HostPath,
 			ReadOnly:  mp.ReadOnly,
 		}
-		opts.MountPoints = append(opts.MountPoints, opt)
+		if mp.Type == "bind" {
+			bindMounts = append(bindMounts, opt)
+		} else {
+			opts.MountPoints = append(opts.MountPoints, opt)
+		}
 	}
 	if len(ctx.job.MountPoints) > 0 {
-		ctx.info("Configuring %d mount(s)", len(ctx.job.MountPoints))
+		ctx.info("Configuring %d mount(s) (%d managed, %d bind)", len(ctx.job.MountPoints), len(opts.MountPoints), len(bindMounts))
 	}
 
 	ctx.info("Creating container %d (template=%s, %d cores, %d MB, %d GB)",
@@ -372,7 +381,39 @@ func stepCreateContainer(ctx *installContext) error {
 		return err
 	}
 
+	// Apply bind mounts post-creation via pct set (requires sudo/nsenter)
+	for _, bm := range bindMounts {
+		ctx.info("Bind mount mp%d: %s → %s", bm.Index, bm.HostPath, bm.MountPath)
+		if err := ctx.engine.cm.MountHostPath(ctx.job.CTID, bm.Index, bm.HostPath, bm.MountPath, bm.ReadOnly); err != nil {
+			return fmt.Errorf("bind mount mp%d (%s): %w", bm.Index, bm.HostPath, err)
+		}
+	}
+
+	// For unprivileged containers, chown bind mount host paths to the
+	// container's mapped root UID (100000:100000) so the container's root
+	// can write to them. Without this, chown operations inside the container
+	// fail with EPERM because the host directories are owned by real UID 0.
+	if ctx.job.Unprivileged && len(bindMounts) > 0 {
+		if err := chownBindMountsForUnprivileged(bindMounts, ctx.info, ctx.warn); err != nil {
+			return err
+		}
+	}
+
 	ctx.info("Container %d created", ctx.job.CTID)
+	return nil
+}
+
+// chownBindMountsForUnprivileged chowns bind mount host paths to UID/GID
+// 100000:100000 (the standard unprivileged container root mapping).
+func chownBindMountsForUnprivileged(mounts []MountPointOption, info func(string, ...interface{}), warn func(string, ...interface{})) error {
+	for _, bm := range mounts {
+		info("Setting ownership on %s for unprivileged container", bm.HostPath)
+		cmd := pct.SudoNsenterCmd("/usr/bin/chown", "-R", "100000:100000", bm.HostPath)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			warn("chown %s: %s: %v", bm.HostPath, strings.TrimSpace(string(out)), err)
+			// Non-fatal — the install may still succeed if the app doesn't need to write here
+		}
+	}
 	return nil
 }
 

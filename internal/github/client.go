@@ -82,6 +82,16 @@ func (c *Client) User() (*GitHubUser, error) {
 	return &user, nil
 }
 
+// ListBranches lists branches on a repository.
+func (c *Client) ListBranches(owner, repo string) ([]BranchInfo, error) {
+	var branches []BranchInfo
+	path := fmt.Sprintf("/repos/%s/%s/branches?per_page=100", owner, repo)
+	if err := c.doJSON("GET", path, nil, &branches); err != nil {
+		return nil, err
+	}
+	return branches, nil
+}
+
 // ForkRepo forks a repository. This is idempotent — if a fork already exists, GitHub returns it.
 func (c *Client) ForkRepo(owner, repo string) (*ForkResult, error) {
 	var raw struct {
@@ -240,4 +250,67 @@ func (c *Client) CreatePullRequest(upstream, repo, title, body, head, base strin
 		return nil, err
 	}
 	return &pr, nil
+}
+
+// SyncFork merges upstream changes into the fork's branch (equivalent to GitHub "Sync fork" button).
+// Returns nil on 200 (merged) or 409 (already in sync).
+func (c *Client) SyncFork(owner, repo, branch string) error {
+	body := map[string]string{"branch": branch}
+	path := fmt.Sprintf("/repos/%s/%s/merge-upstream", owner, repo)
+
+	resp, err := c.do("POST", path, body)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	io.ReadAll(resp.Body) // drain
+
+	// 200 = merged, 409 = already in sync — both are success
+	if resp.StatusCode == 200 || resp.StatusCode == 409 {
+		return nil
+	}
+	return fmt.Errorf("GitHub API sync fork: %d", resp.StatusCode)
+}
+
+// DeleteBranch deletes a branch from a repository. Idempotent: 204=deleted, 404=didn't exist.
+func (c *Client) DeleteBranch(owner, repo, branch string) error {
+	path := fmt.Sprintf("/repos/%s/%s/git/refs/heads/%s", owner, repo, branch)
+
+	resp, err := c.do("DELETE", path, nil)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	io.ReadAll(resp.Body) // drain
+
+	if resp.StatusCode == 204 || resp.StatusCode == 404 {
+		return nil
+	}
+	return fmt.Errorf("GitHub API delete branch: %d", resp.StatusCode)
+}
+
+// FindOpenPR searches for an open PR with the given head ref (format: "username:branch").
+// Returns the PR or nil if none found.
+func (c *Client) FindOpenPR(upstream, repo, head string) (*PRResult, error) {
+	path := fmt.Sprintf("/repos/%s/%s/pulls?state=open&head=%s&per_page=1",
+		upstream, repo, url.QueryEscape(head))
+
+	var prs []PRResult
+	if err := c.doJSON("GET", path, nil, &prs); err != nil {
+		return nil, err
+	}
+	if len(prs) == 0 {
+		return nil, nil
+	}
+	return &prs[0], nil
+}
+
+// UpdatePullRequest updates the title and body of an existing pull request.
+func (c *Client) UpdatePullRequest(owner, repo string, number int, title, body string) error {
+	reqBody := map[string]string{
+		"title": title,
+		"body":  body,
+	}
+	path := fmt.Sprintf("/repos/%s/%s/pulls/%d", owner, repo, number)
+	return c.doJSON("PATCH", path, reqBody, nil)
 }

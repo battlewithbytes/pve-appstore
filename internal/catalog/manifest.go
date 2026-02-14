@@ -39,7 +39,8 @@ type AppManifest struct {
 	IconPath   string `yaml:"-" json:"icon_path,omitempty"`
 	ReadmePath string `yaml:"-" json:"readme_path,omitempty"`
 	DirPath    string `yaml:"-" json:"dir_path,omitempty"`
-	Source     string `yaml:"-" json:"source,omitempty"` // "official", "community", "developer"
+	Source     string `yaml:"-" json:"source,omitempty"`      // "official", "community", "developer"
+	ShadowedBy string `yaml:"-" json:"shadowed_by,omitempty"` // set when a dev app overrides this app
 }
 
 type LXCConfig struct {

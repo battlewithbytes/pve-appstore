@@ -62,6 +62,7 @@ func (s *Server) handleAppStatus(w http.ResponseWriter, r *http.Request) {
 			resp["install_id"] = inst.ID
 			resp["install_status"] = inst.Status
 			resp["ctid"] = inst.CTID
+			resp["app_source"] = inst.AppSource
 		}
 		if job, exists := s.engineInstallSvc.HasActiveJobForApp(appID); exists {
 			resp["job_active"] = true

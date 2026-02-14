@@ -5,9 +5,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/battlewithbytes/pve-appstore/internal/config"
@@ -430,56 +432,39 @@ func (s *Server) handleDevPublishStack(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	client := gh.NewClient(token)
-
-	forkResult, err := client.ForkRepo(catalogOwner, catalogRepo)
-	if err != nil {
-		writeError(w, http.StatusBadGateway, fmt.Sprintf("failed to fork catalog repo: %v", err))
-		return
-	}
-
-	forkJSON, _ := json.Marshal(forkResult)
-	s.githubStore.SetGitHubState("github_fork", string(forkJSON))
-
-	baseSHA, defaultBranch, err := client.GetDefaultBranchSHA(forkResult.Owner, catalogRepo)
-	if err != nil {
-		writeError(w, http.StatusBadGateway, fmt.Sprintf("failed to get branch SHA: %v", err))
-		return
-	}
-
-	branchName := "stack/" + id
-	if err := client.CreateBranch(forkResult.Owner, catalogRepo, branchName, baseSHA); err != nil {
-		writeError(w, http.StatusBadGateway, fmt.Sprintf("failed to create branch: %v", err))
-		return
-	}
-
-	appDir := s.devSvc.AppDir(id)
-	prefix := "stacks/" + id
-	if err := pushDirToGitHub(client, forkResult.Owner, catalogRepo, branchName, appDir, prefix); err != nil {
-		writeError(w, http.StatusBadGateway, fmt.Sprintf("failed to push files: %v", err))
-		return
-	}
-
+	// Determine PR title
 	title := fmt.Sprintf("Add stack %s v%s", sm.Name, sm.Version)
-	body := fmt.Sprintf("## New Stack: %s\n\n%s\n\n- Version: %s\n- Apps: %d\n\nSubmitted via PVE App Store Developer Mode.",
-		sm.Name, sm.Description, sm.Version, len(sm.Apps))
+	if s.catalogSvc != nil {
+		if existing, ok := s.catalogSvc.GetStack(id); ok && existing.Source != "developer" {
+			title = fmt.Sprintf("Update stack %s to v%s", sm.Name, sm.Version)
+		}
+	}
 
-	head := fmt.Sprintf("%s:%s", forkResult.Owner, branchName)
-	pr, err := client.CreatePullRequest(catalogOwner, catalogRepo, title, body, head, defaultBranch)
+	result, err := s.publishToGitHub(token, catalogOwner, catalogRepo, publishParams{
+		ID:         id,
+		BranchName: "stack/" + id,
+		DirPrefix:  "stacks/" + id,
+		LocalDir:   s.devSvc.AppDir(id),
+		Title:      title,
+		Body:       buildStackPRBody(sm),
+	})
 	if err != nil {
-		writeError(w, http.StatusBadGateway, fmt.Sprintf("failed to create PR: %v", err))
+		writeError(w, http.StatusBadGateway, err.Error())
 		return
 	}
 
 	s.devSvc.SetGitHubMeta(id, map[string]string{
-		"status":        "published",
-		"github_branch": branchName,
-		"github_pr_url": pr.HTMLURL,
+		"status":           "published",
+		"github_branch":    "stack/" + id,
+		"github_pr_url":    result.PRURL,
+		"github_pr_number": strconv.Itoa(result.PRNumber),
 	})
 
+	log.Printf("[github] stack PR %s: %s", result.Action, result.PRURL)
 	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"pr_url":    pr.HTMLURL,
-		"pr_number": pr.Number,
+		"pr_url":    result.PRURL,
+		"pr_number": result.PRNumber,
+		"action":    result.Action,
 	})
 }
 
@@ -490,15 +475,11 @@ func (s *Server) handleDevStackPublishStatus(w http.ResponseWriter, r *http.Requ
 	checks := map[string]bool{
 		"github_connected":  false,
 		"validation_passed": false,
-		"fork_exists":       false,
 	}
 
 	if s.githubStore != nil {
 		if tokenEnc, _ := s.githubStore.GetGitHubState("github_token"); tokenEnc != "" {
 			checks["github_connected"] = true
-		}
-		if forkJSON, _ := s.githubStore.GetGitHubState("github_fork"); forkJSON != "" {
-			checks["fork_exists"] = true
 		}
 	}
 
@@ -523,7 +504,7 @@ func (s *Server) handleDevStackPublishStatus(w http.ResponseWriter, r *http.Requ
 	}
 	checks["apps_published"] = appsPublished
 
-	ready := checks["github_connected"] && checks["validation_passed"] && checks["fork_exists"] && checks["apps_published"]
+	ready := checks["github_connected"] && checks["validation_passed"] && checks["apps_published"]
 
 	published := false
 	prURL := ""

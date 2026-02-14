@@ -34,6 +34,7 @@ deploy: frontend build
 	systemctl stop pve-appstore
 	cp $(BINARY) /opt/pve-appstore/$(BINARY)
 	chmod 0755 /opt/pve-appstore/$(BINARY)
+	@if id appstore >/dev/null 2>&1; then chown -R appstore:appstore /var/lib/pve-appstore; fi
 	systemctl start pve-appstore
 	@echo "Deployed $$(/opt/pve-appstore/pve-appstore version 2>&1 | head -1)"
 

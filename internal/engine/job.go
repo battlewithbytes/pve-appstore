@@ -82,6 +82,7 @@ type Job struct {
 	EnvVars      map[string]string  `json:"env_vars,omitempty"`
 	ExtraTags    string             `json:"extra_tags,omitempty"`
 	StackID      string             `json:"stack_id,omitempty"`
+	AppSource    string             `json:"app_source,omitempty"` // "developer", "official", etc.
 	Error        string             `json:"error,omitempty"`
 	CreatedAt    time.Time          `json:"created_at"`
 	UpdatedAt    time.Time          `json:"updated_at"`
@@ -120,7 +121,8 @@ type Install struct {
 	MountPoints  []MountPoint        `json:"mount_points,omitempty"`
 	Devices      []DevicePassthrough `json:"devices,omitempty"`
 	EnvVars      map[string]string   `json:"env_vars,omitempty"`
-	Status       string              `json:"status"` // running, stopped, uninstalled
+	AppSource    string              `json:"app_source,omitempty"` // "developer", "official", etc.
+	Status       string              `json:"status"`               // running, stopped, uninstalled
 	CreatedAt    time.Time           `json:"created_at"`
 }
 
@@ -146,6 +148,7 @@ type InstallRequest struct {
 	EnvVars        map[string]string    `json:"env_vars,omitempty"`
 	ExtraTags      string               `json:"extra_tags,omitempty"`
 	GPUProfile     string               `json:"gpu_profile,omitempty"`      // GPU passthrough profile
+	ReplaceExisting bool                `json:"replace_existing,omitempty"` // uninstall existing before installing
 }
 
 // ExtraMountRequest is a user-defined bind mount added at install time.

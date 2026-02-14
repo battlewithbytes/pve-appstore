@@ -133,6 +133,34 @@ var serveCmd = &cobra.Command{
 			fmt.Println("  spa:     no frontend build found (API-only mode)")
 		}
 
+		// Start auto-refresh if configured
+		if serveCatalogDir == "" && cfg.Catalog.Refresh != config.RefreshManual {
+			interval := 24 * time.Hour
+			if cfg.Catalog.Refresh == config.RefreshWeekly {
+				interval = 7 * 24 * time.Hour
+			}
+			refreshCtx, refreshCancel := context.WithCancel(context.Background())
+			defer refreshCancel()
+			go func() {
+				ticker := time.NewTicker(interval)
+				defer ticker.Stop()
+				for {
+					select {
+					case <-ticker.C:
+						fmt.Printf("  catalog: auto-refreshing (%s)...\n", cfg.Catalog.Refresh)
+						if err := cat.Refresh(); err != nil {
+							fmt.Fprintf(os.Stderr, "warning: auto-refresh failed: %v\n", err)
+						} else {
+							fmt.Printf("  catalog: refreshed, %d apps loaded\n", cat.AppCount())
+						}
+					case <-refreshCtx.Done():
+						return
+					}
+				}
+			}()
+			fmt.Printf("  refresh: %s (every %s)\n", cfg.Catalog.Refresh, interval)
+		}
+
 		// Start server
 		srv := server.New(cfg, cat, eng, spaFS, server.WithConfigPath(serveConfigPath))
 

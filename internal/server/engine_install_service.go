@@ -6,6 +6,7 @@ import "github.com/battlewithbytes/pve-appstore/internal/engine"
 type EngineInstallService interface {
 	StartInstall(req engine.InstallRequest) (*engine.Job, error)
 	HasActiveInstallForApp(appID string) (*engine.Install, bool)
+	HasActiveDevInstallForApp(appID string) (*engine.Install, bool)
 	HasActiveJobForApp(appID string) (*engine.Job, bool)
 	CancelJob(id string) error
 	ClearJobs() (int64, error)
@@ -31,6 +32,9 @@ func (s *defaultEngineService) StartInstall(req engine.InstallRequest) (*engine.
 }
 func (s *defaultEngineService) HasActiveInstallForApp(appID string) (*engine.Install, bool) {
 	return s.eng.HasActiveInstallForApp(appID)
+}
+func (s *defaultEngineService) HasActiveDevInstallForApp(appID string) (*engine.Install, bool) {
+	return s.eng.HasActiveDevInstallForApp(appID)
 }
 func (s *defaultEngineService) HasActiveJobForApp(appID string) (*engine.Job, bool) {
 	return s.eng.HasActiveJobForApp(appID)

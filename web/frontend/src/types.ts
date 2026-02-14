@@ -11,6 +11,7 @@ export interface AppSummary {
   gpu_required: boolean;
   gpu_support?: string[];
   source?: string;
+  shadowed_by?: string;
 }
 
 export interface AppDetail {
@@ -52,6 +53,7 @@ export interface AppDetail {
   };
   icon_path?: string;
   readme_path?: string;
+  source?: string;
 }
 
 export interface AppInput {
@@ -288,6 +290,7 @@ export interface InstallRequest {
   volume_storages?: Record<string, string>;
   devices?: DevicePassthrough[];
   env_vars?: Record<string, string>;
+  replace_existing?: boolean;
 }
 
 export interface EditRequest {
@@ -365,6 +368,7 @@ export interface AppStatusResponse {
   installed: boolean;
   install_id?: string;
   install_status?: string;
+  app_source?: string;
   ctid?: number;
   job_active: boolean;
   job_id?: string;
@@ -486,6 +490,13 @@ export interface GitHubStatus {
   connected: boolean;
   user?: { login: string; name: string; avatar_url: string };
   fork?: { full_name: string; clone_url: string; owner: string };
+}
+
+export interface GitHubRepoInfo {
+  upstream: { url: string; branch: string };
+  fork: { full_name: string; url: string; clone_url: string };
+  branches: { name: string; app_id: string; pr_url: string; pr_state: string }[] | null;
+  local: { catalog_path: string; dev_apps_path: string };
 }
 
 export interface PublishStatus {

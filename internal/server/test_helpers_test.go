@@ -450,6 +450,18 @@ func (s engineSvcStub) ListInstallsEnriched() ([]*engine.InstallListItem, error)
 	return nil, nil
 }
 
+func (s engineSvcStub) HasActiveInstallForApp(appID string) (*engine.Install, bool) {
+	return nil, false
+}
+
+func (s engineSvcStub) HasActiveDevInstallForApp(appID string) (*engine.Install, bool) {
+	return nil, false
+}
+
+func (s engineSvcStub) HasActiveJobForApp(appID string) (*engine.Job, bool) {
+	return nil, false
+}
+
 func (s engineSvcStub) StartInstall(req engine.InstallRequest) (*engine.Job, error) {
 	if s.startInstallFn != nil {
 		return s.startInstallFn(req)

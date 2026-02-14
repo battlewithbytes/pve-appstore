@@ -77,7 +77,8 @@ func (c *Client) Create(ctx context.Context, opts ContainerCreateOptions) error 
 		params.Set("tags", opts.Tags)
 	}
 
-	// Mount points
+	// Mount points — bind mounts are NOT included here (applied post-creation
+	// via pct set) because the API restricts them to root@pam only.
 	for _, mp := range opts.MountPoints {
 		key := fmt.Sprintf("mp%d", mp.Index)
 		var val string

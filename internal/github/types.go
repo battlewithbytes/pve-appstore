@@ -14,6 +14,11 @@ type ForkResult struct {
 	Owner    string `json:"owner"`
 }
 
+// BranchInfo represents a branch on a repository.
+type BranchInfo struct {
+	Name string `json:"name"`
+}
+
 // PRResult represents a created pull request.
 type PRResult struct {
 	Number  int    `json:"number"`

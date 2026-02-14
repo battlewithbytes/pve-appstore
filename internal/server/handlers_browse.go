@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"github.com/battlewithbytes/pve-appstore/internal/pct"
 )
 
 func (s *Server) handleBrowseStorages(w http.ResponseWriter, r *http.Request) {
@@ -60,8 +62,9 @@ func (s *Server) handleBrowseMkdir(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := os.MkdirAll(cleaned, 0755); err != nil {
-		writeError(w, http.StatusInternalServerError, fmt.Sprintf("mkdir failed: %v", err))
+	cmd := pct.SudoNsenterCmd("/usr/bin/mkdir", "-p", cleaned)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("mkdir failed: %s: %v", strings.TrimSpace(string(out)), err))
 		return
 	}
 

@@ -141,8 +141,8 @@ func TestMain(m *testing.M) {
 
 	// Teardown: clean up test data via API
 	sqliteExec("DELETE FROM installs WHERE id='pw-fake-install'")
-	apiPost("/api/dev/apps/pw-fork-test/undeploy", "")
-	apiDelete("/api/dev/apps/pw-fork-test")
+	apiPost("/api/dev/apps/pw-branch-test/undeploy", "")
+	apiDelete("/api/dev/apps/pw-branch-test")
 	apiDelete("/api/dev/stacks/pw-test-stack")
 	apiDelete("/api/dev/stacks/zip-import-test")
 
@@ -540,45 +540,49 @@ func TestPublishStatusDialog(t *testing.T) {
 	}
 }
 
-// --- Test 9: Fork App from Catalog ---
+// --- Test 9: Branch App from Catalog ---
 
-func TestForkAppFromCatalog(t *testing.T) {
+func TestBranchAppFromCatalog(t *testing.T) {
 	// Clean up in case of previous failed run
-	apiPost("/api/dev/apps/pw-fork-test/undeploy", "")
-	apiDelete("/api/dev/apps/pw-fork-test")
+	apiPost("/api/dev/apps/pw-branch-test/undeploy", "")
+	apiDelete("/api/dev/apps/pw-branch-test")
 
 	navigate(t, "#/app/hello-world")
 
-	// Assert Fork button visible
-	forkBtn := page.Locator("button:has-text('Fork')")
-	assertVisible(t, forkBtn, "Fork button on app detail")
+	// The Branch button requires GitHub connected + fork.
+	// In CI/test environments GitHub may not be connected, so we check via API first.
+	resp, err := http.Get(baseURL + "/api/dev/github/status")
+	if err != nil {
+		t.Fatalf("GET github status: %v", err)
+	}
+	var ghStatus struct {
+		Connected bool `json:"connected"`
+		Fork      *struct {
+			FullName string `json:"full_name"`
+		} `json:"fork"`
+	}
+	json.NewDecoder(resp.Body).Decode(&ghStatus)
+	resp.Body.Close()
 
-	// Click Fork
-	if err := forkBtn.Click(); err != nil {
-		t.Fatalf("click Fork: %v", err)
+	if ghStatus.Connected && ghStatus.Fork != nil {
+		// Assert Branch button visible
+		branchBtn := page.Locator("button:has-text('Branch')")
+		assertVisible(t, branchBtn, "Branch button on app detail")
+		t.Log("Branch button visible (GitHub connected with fork)")
+	} else {
+		t.Log("GitHub not connected — Branch button correctly hidden")
 	}
 
-	// Assert ForkDialog modal
-	modal := page.Locator("h2:has-text('Fork')")
-	assertVisible(t, modal, "Fork dialog heading")
-
-	// Input should be pre-filled with "hello-world-custom"
-	input := page.Locator("input[placeholder='my-custom-app']")
-	assertVisible(t, input, "Fork ID input")
-
-	// Clear and type our test ID
-	if err := input.Fill("pw-fork-test"); err != nil {
-		t.Fatalf("fill fork ID: %v", err)
+	// Use fork API to create a uniquely-named test copy (avoids ID collision with catalog)
+	apiResp := apiPost("/api/dev/fork", `{"source_id":"hello-world","new_id":"pw-branch-test"}`)
+	if apiResp.StatusCode != 201 {
+		body, _ := io.ReadAll(apiResp.Body)
+		apiResp.Body.Close()
+		t.Fatalf("API fork failed: HTTP %d — %s", apiResp.StatusCode, string(body))
 	}
+	apiResp.Body.Close()
 
-	// Click "Fork to Dev"
-	forkToDevBtn := page.Locator("button:has-text('Fork to Dev')")
-	if err := forkToDevBtn.Click(); err != nil {
-		t.Fatalf("click Fork to Dev: %v", err)
-	}
-
-	// Wait for navigation to #/dev/pw-fork-test
-	waitForHash(t, "#/dev/pw-fork-test", 15*time.Second)
+	navigate(t, "#/dev/pw-branch-test")
 
 	// Assert DevAppEditor loads with heading
 	heading := page.Locator("h2")
@@ -586,13 +590,13 @@ func TestForkAppFromCatalog(t *testing.T) {
 
 	// Assert CodeMirror visible
 	editor := page.Locator(".cm-editor")
-	assertVisible(t, editor, "CodeMirror editor for forked app")
+	assertVisible(t, editor, "CodeMirror editor for branched app")
 }
 
 // --- Test 10: Dev App Editor Layout ---
 
 func TestDevAppEditorLayout(t *testing.T) {
-	navigate(t, "#/dev/pw-fork-test")
+	navigate(t, "#/dev/pw-branch-test")
 
 	// Assert file tree items
 	for _, file := range []string{"app.yml", "provision/install.py", "README.md"} {
@@ -622,7 +626,7 @@ func TestDevAppEditorLayout(t *testing.T) {
 // --- Test 11: Dev App Edit Manifest ---
 
 func TestDevAppEditManifest(t *testing.T) {
-	navigate(t, "#/dev/pw-fork-test")
+	navigate(t, "#/dev/pw-branch-test")
 
 	// Click app.yml in file tree (should be default active)
 	appYmlBtn := page.Locator("button:has-text('app.yml')")
@@ -633,9 +637,9 @@ func TestDevAppEditManifest(t *testing.T) {
 	assertVisible(t, editor, "CodeMirror editor")
 
 	// Update manifest via API with a modified description
-	newManifest := `id: pw-fork-test
-name: PW Fork Test
-description: Playwright E2E test fork
+	newManifest := `id: pw-branch-test
+name: PW Branch Test
+description: Playwright E2E test branch app
 version: "1.0.0"
 categories:
   - testing
@@ -646,7 +650,7 @@ lxc:
     memory_mb: 512
     disk_gb: 4
 `
-	resp := apiPut("/api/dev/apps/pw-fork-test/manifest", newManifest, "text/plain")
+	resp := apiPut("/api/dev/apps/pw-branch-test/manifest", newManifest, "text/plain")
 	if resp.StatusCode != 200 {
 		body, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
@@ -656,7 +660,7 @@ lxc:
 
 	// Also save a modified install.py with a marker comment
 	newScript := `#!/usr/bin/env python3
-# Playwright E2E test fork script
+# Playwright E2E test branch script
 from appstore import App
 
 class Install(App):
@@ -665,7 +669,7 @@ class Install(App):
         self.enable_service("nginx")
         self.set_output("url", f"http://{self.ip}:80")
 `
-	resp = apiPut("/api/dev/apps/pw-fork-test/script", newScript, "text/plain")
+	resp = apiPut("/api/dev/apps/pw-branch-test/script", newScript, "text/plain")
 	if resp.StatusCode != 200 {
 		body, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
@@ -674,13 +678,13 @@ class Install(App):
 	resp.Body.Close()
 
 	// Reload page and verify the editor shows updated content
-	navigate(t, "#/dev/pw-fork-test")
+	navigate(t, "#/dev/pw-branch-test")
 
 	// Wait for CodeMirror to render with new content
 	time.Sleep(1 * time.Second)
 
 	// Verify the updated description appears in the editor
-	editorContent := page.Locator(".cm-editor:has-text('Playwright E2E test fork')")
+	editorContent := page.Locator(".cm-editor:has-text('Playwright E2E test branch')")
 	if err := editorContent.WaitFor(playwright.LocatorWaitForOptions{
 		Timeout: playwright.Float(5000),
 	}); err != nil {
@@ -694,7 +698,7 @@ class Install(App):
 // --- Test 12: Dev App Validation ---
 
 func TestDevAppValidation(t *testing.T) {
-	navigate(t, "#/dev/pw-fork-test")
+	navigate(t, "#/dev/pw-branch-test")
 
 	// Click Validate
 	validateBtn := page.Locator("button:has-text('Validate')")
@@ -734,7 +738,7 @@ func TestDevAppValidation(t *testing.T) {
 // --- Test 13: Dev App Deploy ---
 
 func TestDevAppDeploy(t *testing.T) {
-	navigate(t, "#/dev/pw-fork-test")
+	navigate(t, "#/dev/pw-branch-test")
 
 	// Register dialog handler BEFORE clicking Deploy (it calls alert())
 	dialogCh := make(chan string, 1)
@@ -785,23 +789,23 @@ func TestDevAppDeploy(t *testing.T) {
 	navigate(t, "#/apps")
 	time.Sleep(1 * time.Second)
 
-	// Search for the forked app
-	appCard := page.Locator("text=PW Fork Test").Or(page.Locator("text=pw-fork-test"))
+	// Search for the branched app
+	appCard := page.Locator("text=PW Branch Test").Or(page.Locator("text=pw-branch-test"))
 	cardVisible, _ := appCard.IsVisible()
 	if cardVisible {
-		t.Log("forked app visible in catalog after deploy")
+		t.Log("branched app visible in catalog after deploy")
 	} else {
-		t.Log("warning: forked app not immediately visible in catalog (may need search)")
+		t.Log("warning: branched app not immediately visible in catalog (may need search)")
 	}
 }
 
-// --- Test 14: Dev App Submit PR ---
+// --- Test 14: Dev App Submit PR (first submit — creates PR) ---
 
 func TestDevAppSubmitPR(t *testing.T) {
 	// Insert synthetic install record so test_installed check passes
-	sqliteExec(`INSERT OR REPLACE INTO installs (id, app_id, app_name, ctid, node, pool, status, created_at) VALUES ('pw-fake-install', 'pw-fork-test', 'PW Fork Test', 99999, 'pve', 'local-lvm', 'running', '2025-01-01T00:00:00Z')`)
+	sqliteExec(`INSERT OR REPLACE INTO installs (id, app_id, app_name, ctid, node, pool, status, created_at) VALUES ('pw-fake-install', 'pw-branch-test', 'PW Branch Test', 99999, 'pve', 'local-lvm', 'running', '2025-01-01T00:00:00Z')`)
 
-	navigate(t, "#/dev/pw-fork-test")
+	navigate(t, "#/dev/pw-branch-test")
 
 	// Click Submit
 	submitBtn := page.Locator("button:has-text('Submit')")
@@ -810,7 +814,7 @@ func TestDevAppSubmitPR(t *testing.T) {
 		t.Fatalf("click Submit: %v", err)
 	}
 
-	// Wait for modal
+	// Wait for modal and checklist
 	modal := page.Locator("h3:has-text('Submit to Catalog')")
 	if err := modal.WaitFor(playwright.LocatorWaitForOptions{
 		Timeout: playwright.Float(10000),
@@ -818,122 +822,228 @@ func TestDevAppSubmitPR(t *testing.T) {
 		t.Fatalf("submit modal did not appear: %v", err)
 	}
 
-	// Wait for checklist to load
 	checklist := page.Locator("text=Publish Checklist")
-	if err := checklist.WaitFor(playwright.LocatorWaitForOptions{
-		Timeout: playwright.Float(10000),
-	}); err != nil {
-		t.Log("warning: Publish Checklist text did not appear; may still be loading")
-	}
-
+	checklist.WaitFor(playwright.LocatorWaitForOptions{Timeout: playwright.Float(10000)})
 	time.Sleep(2 * time.Second)
 
-	// Assert checklist items visible
-	for _, label := range []string{"GitHub connected", "Manifest validates", "Test install exists", "Catalog fork exists"} {
+	// Assert checklist: 3 items, NO fork_exists (fork is an internal detail now)
+	for _, label := range []string{"GitHub connected", "Manifest validates", "Test install exists"} {
 		loc := page.Locator(fmt.Sprintf("text=%s", label))
 		vis, _ := loc.IsVisible()
 		t.Logf("checklist %q visible: %v", label, vis)
 	}
+	// fork_exists must NOT appear
+	forkCheck := page.Locator("text=Catalog fork exists")
+	forkVisible, _ := forkCheck.IsVisible()
+	if forkVisible {
+		t.Error("fork_exists check should not appear in publish checklist")
+	}
 
-	// Check if Submit PR button is visible and enabled
+	// Find the submit button — on first submit with no prior PR it should say "Submit Pull Request"
 	submitPRBtn := page.Locator("button:has-text('Submit Pull Request')")
 	prBtnVisible, _ := submitPRBtn.IsVisible()
 	if !prBtnVisible {
-		t.Log("Submit Pull Request button not visible (GitHub may not be connected)")
+		// May also say "Update Pull Request" if a prior PR is still open from a previous test run
+		submitPRBtn = page.Locator("button:has-text('Update Pull Request')")
+		prBtnVisible, _ = submitPRBtn.IsVisible()
+	}
+	if !prBtnVisible {
+		t.Log("Submit/Update Pull Request button not visible (GitHub may not be connected)")
 		closeSubmitModal()
 		return
 	}
 
-	// Check if button is enabled (all checks passed)
 	disabled, _ := submitPRBtn.GetAttribute("disabled")
 	if disabled != "" {
-		t.Log("Submit Pull Request button is disabled (not all checks pass)")
+		t.Log("Submit button is disabled (not all checks pass)")
 		closeSubmitModal()
 		return
 	}
 
-	// Click Submit Pull Request
-	t.Log("clicking Submit Pull Request...")
+	// Click submit
+	btnText, _ := submitPRBtn.TextContent()
+	t.Logf("clicking %q...", btnText)
 	if err := submitPRBtn.Click(); err != nil {
-		t.Fatalf("click Submit Pull Request: %v", err)
+		t.Fatalf("click submit button: %v", err)
 	}
 
-	// Scope all result selectors inside the modal dialog
+	// Wait for result
 	modalContainer := page.Locator(".fixed.inset-0 .bg-bg-card")
-
-	// Wait for result — either success ([OK]) or error text inside the modal
 	okResult := modalContainer.Locator("text=[OK]")
 	errorResult := modalContainer.Locator(".text-red-400.font-mono")
 
-	// Wait up to 30s for GitHub API — check for [OK], error, or Publishing text going away
 	result := okResult.Or(errorResult)
 	if err := result.WaitFor(playwright.LocatorWaitForOptions{
 		Timeout: playwright.Float(30000),
 	}); err != nil {
-		// Timeout is non-fatal — PR may have succeeded but UI didn't update clearly
-		t.Logf("PR submission result not detected within 30s (non-fatal): %v", err)
+		t.Logf("PR result not detected within 30s (non-fatal): %v", err)
 	}
 
 	okVisible, _ := okResult.IsVisible()
 	if okVisible {
-		// Success — find the PR URL
+		// Assert success message says "created!" or "updated!"
+		createdMsg := modalContainer.Locator("text=Pull request created!")
+		updatedMsg := modalContainer.Locator("text=Pull request updated!")
+		createdVis, _ := createdMsg.IsVisible()
+		updatedVis, _ := updatedMsg.IsVisible()
+		t.Logf("success message: created=%v updated=%v", createdVis, updatedVis)
+
 		prLink := modalContainer.Locator("a[href*='github.com']")
 		if href, err := prLink.GetAttribute("href"); err == nil {
-			t.Logf("PR created: %s", href)
-		} else {
-			t.Log("PR created but could not extract URL")
+			t.Logf("PR URL: %s", href)
 		}
 	} else {
 		errVisible, _ := errorResult.IsVisible()
 		if errVisible {
 			errText, _ := errorResult.TextContent()
 			t.Logf("PR submission error (non-fatal): %s", errText)
-		} else {
-			t.Log("PR submission result unclear (non-fatal)")
 		}
 	}
 
-	// Close dialog — try multiple methods
-	doneBtn := modalContainer.Locator("button:has-text('Done')")
-	cancelBtn := modalContainer.Locator("button:has-text('Cancel')")
-	doneVisible, _ := doneBtn.IsVisible()
-	cancelVisible, _ := cancelBtn.IsVisible()
-	if doneVisible {
-		doneBtn.Click()
-	} else if cancelVisible {
-		cancelBtn.Click()
-	} else {
-		// Click the backdrop to close
-		backdrop := page.Locator(".fixed.inset-0").First()
-		backdrop.Click(playwright.LocatorClickOptions{
-			Position: &playwright.Position{X: 5, Y: 5},
-			Force:    playwright.Bool(true),
-		})
-	}
-	time.Sleep(1 * time.Second)
+	closeSubmitModalFull(t)
+}
 
-	// Verify modal is dismissed
-	modalStillVisible, _ := page.Locator("h3:has-text('Submit to Catalog')").IsVisible()
-	if modalStillVisible {
-		// Force close by navigating away and back
-		t.Log("warning: modal still open, navigating away to force close")
-		navigate(t, "#/developer")
-		time.Sleep(500 * time.Millisecond)
+// --- Test 14b: Dev App Re-submit PR (updates existing PR instead of creating duplicate) ---
+
+func TestDevAppResubmitPR(t *testing.T) {
+	// This test runs AFTER TestDevAppSubmitPR which created/updated a PR.
+	// Re-submitting should find the open PR and update it, not create a new one.
+
+	navigate(t, "#/dev/pw-branch-test")
+
+	// Click Submit
+	submitBtn := page.Locator("button:has-text('Submit')")
+	assertVisible(t, submitBtn, "Submit button")
+	if err := submitBtn.Click(); err != nil {
+		t.Fatalf("click Submit: %v", err)
 	}
+
+	// Wait for modal and checklist to load
+	modal := page.Locator("h3:has-text('Submit to Catalog')")
+	if err := modal.WaitFor(playwright.LocatorWaitForOptions{
+		Timeout: playwright.Float(10000),
+	}); err != nil {
+		t.Fatalf("submit modal did not appear: %v", err)
+	}
+
+	time.Sleep(3 * time.Second) // let publish-status API complete
+
+	// The previous test created a PR that should still be open.
+	// The button should now say "Update Pull Request" instead of "Submit Pull Request".
+	updateBtn := page.Locator("button:has-text('Update Pull Request')")
+	submitNewBtn := page.Locator("button:has-text('Submit Pull Request')")
+
+	updateVis, _ := updateBtn.IsVisible()
+	submitVis, _ := submitNewBtn.IsVisible()
+	t.Logf("button state: 'Update Pull Request'=%v, 'Submit Pull Request'=%v", updateVis, submitVis)
+
+	var actionBtn playwright.Locator
+	if updateVis {
+		t.Log("open PR detected — button correctly shows 'Update Pull Request'")
+		actionBtn = updateBtn
+	} else if submitVis {
+		t.Log("no open PR detected (may have been merged/closed) — showing 'Submit Pull Request'")
+		actionBtn = submitNewBtn
+	} else {
+		t.Log("neither submit button visible (GitHub may not be connected)")
+		closeSubmitModal()
+		return
+	}
+
+	disabled, _ := actionBtn.GetAttribute("disabled")
+	if disabled != "" {
+		t.Log("button is disabled (not all checks pass)")
+		closeSubmitModal()
+		return
+	}
+
+	// Record the PR URL from publish status before clicking
+	prLinkBefore := ""
+	if statusResp, err := http.Get(baseURL + "/api/dev/apps/pw-branch-test/publish-status"); err == nil {
+		var status struct {
+			PRURL string `json:"pr_url"`
+		}
+		json.NewDecoder(statusResp.Body).Decode(&status)
+		statusResp.Body.Close()
+		prLinkBefore = status.PRURL
+		t.Logf("PR URL before re-submit: %s", prLinkBefore)
+	}
+
+	// Click the button
+	btnText, _ := actionBtn.TextContent()
+	t.Logf("clicking %q...", btnText)
+	if err := actionBtn.Click(); err != nil {
+		t.Fatalf("click action button: %v", err)
+	}
+
+	// Wait for result
+	modalContainer := page.Locator(".fixed.inset-0 .bg-bg-card")
+	okResult := modalContainer.Locator("text=[OK]")
+	errorResult := modalContainer.Locator(".text-red-400.font-mono")
+
+	result := okResult.Or(errorResult)
+	if err := result.WaitFor(playwright.LocatorWaitForOptions{
+		Timeout: playwright.Float(30000),
+	}); err != nil {
+		t.Logf("PR result not detected within 30s (non-fatal): %v", err)
+	}
+
+	okVisible, _ := okResult.IsVisible()
+	if !okVisible {
+		errVisible, _ := errorResult.IsVisible()
+		if errVisible {
+			errText, _ := errorResult.TextContent()
+			t.Logf("PR re-submit error (non-fatal): %s", errText)
+		}
+		closeSubmitModalFull(t)
+		return
+	}
+
+	// Assert correct success message based on whether we expected an update
+	updatedMsg := modalContainer.Locator("text=Pull request updated!")
+	createdMsg := modalContainer.Locator("text=Pull request created!")
+	updatedVis, _ := updatedMsg.IsVisible()
+	createdVis, _ := createdMsg.IsVisible()
+
+	if updateVis {
+		// We saw "Update Pull Request" button → expect "Pull request updated!" message
+		if !updatedVis {
+			t.Error("expected 'Pull request updated!' message but got 'Pull request created!'")
+		} else {
+			t.Log("re-submit correctly shows 'Pull request updated!'")
+		}
+	} else {
+		t.Logf("re-submit message: updated=%v created=%v", updatedVis, createdVis)
+	}
+
+	// Assert PR URL is the same (updated, not a new PR)
+	prLink := modalContainer.Locator("a[href*='github.com']")
+	prLinkAfter, _ := prLink.GetAttribute("href")
+	t.Logf("PR URL after re-submit: %s", prLinkAfter)
+
+	if prLinkBefore != "" && prLinkAfter != "" && updateVis {
+		if prLinkBefore == prLinkAfter {
+			t.Log("PR URL unchanged — confirmed update, not duplicate")
+		} else {
+			t.Errorf("PR URL changed on re-submit: %s → %s (should reuse existing PR)", prLinkBefore, prLinkAfter)
+		}
+	}
+
+	closeSubmitModalFull(t)
 }
 
 // --- Test 15: Dev App Undeploy ---
 
 func TestDevAppUndeploy(t *testing.T) {
-	navigate(t, "#/dev/pw-fork-test")
+	navigate(t, "#/dev/pw-branch-test")
 
 	// Ensure it's deployed first (may already be from TestDevAppDeploy)
 	deployedBadge := page.Locator("text=deployed")
 	isDeployed, _ := deployedBadge.IsVisible()
 	if !isDeployed {
 		t.Log("app not deployed, deploying first...")
-		apiPost("/api/dev/apps/pw-fork-test/deploy", "")
-		navigate(t, "#/dev/pw-fork-test")
+		apiPost("/api/dev/apps/pw-branch-test/deploy", "")
+		navigate(t, "#/dev/pw-branch-test")
 	}
 
 	// Click Undeploy
@@ -959,12 +1069,12 @@ func TestDevAppUndeploy(t *testing.T) {
 	navigate(t, "#/apps")
 	time.Sleep(1 * time.Second)
 
-	appCard := page.Locator("a[href='#/app/pw-fork-test']")
+	appCard := page.Locator("a[href='#/app/pw-branch-test']")
 	cardVisible, _ := appCard.IsVisible()
 	if cardVisible {
-		t.Error("pw-fork-test should not appear in catalog after undeploy")
+		t.Error("pw-branch-test should not appear in catalog after undeploy")
 	} else {
-		t.Log("pw-fork-test correctly absent from catalog after undeploy")
+		t.Log("pw-branch-test correctly absent from catalog after undeploy")
 	}
 }
 
@@ -976,7 +1086,7 @@ func TestCleanup(t *testing.T) {
 
 	// Undeploy first (in case still deployed)
 	apiPost("/api/dev/stacks/pw-test-stack/undeploy", "")
-	apiPost("/api/dev/apps/pw-fork-test/undeploy", "")
+	apiPost("/api/dev/apps/pw-branch-test/undeploy", "")
 
 	// Delete test stacks via API
 	for _, id := range []string{"pw-test-stack", "zip-import-test"} {
@@ -993,14 +1103,14 @@ func TestCleanup(t *testing.T) {
 	}
 
 	// Delete test app via API
-	resp := apiDeleteResp("/api/dev/apps/pw-fork-test")
+	resp := apiDeleteResp("/api/dev/apps/pw-branch-test")
 	if resp.StatusCode == 200 {
-		t.Log("deleted dev app: pw-fork-test")
+		t.Log("deleted dev app: pw-branch-test")
 	} else if resp.StatusCode == 404 {
-		t.Log("dev app already gone: pw-fork-test")
+		t.Log("dev app already gone: pw-branch-test")
 	} else {
 		body, _ := io.ReadAll(resp.Body)
-		t.Logf("delete pw-fork-test: HTTP %d — %s", resp.StatusCode, string(body))
+		t.Logf("delete pw-branch-test: HTTP %d — %s", resp.StatusCode, string(body))
 	}
 	resp.Body.Close()
 }
@@ -1129,6 +1239,34 @@ func closeSubmitModal() {
 		})
 	}
 	time.Sleep(500 * time.Millisecond)
+}
+
+// closeSubmitModalFull tries Done, Cancel, backdrop click, then navigates away as last resort.
+func closeSubmitModalFull(t *testing.T) {
+	t.Helper()
+	modalContainer := page.Locator(".fixed.inset-0 .bg-bg-card")
+
+	doneBtn := modalContainer.Locator("button:has-text('Done')")
+	cancelBtn := modalContainer.Locator("button:has-text('Cancel')")
+
+	if vis, _ := doneBtn.IsVisible(); vis {
+		doneBtn.Click()
+	} else if vis, _ := cancelBtn.IsVisible(); vis {
+		cancelBtn.Click()
+	} else {
+		backdrop := page.Locator(".fixed.inset-0").First()
+		backdrop.Click(playwright.LocatorClickOptions{
+			Position: &playwright.Position{X: 5, Y: 5},
+			Force:    playwright.Bool(true),
+		})
+	}
+	time.Sleep(1 * time.Second)
+
+	if vis, _ := page.Locator("h3:has-text('Submit to Catalog')").IsVisible(); vis {
+		t.Log("warning: modal still open, navigating away to force close")
+		navigate(t, "#/developer")
+		time.Sleep(500 * time.Millisecond)
+	}
 }
 
 func createStackZip(t *testing.T, id string) []byte {

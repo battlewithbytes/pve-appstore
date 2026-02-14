@@ -126,11 +126,12 @@ func validateManifest(result *ValidationResult, data []byte, appDir string) {
 	for _, out := range manifest.Outputs {
 		refs := extractTemplateVars(out.Value)
 		for _, ref := range refs {
-			if ref != "IP" && !inputKeys[ref] {
-				result.addWarning("app.yml", 0,
-					fmt.Sprintf("Output %q references unknown input key {{%s}}", out.Key, ref),
-					"MANIFEST_OUTPUT_REF")
+			if strings.EqualFold(ref, "ip") || inputKeys[ref] {
+				continue
 			}
+			result.addWarning("app.yml", 0,
+				fmt.Sprintf("Output %q references unknown input key {{%s}}", out.Key, ref),
+				"MANIFEST_OUTPUT_REF")
 		}
 	}
 }

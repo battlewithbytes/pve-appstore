@@ -12,13 +12,19 @@ Container lifecycle operations (create, start, stop, shutdown, destroy, status) 
 
 ### Shell operations (fallback)
 
-Three operations have no REST API equivalent (or are restricted to `root@pam` in the API) and require `sudo` via a strict sudoers allowlist:
+Four operations have no REST API equivalent (or are restricted to `root@pam` in the API) and require `sudo` via a strict sudoers allowlist:
 
 - `pct exec` — run commands inside a container
 - `pct push` — copy files from the host into a container
 - `pct set` — configure device passthrough (GPU) on a container
+- `mkdir -p` — create directories on host storage pools for bind mounts
+- `chown` — fix ownership on bind mount paths for unprivileged containers
 
 The Proxmox API restricts `dev*` parameters (device passthrough) to `root@pam` only — API tokens cannot set them. To work around this, containers are created via the API without device params, and `pct set` is used post-creation to apply device passthrough on the host.
+
+The `mkdir` command is needed because bind mount target directories often live on storage pools (ZFS datasets, LVM, etc.) owned by root. The service process cannot write there due to `ProtectSystem=strict` and filesystem ownership. The file browser's "create directory" feature uses this to prepare host paths before container creation.
+
+The `chown` command is needed for unprivileged containers with bind mounts. In unprivileged containers, UID 0 maps to host UID 100000. Bind mount host directories are typically owned by host UID 0, so the container's root cannot chown files inside them (EPERM). Before starting the container, the engine chowns bind mount paths to `100000:100000` so the container's mapped root has ownership.
 
 These are the **only** commands permitted via `/etc/sudoers.d/pve-appstore`.
 
@@ -39,12 +45,15 @@ All web server, API handler, catalog parsing, and general application code runs 
 
 ### Sudoers allowlist
 
-Only three commands are permitted via `/etc/sudoers.d/pve-appstore`:
+Only these commands are permitted via `/etc/sudoers.d/pve-appstore`:
 
 ```
 appstore ALL=(root) NOPASSWD: /usr/bin/nsenter --mount=/proc/1/ns/mnt -- /usr/sbin/pct exec *
 appstore ALL=(root) NOPASSWD: /usr/bin/nsenter --mount=/proc/1/ns/mnt -- /usr/sbin/pct push *
 appstore ALL=(root) NOPASSWD: /usr/bin/nsenter --mount=/proc/1/ns/mnt -- /usr/sbin/pct set *
+appstore ALL=(root) NOPASSWD: /usr/bin/nsenter --mount=/proc/1/ns/mnt -- /usr/bin/tee -a /etc/pve/lxc/*
+appstore ALL=(root) NOPASSWD: /usr/bin/nsenter --mount=/proc/1/ns/mnt -- /usr/bin/mkdir -p *
+appstore ALL=(root) NOPASSWD: /usr/bin/nsenter --mount=/proc/1/ns/mnt -- /usr/bin/chown *
 ```
 
 No other commands can be run as root by the `appstore` user.
@@ -66,7 +75,7 @@ sudo /usr/bin/nsenter --mount=/proc/1/ns/mnt -- /usr/sbin/pct exec 104 -- ...
 This means:
 
 - The **main service process stays fully sandboxed** — web server, API handlers, catalog parser, etc. all run under `ProtectSystem=strict`
-- Only `pct exec`, `pct push`, and `pct set` child processes escape to the host mount namespace
+- Only `pct exec`, `pct push`, `pct set`, `tee`, and `mkdir` child processes escape to the host mount namespace
 - Only the mount namespace is affected — PID, network, user, and other namespaces remain unchanged
 
 ### Why not ProtectSystem=full?
@@ -89,9 +98,11 @@ Downgrading to `ProtectSystem=full` would weaken security for the **entire servi
 | Container exec | `sudo pct exec` | `sudo pct exec` (no API equivalent) |
 | File push | `sudo pct push` | `sudo pct push` (no API equivalent) |
 | Device passthrough | `sudo pct set` | `sudo pct set` (API restricted to root@pam) |
+| Host directory creation | N/A | `sudo mkdir -p` (for bind mount paths on storage pools) |
+| Bind mount ownership | N/A | `sudo chown` (UID shift for unprivileged containers) |
 
 The API approach:
-- **Reduces sudoers entries from 11 to 3**
+- **Reduces sudoers entries from 11 to 6**
 - **Eliminates `sudo` privilege escalation** for most operations
 - **Uses the API token** with scoped permissions (pool-limited, role-limited)
 - **Removes dependency** on `pvesh` and `pveam` binaries
@@ -100,7 +111,7 @@ The API approach:
 
 Even if the service process is compromised:
 
-- **Run arbitrary commands as root**: Sudoers only allows `nsenter --mount=/proc/1/ns/mnt -- /usr/sbin/pct exec *`, `pct push *`, and `pct set *`. Substituting a different binary (e.g., `nsenter -- /bin/bash`) is rejected.
+- **Run arbitrary commands as root**: Sudoers only allows `nsenter --mount=/proc/1/ns/mnt --` with specific binaries (`pct exec/push/set`, `tee`, `mkdir`). Substituting a different binary (e.g., `nsenter -- /bin/bash`) is rejected.
 - **Escape other namespaces**: Only `--mount` is specified. PID, network, and user namespaces are unaffected.
 - **Run nsenter without sudo**: `/proc/1/ns/mnt` is owned by root and inaccessible to the `appstore` user directly.
 - **Modify the sudoers file**: `/etc/sudoers.d/` is protected by `ProtectSystem=strict` (read-only for the service).

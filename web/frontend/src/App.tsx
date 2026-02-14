@@ -8,7 +8,7 @@ import remarkGfm from 'remark-gfm'
 import { api } from './api'
 import { CodeEditor } from './CodeEditor'
 import { DevAppEditor, DevSubmitDialog, DevValidationMsg } from './DevAppEditor'
-import type { AppSummary, AppDetail, AppInput, HealthResponse, Job, LogEntry, InstallDetail, InstallListItem, ContainerLiveStatus, ConfigDefaultsResponse, MountPoint, MountInfo, BrowseEntry, ExportResponse, ApplyPreviewResponse, InstallRequest, EditRequest, ReconfigureRequest, DevicePassthrough, AppStatusResponse, StackListItem, StackDetail, StackCreateRequest, StackValidateResponse, StackApp, Settings, SettingsUpdate, DiscoverResponse, DevAppMeta, DevTemplate, ValidationResult, DockerfileChainEvent, GitHubStatus, GitHubRepoInfo, DevStackMeta, DevStack, CatalogStack } from './types'
+import type { AppSummary, AppDetail, AppInput, HealthResponse, Job, LogEntry, Install, InstallDetail, InstallListItem, ContainerLiveStatus, ConfigDefaultsResponse, MountPoint, MountInfo, BrowseEntry, ExportResponse, ApplyPreviewResponse, InstallRequest, EditRequest, ReconfigureRequest, DevicePassthrough, AppStatusResponse, StackListItem, StackDetail, StackCreateRequest, StackValidateResponse, StackApp, Settings, SettingsUpdate, DiscoverResponse, DevAppMeta, DevTemplate, ValidationResult, DockerfileChainEvent, GitHubStatus, GitHubRepoInfo, DevStackMeta, DevStack, CatalogStack } from './types'
 
 function useHash() {
   const [hash, setHash] = useState(window.location.hash)
@@ -283,13 +283,22 @@ function AppDetailView({ id, requireAuth, devMode }: { id: string; requireAuth: 
   const [showInstall, setShowInstall] = useState(false)
   const [appStatus, setAppStatus] = useState<AppStatusResponse | null>(null)
   const [showBranch, setShowBranch] = useState(false)
+  const [replaceExisting, setReplaceExisting] = useState(false)
+  const [showTestConfirm, setShowTestConfirm] = useState(false)
+  const [existingInstall, setExistingInstall] = useState<Install | null>(null)
   const [ghStatus, setGhStatus] = useState<GitHubStatus | null>(null)
 
   useEffect(() => {
-    setApp(null); setError(''); setAppStatus(null)
+    setApp(null); setError(''); setAppStatus(null); setExistingInstall(null)
     api.app(id).then(setApp).catch(e => setError(e.message))
     api.appReadme(id).then(setReadme)
-    api.appStatus(id).then(setAppStatus).catch(() => {})
+    api.appStatus(id).then(s => {
+      setAppStatus(s)
+      // Fetch existing install details for pre-filling test install wizard
+      if (s.installed && s.install_id) {
+        api.installDetail(s.install_id).then(setExistingInstall).catch(() => {})
+      }
+    }).catch(() => {})
   }, [id])
 
   useEffect(() => {
@@ -303,6 +312,11 @@ function AppDetailView({ id, requireAuth, devMode }: { id: string; requireAuth: 
 
   const inputGroups = app.inputs && app.inputs.length > 0 ? groupInputs(app.inputs) : null
 
+  // Dev app viewing an official install — allow "Test Install" to replace
+  const isDevApp = app.source === 'developer'
+  const hasOfficialInstall = appStatus?.installed && appStatus?.app_source !== 'developer'
+  const canTestInstall = isDevApp && hasOfficialInstall
+
   return (
     <div>
       <BackLink />
@@ -315,6 +329,7 @@ function AppDetailView({ id, requireAuth, devMode }: { id: string; requireAuth: 
             <h1 className="text-2xl font-bold text-text-primary">{app.name}</h1>
             {app.featured && <Badge className="bg-status-featured/10 text-status-featured">featured</Badge>}
             {app.official && <Badge className="bg-primary/10 text-primary">official</Badge>}
+            {isDevApp && <Badge className="bg-yellow-400/10 text-yellow-400">dev</Badge>}
           </div>
           <p className="text-sm text-text-secondary mt-1">{app.description}</p>
           <div className="flex gap-3 mt-2 text-sm text-text-muted items-center font-mono">
@@ -324,18 +339,29 @@ function AppDetailView({ id, requireAuth, devMode }: { id: string; requireAuth: 
           </div>
         </div>
         <div className="flex gap-2 items-center shrink-0">
-          {appStatus?.installed ? (
+          {canTestInstall ? (
+            <button onClick={() => requireAuth(() => setShowTestConfirm(true))} className="px-6 py-2.5 bg-yellow-400 text-bg-primary font-semibold font-mono uppercase text-sm rounded-lg hover:shadow-[0_0_20px_rgba(250,204,21,0.3)] transition-all cursor-pointer border-none">Test Install</button>
+          ) : appStatus?.installed ? (
             <a href={`#/install/${appStatus.install_id}`} className="px-6 py-2.5 bg-bg-secondary border border-primary text-primary font-semibold font-mono uppercase text-sm rounded-lg hover:bg-primary/10 transition-all no-underline">Installed</a>
           ) : appStatus?.job_active ? (
             <a href={`#/job/${appStatus.job_id}`} className="px-6 py-2.5 bg-bg-secondary border border-status-warning text-status-warning font-semibold font-mono uppercase text-sm rounded-lg hover:bg-status-warning/10 transition-all no-underline">Installing...</a>
           ) : (
             <button onClick={() => requireAuth(() => setShowInstall(true))} className="px-6 py-2.5 bg-primary text-bg-primary font-semibold font-mono uppercase text-sm rounded-lg hover:shadow-[0_0_20px_rgba(0,255,157,0.3)] transition-all cursor-pointer border-none">Install</button>
           )}
-          {devMode && ghStatus?.connected && ghStatus?.fork && <button onClick={() => requireAuth(() => setShowBranch(true))} className="px-4 py-2.5 bg-bg-secondary border border-yellow-400 text-yellow-400 font-semibold font-mono uppercase text-sm rounded-lg hover:bg-yellow-400/10 transition-all cursor-pointer">Branch</button>}
+          {devMode && !isDevApp && ghStatus?.connected && ghStatus?.fork && <button onClick={() => requireAuth(() => setShowBranch(true))} className="px-4 py-2.5 bg-bg-secondary border border-yellow-400 text-yellow-400 font-semibold font-mono uppercase text-sm rounded-lg hover:bg-yellow-400/10 transition-all cursor-pointer">Branch</button>}
         </div>
       </div>
 
       {showBranch && <BranchDialog sourceId={app.id} sourceName={app.name} onClose={() => setShowBranch(false)} />}
+
+      {showTestConfirm && (
+        <TestInstallModal
+          app={app}
+          ctid={appStatus?.ctid}
+          onConfirm={() => { setShowTestConfirm(false); setReplaceExisting(true); setShowInstall(true) }}
+          onClose={() => setShowTestConfirm(false)}
+        />
+      )}
 
       {app.overview && (
         <div className="mt-5 bg-bg-card border border-border rounded-lg p-6">
@@ -346,7 +372,7 @@ function AppDetailView({ id, requireAuth, devMode }: { id: string; requireAuth: 
         </div>
       )}
 
-      {showInstall && <InstallWizard app={app} onClose={() => setShowInstall(false)} />}
+      {showInstall && <InstallWizard app={app} onClose={() => { setShowInstall(false); setReplaceExisting(false) }} replaceExisting={replaceExisting} existingInstall={replaceExisting ? existingInstall : undefined} />}
 
       <div className="grid grid-cols-[repeat(auto-fit,minmax(280px,1fr))] gap-4 mt-6">
         <InfoCard title="Default Resources">
@@ -453,38 +479,58 @@ function AppDetailView({ id, requireAuth, devMode }: { id: string; requireAuth: 
   )
 }
 
-function InstallWizard({ app, onClose }: { app: AppDetail; onClose: () => void }) {
+function InstallWizard({ app, onClose, replaceExisting, existingInstall }: { app: AppDetail; onClose: () => void; replaceExisting?: boolean; existingInstall?: Install | null }) {
+  const prev = existingInstall // shorthand for previous install values
   const [inputs, setInputs] = useState<Record<string, string>>(() => {
+    if (prev?.inputs) return { ...prev.inputs }
     const d: Record<string, string> = {}
     app.inputs?.forEach(i => { if (i.default !== undefined) d[i.key] = String(i.default) })
     return d
   })
-  const [cores, setCores] = useState(String(app.lxc.defaults.cores))
-  const [memory, setMemory] = useState(String(app.lxc.defaults.memory_mb))
-  const [disk, setDisk] = useState(String(app.lxc.defaults.disk_gb))
-  const [storage, setStorage] = useState('')
-  const [bridge, setBridge] = useState('')
-  const [hostname, setHostname] = useState('')
-  const [ipAddress, setIpAddress] = useState('')
-  const [macAddress, setMacAddress] = useState('')
-  const [onboot, setOnboot] = useState(app.lxc.defaults.onboot ?? true)
-  const [unprivileged, setUnprivileged] = useState(app.lxc.defaults.unprivileged ?? true)
+  const [cores, setCores] = useState(prev ? String(prev.cores) : String(app.lxc.defaults.cores))
+  const [memory, setMemory] = useState(prev ? String(prev.memory_mb) : String(app.lxc.defaults.memory_mb))
+  const [disk, setDisk] = useState(prev ? String(prev.disk_gb) : String(app.lxc.defaults.disk_gb))
+  const [storage, setStorage] = useState(prev?.storage || '')
+  const [bridge, setBridge] = useState(prev?.bridge || '')
+  const [hostname, setHostname] = useState(prev?.hostname || '')
+  const [ipAddress, setIpAddress] = useState(prev?.ip_address || '')
+  const [macAddress, setMacAddress] = useState(prev?.mac_address || '')
+  const [onboot, setOnboot] = useState(prev?.onboot ?? app.lxc.defaults.onboot ?? true)
+  const [unprivileged, setUnprivileged] = useState(prev?.unprivileged ?? app.lxc.defaults.unprivileged ?? true)
   const [installing, setInstalling] = useState(false)
   const [error, setError] = useState('')
   const [showAdvanced, setShowAdvanced] = useState(false)
   const [defaults, setDefaults] = useState<ConfigDefaultsResponse | null>(null)
   const [bindMounts, setBindMounts] = useState<Record<string, string>>(() => {
+    // Pre-fill bind mount host paths from existing install's mount points
+    if (prev?.mount_points) {
+      const d: Record<string, string> = {}
+      for (const mp of prev.mount_points) {
+        if (mp.type === 'bind' && mp.host_path) d[mp.name] = mp.host_path
+      }
+      if (Object.keys(d).length > 0) return d
+    }
     const d: Record<string, string> = {}
     app.volumes?.filter(v => v.type === 'bind' && v.default_host_path).forEach(v => { d[v.name] = v.default_host_path! })
     return d
   })
   const [extraMounts, setExtraMounts] = useState<{ host_path: string; mount_path: string; read_only: boolean }[]>([])
   const [storageInputMounts, setStorageInputMounts] = useState<Record<string, string>>({})
-  const [volumeStorages, setVolumeStorages] = useState<Record<string, string>>({})
+  const [volumeStorages, setVolumeStorages] = useState<Record<string, string>>(() => {
+    // Pre-fill per-volume storage from existing install
+    if (prev?.mount_points) {
+      const d: Record<string, string> = {}
+      for (const mp of prev.mount_points) {
+        if (mp.type === 'volume' && mp.storage) d[mp.name] = mp.storage
+      }
+      return d
+    }
+    return {}
+  })
   const [volumeBindOverrides, setVolumeBindOverrides] = useState<Record<string, string>>({})
   const [customVars, setCustomVars] = useState<{key: string; value: string}[]>([])
-  const [devices, setDevices] = useState<DevicePassthrough[]>([])
-  const [envVars] = useState<Record<string, string>>({})
+  const [devices, setDevices] = useState<DevicePassthrough[]>(prev?.devices || [])
+  const [envVars] = useState<Record<string, string>>(prev?.env_vars || {})
   const [envVarList, setEnvVarList] = useState<{key: string; value: string}[]>([])
   const [browseTarget, setBrowseTarget] = useState<string | null>(null)
   const [browseInitPath, setBrowseInitPath] = useState('/')
@@ -492,8 +538,9 @@ function InstallWizard({ app, onClose }: { app: AppDetail; onClose: () => void }
   useEffect(() => {
     api.configDefaults().then(d => {
       setDefaults(d)
-      setStorage(d.storages[0] || '')
-      setBridge(d.bridges[0] || '')
+      // Only set defaults if no previous install values
+      if (!prev?.storage) setStorage(s => s || d.storages[0] || '')
+      if (!prev?.bridge) setBridge(b => b || d.bridges[0] || '')
     }).catch(() => {})
   }, [])
 
@@ -605,6 +652,7 @@ function InstallWizard({ app, onClose }: { app: AppDetail; onClose: () => void }
         if (ev.key.trim()) allEnv[ev.key.trim()] = ev.value
       }
       if (Object.keys(allEnv).length > 0) req.env_vars = allEnv
+      if (replaceExisting) req.replace_existing = true
       const job = await api.installApp(app.id, req as InstallRequest)
       window.location.hash = `#/job/${job.id}`
     } catch (e: unknown) {
@@ -2964,6 +3012,74 @@ function DirectoryBrowser({ initialPath, onSelect, onClose }: { initialPath: str
           <button onClick={() => onSelect(path)} className="px-4 py-2 text-xs font-semibold border-none rounded-lg cursor-pointer bg-primary text-bg-primary hover:shadow-[0_0_20px_rgba(0,255,157,0.3)] transition-all font-mono">
             Select: {path}
           </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// --- Test Install Confirmation Modal ---
+
+function TestInstallModal({ app, ctid, onConfirm, onClose }: { app: AppDetail; ctid?: number; onConfirm: () => void; onClose: () => void }) {
+  const bindVolumes = (app.volumes || []).filter(v => v.type === 'bind')
+  const managedVolumes = (app.volumes || []).filter(v => (v.type || 'volume') === 'volume')
+
+  return (
+    <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-[200]" onClick={onClose}>
+      <div className="bg-bg-card border border-border rounded-xl p-8 w-full max-w-[520px]" onClick={e => e.stopPropagation()}>
+        <h2 className="text-lg font-bold text-yellow-400 mb-1 font-mono flex items-center gap-2">
+          <span className="text-xl">&#9888;</span> Test Install
+        </h2>
+        <p className="text-sm text-text-muted mb-5">
+          This will replace the existing install{ctid ? ` (CT ${ctid})` : ''} with a fresh container provisioned from scratch using your dev version of <span className="text-text-primary font-semibold">{app.name}</span>.
+        </p>
+
+        <div className="space-y-3 mb-6">
+          <div className="flex items-start gap-3 p-3 rounded-lg bg-red-500/5 border border-red-500/20">
+            <span className="text-red-400 text-lg mt-0.5">&#10005;</span>
+            <div>
+              <div className="text-sm font-semibold text-red-400 mb-0.5">Container destroyed</div>
+              <div className="text-xs text-text-muted">The existing container, OS, installed packages, and all config files (e.g. <span className="font-mono">/etc</span>) will be destroyed.</div>
+            </div>
+          </div>
+
+          {managedVolumes.length > 0 && (
+            <div className="flex items-start gap-3 p-3 rounded-lg bg-red-500/5 border border-red-500/20">
+              <span className="text-red-400 text-lg mt-0.5">&#10005;</span>
+              <div>
+                <div className="text-sm font-semibold text-red-400 mb-0.5">Managed volumes destroyed</div>
+                <div className="text-xs text-text-muted">
+                  Proxmox volumes will be recreated fresh by the install script:{' '}
+                  {managedVolumes.map(v => (
+                    <span key={v.name} className="inline-block bg-bg-secondary rounded px-1.5 py-0.5 mr-1 mb-1 font-mono">{v.name} ({v.mount_path})</span>
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {bindVolumes.length > 0 && (
+            <div className="flex items-start gap-3 p-3 rounded-lg bg-primary/5 border border-primary/20">
+              <span className="text-primary text-lg mt-0.5">&#10003;</span>
+              <div>
+                <div className="text-sm font-semibold text-primary mb-0.5">Bind mounts safe</div>
+                <div className="text-xs text-text-muted">Host-path bind mounts are unaffected — data stays on the host filesystem.</div>
+              </div>
+            </div>
+          )}
+
+          <div className="flex items-start gap-3 p-3 rounded-lg bg-blue-500/5 border border-blue-500/20">
+            <span className="text-blue-400 text-lg mt-0.5">&#9432;</span>
+            <div>
+              <div className="text-sm font-semibold text-blue-400 mb-0.5">Clean slate</div>
+              <div className="text-xs text-text-muted">Your dev install script will run from scratch on a fresh container. This verifies the script works correctly end-to-end. Previous resource settings (storage, cores, memory) will be pre-filled in the wizard.</div>
+            </div>
+          </div>
+        </div>
+
+        <div className="flex gap-3 justify-end">
+          <button onClick={onClose} className="px-5 py-2.5 text-sm font-semibold border border-border rounded-lg cursor-pointer text-text-secondary bg-transparent hover:border-text-secondary transition-colors font-mono">Cancel</button>
+          <button onClick={onConfirm} className="px-5 py-2.5 text-sm font-semibold border-none rounded-lg cursor-pointer bg-yellow-400 text-bg-primary hover:shadow-[0_0_20px_rgba(250,204,21,0.3)] transition-all font-mono">Replace &amp; Install</button>
         </div>
       </div>
     </div>

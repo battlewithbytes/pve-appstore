@@ -192,6 +192,7 @@ type appResponse struct {
 	GPURequired bool     `json:"gpu_required"`
 	GPUSupport  []string `json:"gpu_support,omitempty"`
 	Source      string   `json:"source,omitempty"`
+	ShadowedBy  string   `json:"shadowed_by,omitempty"`
 }
 
 func toAppResponse(app *catalog.AppManifest) *appResponse {
@@ -208,5 +209,6 @@ func toAppResponse(app *catalog.AppManifest) *appResponse {
 		GPURequired: app.GPU.Required,
 		GPUSupport:  app.GPU.Supported,
 		Source:      app.Source,
+		ShadowedBy:  app.ShadowedBy,
 	}
 }

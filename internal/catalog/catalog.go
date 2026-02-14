@@ -17,6 +17,7 @@ type Catalog struct {
 	localDir string
 	apps     map[string]*AppManifest
 	stacks   map[string]*StackManifest
+	shadowed map[string]*AppManifest // original apps displaced by dev apps
 }
 
 // New creates a new Catalog instance.
@@ -27,6 +28,7 @@ func New(repoURL, branch, dataDir string) *Catalog {
 		localDir: filepath.Join(dataDir, "catalog"),
 		apps:     make(map[string]*AppManifest),
 		stacks:   make(map[string]*StackManifest),
+		shadowed: make(map[string]*AppManifest),
 	}
 }
 
@@ -36,9 +38,13 @@ func (c *Catalog) Refresh() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	// Snapshot dev apps and stacks before re-indexing
+	// Snapshot dev apps, stacks, and shadowed originals before re-indexing
 	savedApps := c.devApps()
 	savedStacks := c.devStacks()
+	savedShadowed := make(map[string]*AppManifest, len(c.shadowed))
+	for k, v := range c.shadowed {
+		savedShadowed[k] = v
+	}
 
 	if err := c.fetchRepo(); err != nil {
 		return fmt.Errorf("fetching catalog: %w", err)
@@ -50,7 +56,18 @@ func (c *Catalog) Refresh() error {
 
 	c.indexStacks()
 
-	// Restore dev apps and stacks
+	// Restore shadowed map first — re-index may have updated the official app
+	c.shadowed = make(map[string]*AppManifest)
+	for id := range savedShadowed {
+		// If the re-indexed catalog has a fresh version, shadow that instead
+		if fresh, ok := c.apps[id]; ok {
+			c.shadowed[id] = fresh
+		} else {
+			c.shadowed[id] = savedShadowed[id]
+		}
+	}
+
+	// Restore dev apps and stacks (overwrite re-indexed entries)
 	for _, app := range savedApps {
 		c.apps[app.ID] = app
 	}
@@ -248,19 +265,29 @@ func (c *Catalog) indexApps() error {
 }
 
 // MergeDevApp adds or replaces a developer app in the catalog.
+// If a non-dev app with the same ID exists, it is preserved in the shadow map.
 func (c *Catalog) MergeDevApp(app *AppManifest) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	app.Source = "developer"
+	if existing, ok := c.apps[app.ID]; ok && existing.Source != "developer" {
+		c.shadowed[app.ID] = existing
+	}
 	c.apps[app.ID] = app
 }
 
 // RemoveDevApp removes a developer app from the catalog (only if source is "developer").
+// If a shadowed original exists, it is restored.
 func (c *Catalog) RemoveDevApp(id string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if app, ok := c.apps[id]; ok && app.Source == "developer" {
-		delete(c.apps, id)
+		if orig, ok := c.shadowed[id]; ok {
+			c.apps[id] = orig
+			delete(c.shadowed, id)
+		} else {
+			delete(c.apps, id)
+		}
 	}
 }
 

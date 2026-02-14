@@ -245,6 +245,12 @@ func (e *Engine) HasActiveInstallForApp(appID string) (*Install, bool) {
 	return e.store.HasActiveInstallForApp(appID)
 }
 
+// HasActiveDevInstallForApp checks if the given app has a non-uninstalled install
+// that was installed from a developer source.
+func (e *Engine) HasActiveDevInstallForApp(appID string) (*Install, bool) {
+	return e.store.HasActiveDevInstallForApp(appID)
+}
+
 // HasActiveJobForApp checks if the given app has a non-terminal install job.
 func (e *Engine) HasActiveJobForApp(appID string) (*Job, bool) {
 	return e.store.HasActiveJobForApp(appID)
@@ -273,11 +279,18 @@ func (e *Engine) StartInstall(req InstallRequest) (*Job, error) {
 		return nil, fmt.Errorf("app %q not found in catalog", req.AppID)
 	}
 
-	// Prevent duplicate installs
+	// Prevent duplicate installs — unless replace_existing is set.
 	if inst, exists := e.store.HasActiveInstallForApp(req.AppID); exists {
-		return nil, &ErrDuplicate{
-			Message:   fmt.Sprintf("app %q is already installed (CTID %d, status: %s)", req.AppID, inst.CTID, inst.Status),
-			InstallID: inst.ID,
+		if req.ReplaceExisting {
+			// Destroy the existing container completely (clean slate for test install)
+			if err := e.syncUninstall(inst); err != nil {
+				return nil, fmt.Errorf("replacing existing install: %w", err)
+			}
+		} else {
+			return nil, &ErrDuplicate{
+				Message:   fmt.Sprintf("app %q is already installed (CTID %d, status: %s)", req.AppID, inst.CTID, inst.Status),
+				InstallID: inst.ID,
+			}
 		}
 	}
 	if job, exists := e.store.HasActiveJobForApp(req.AppID); exists {
@@ -384,6 +397,7 @@ func (e *Engine) StartInstall(req InstallRequest) (*Job, error) {
 		OnBoot:       onboot,
 		Unprivileged: unprivileged,
 		ExtraTags:    req.ExtraTags,
+		AppSource:    app.Source,
 		Inputs:       req.Inputs,
 		Outputs:      make(map[string]string),
 		Devices:      nil, // Devices are now determined from GPUProfile, not directly from request
@@ -528,6 +542,48 @@ func (e *Engine) PurgeInstall(installID string) error {
 	}
 	_, err = e.store.db.Exec("DELETE FROM installs WHERE id=?", inst.ID)
 	return err
+}
+
+// syncUninstall stops and destroys an existing install synchronously.
+// Used by replace_existing flow — creates a clean slate for test installs.
+// All volumes are destroyed; the dev install script provisions from scratch.
+func (e *Engine) syncUninstall(inst *Install) error {
+	bgCtx := context.Background()
+	ctGone := inst.CTID <= 0
+
+	if !ctGone {
+		// Stop container
+		if err := e.cm.Stop(bgCtx, inst.CTID); err != nil {
+			if isContainerGone(err) {
+				ctGone = true
+			} else {
+				fmt.Fprintf(os.Stderr, "syncUninstall: stop CTID %d: %v\n", inst.CTID, err)
+			}
+		}
+	}
+
+	// Destroy container and all volumes (clean slate for test install)
+	if !ctGone {
+		var destroyErr error
+		for attempt := 0; attempt < 5; attempt++ {
+			if attempt > 0 {
+				time.Sleep(3 * time.Second)
+			}
+			destroyErr = e.cm.Destroy(bgCtx, inst.CTID, false)
+			if destroyErr == nil || isContainerGone(destroyErr) {
+				destroyErr = nil
+				break
+			}
+		}
+		if destroyErr != nil {
+			return fmt.Errorf("destroy CTID %d: %w", inst.CTID, destroyErr)
+		}
+	}
+
+	// Delete the old install record (the new install will create a fresh one)
+	e.store.db.Exec("DELETE FROM installs WHERE id=?", inst.ID)
+
+	return nil
 }
 
 // If keepVolumes is true, mount point volumes are detached before destroy and preserved.
@@ -900,6 +956,7 @@ func (e *Engine) Reinstall(installID string, req ReinstallRequest) (*Job, error)
 		State:       StateQueued,
 		AppID:       inst.AppID,
 		AppName:     inst.AppName,
+		AppSource:   app.Source,
 		Node:        e.cfg.NodeName,
 		Pool:        inst.Pool,
 		Storage:     storage,
@@ -1040,6 +1097,7 @@ func (e *Engine) Update(installID string, req ReinstallRequest) (*Job, error) {
 		State:       StateQueued,
 		AppID:       inst.AppID,
 		AppName:     inst.AppName,
+		AppSource:   app.Source,
 		Node:        e.cfg.NodeName,
 		Pool:        inst.Pool,
 		Storage:     storage,
@@ -1265,6 +1323,7 @@ func (e *Engine) EditInstall(installID string, req EditRequest) (*Job, error) {
 		State:         StateQueued,
 		AppID:         inst.AppID,
 		AppName:       inst.AppName,
+		AppSource:     app.Source,
 		Node:          e.cfg.NodeName,
 		Pool:          inst.Pool,
 		Storage:       inst.Storage, // storage cannot change (volumes tied to it)

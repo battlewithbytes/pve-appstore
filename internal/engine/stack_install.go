@@ -415,13 +415,15 @@ func (e *Engine) runStackInstall(bgCtx context.Context, job *Job, stackID, osTem
 		Tags:         buildTags("appstore;stack;managed", job.ExtraTags),
 	}
 
-	// Add mount points
+	// Add mount points — bind mounts applied post-creation via pct set
+	// (Proxmox API restricts "mount point type bind" to root@pam only)
+	var bindMounts []MountPointOption
 	for _, mp := range job.MountPoints {
 		mpStorage := mp.Storage
 		if mpStorage == "" {
 			mpStorage = job.Storage
 		}
-		opts.MountPoints = append(opts.MountPoints, MountPointOption{
+		opt := MountPointOption{
 			Index:     mp.Index,
 			Type:      mp.Type,
 			MountPath: mp.MountPath,
@@ -430,7 +432,12 @@ func (e *Engine) runStackInstall(bgCtx context.Context, job *Job, stackID, osTem
 			VolumeID:  mp.VolumeID,
 			HostPath:  mp.HostPath,
 			ReadOnly:  mp.ReadOnly,
-		})
+		}
+		if mp.Type == "bind" {
+			bindMounts = append(bindMounts, opt)
+		} else {
+			opts.MountPoints = append(opts.MountPoints, opt)
+		}
 	}
 
 	ctx.info("Creating container %d (template=%s, %d cores, %d MB, %d GB)", ctid, template, opts.Cores, opts.MemoryMB, opts.RootFSSize)
@@ -440,6 +447,24 @@ func (e *Engine) runStackInstall(bgCtx context.Context, job *Job, stackID, osTem
 		return
 	}
 	e.ctidMu.Unlock()
+
+	// Apply bind mounts post-creation via pct set (requires sudo/nsenter)
+	for _, bm := range bindMounts {
+		ctx.info("Bind mount mp%d: %s → %s", bm.Index, bm.HostPath, bm.MountPath)
+		if err := e.cm.MountHostPath(ctid, bm.Index, bm.HostPath, bm.MountPath, bm.ReadOnly); err != nil {
+			ctx.failJob("bind mount mp%d (%s): %v", bm.Index, bm.HostPath, err)
+			return
+		}
+	}
+
+	// For unprivileged containers, chown bind mount host paths
+	if job.Unprivileged && len(bindMounts) > 0 {
+		if err := chownBindMountsForUnprivileged(bindMounts, ctx.info, ctx.warn); err != nil {
+			ctx.failJob("chown bind mounts: %v", err)
+			return
+		}
+	}
+
 	ctx.info("Container %d created", ctid)
 
 	// Configure device passthrough via pct set (bypasses API root@pam restriction)
