@@ -459,6 +459,29 @@ func (e *Engine) runStackInstall(bgCtx context.Context, job *Job, stackID, osTem
 		}
 	}
 
+	// Apply extra LXC config lines from all manifests (e.g. TUN device, cgroup rules)
+	extraConfigSet := make(map[string]bool)
+	var extraConfig []string
+	for _, m := range manifests {
+		for _, line := range m.LXC.ExtraConfig {
+			if !extraConfigSet[line] {
+				extraConfigSet[line] = true
+				extraConfig = append(extraConfig, line)
+			}
+		}
+	}
+	if len(extraConfig) > 0 {
+		if err := ValidateExtraConfig(extraConfig); err != nil {
+			ctx.failJob("extra LXC config validation failed: %v", err)
+			return
+		}
+		ctx.info("Applying %d extra LXC config line(s) from manifests...", len(extraConfig))
+		if err := e.cm.AppendLXCConfig(ctid, extraConfig); err != nil {
+			ctx.failJob("applying extra LXC config: %v", err)
+			return
+		}
+	}
+
 	// Step 4: Start container
 	ctx.transition(StateStartContainer)
 	if err := e.cm.Start(bgCtx, ctid); err != nil {

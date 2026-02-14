@@ -80,7 +80,11 @@ class AppPermissions:
         normalized = os.path.normpath(path)
         for allowed in self._implicit_paths + self.paths:
             allowed_norm = os.path.normpath(allowed)
-            if normalized == allowed_norm or normalized.startswith(allowed_norm + "/"):
+            # Root "/" allows all absolute paths
+            if allowed_norm == "/":
+                if normalized.startswith("/"):
+                    return
+            elif normalized == allowed_norm or normalized.startswith(allowed_norm + "/"):
                 return
         raise PermissionDeniedError(
             f"path '{path}' is not under any allowed path: {self.paths}"

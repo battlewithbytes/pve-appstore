@@ -86,6 +86,19 @@ class TestPathPermissions:
         p = make_perms(paths=["/opt/myapp"])
         p.check_path("/opt/myapp/file.txt")
 
+    def test_root_path_allows_everything(self):
+        """Root '/' in permissions should allow all absolute paths."""
+        p = make_perms(paths=["/"])
+        p.check_path("/gluetun-entrypoint")
+        p.check_path("/etc/shadow")
+        p.check_path("/var/www/html/index.html")
+
+    def test_sibling_dir_not_matched(self):
+        """'/gluetun/' must not match '/gluetun-entrypoint'."""
+        p = make_perms(paths=["/gluetun/"])
+        with pytest.raises(PermissionDeniedError):
+            p.check_path("/gluetun-entrypoint")
+
 
 class TestServicePermissions:
     def test_allowed_service(self):
