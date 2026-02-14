@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { api } from './api'
 import { CodeEditor } from './CodeEditor'
 import type { DevApp, ValidationResult, ValidationMsg, PublishStatus } from './types'
-import { DevStatusBadge, Center, BackLink } from './App'
+import { DevStatusBadge, Center, BackLink } from './components/ui'
 
 function DevAppEditor({ id, requireAuth }: { id: string; requireAuth: (cb: () => void) => void }) {
   const [app, setApp] = useState<DevApp | null>(null)
