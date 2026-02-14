@@ -19,15 +19,18 @@ var defaultIconPNG []byte
 
 // DevAppMeta is the summary for listing dev apps.
 type DevAppMeta struct {
-	ID          string    `json:"id"`
-	Name        string    `json:"name"`
-	Version     string    `json:"version"`
-	Description string    `json:"description"`
-	Status      string    `json:"status"` // "draft", "validated", "deployed"
-	HasIcon     bool      `json:"has_icon"`
-	HasReadme   bool      `json:"has_readme"`
-	CreatedAt   time.Time `json:"created_at"`
-	UpdatedAt   time.Time `json:"updated_at"`
+	ID            string    `json:"id"`
+	Name          string    `json:"name"`
+	Version       string    `json:"version"`
+	Description   string    `json:"description"`
+	Status        string    `json:"status"` // "draft", "validated", "deployed"
+	HasIcon       bool      `json:"has_icon"`
+	HasReadme     bool      `json:"has_readme"`
+	GitHubBranch  string    `json:"github_branch,omitempty"`
+	GitHubPRURL   string    `json:"github_pr_url,omitempty"`
+	TestInstallID string    `json:"test_install_id,omitempty"`
+	CreatedAt     time.Time `json:"created_at"`
+	UpdatedAt     time.Time `json:"updated_at"`
 }
 
 // DevApp is the full dev app with file contents.
@@ -271,30 +274,62 @@ func (d *DevStore) readMeta(id string) (*DevAppMeta, error) {
 
 	// Check status file
 	status := "draft"
+	var githubBranch, githubPRURL, testInstallID string
 	if statusData, err := os.ReadFile(filepath.Join(appDir, ".devstatus")); err == nil {
-		var s struct{ Status string `json:"status"` }
-		if json.Unmarshal(statusData, &s) == nil && s.Status != "" {
-			status = s.Status
+		var s struct {
+			Status        string `json:"status"`
+			GitHubBranch  string `json:"github_branch"`
+			GitHubPRURL   string `json:"github_pr_url"`
+			TestInstallID string `json:"test_install_id"`
+		}
+		if json.Unmarshal(statusData, &s) == nil {
+			if s.Status != "" {
+				status = s.Status
+			}
+			githubBranch = s.GitHubBranch
+			githubPRURL = s.GitHubPRURL
+			testInstallID = s.TestInstallID
 		}
 	}
 
 	return &DevAppMeta{
-		ID:          manifest.ID,
-		Name:        manifest.Name,
-		Version:     manifest.Version,
-		Description: manifest.Description,
-		Status:      status,
-		HasIcon:     hasIcon == nil,
-		HasReadme:   hasReadme == nil,
-		CreatedAt:   createdAt,
-		UpdatedAt:   info.ModTime(),
+		ID:            manifest.ID,
+		Name:          manifest.Name,
+		Version:       manifest.Version,
+		Description:   manifest.Description,
+		Status:        status,
+		HasIcon:       hasIcon == nil,
+		HasReadme:     hasReadme == nil,
+		GitHubBranch:  githubBranch,
+		GitHubPRURL:   githubPRURL,
+		TestInstallID: testInstallID,
+		CreatedAt:     createdAt,
+		UpdatedAt:     info.ModTime(),
 	}, nil
 }
 
-// SetStatus writes the dev app status file.
+// SetStatus writes the dev app status file, preserving other fields.
 func (d *DevStore) SetStatus(id, status string) error {
-	data, _ := json.Marshal(map[string]string{"status": status})
-	return os.WriteFile(filepath.Join(d.baseDir, id, ".devstatus"), data, 0644)
+	return d.SetGitHubMeta(id, map[string]string{"status": status})
+}
+
+// SetGitHubMeta merges key-value pairs into the .devstatus JSON file.
+func (d *DevStore) SetGitHubMeta(id string, meta map[string]string) error {
+	statusPath := filepath.Join(d.baseDir, id, ".devstatus")
+
+	// Read existing
+	existing := make(map[string]string)
+	if data, err := os.ReadFile(statusPath); err == nil {
+		json.Unmarshal(data, &existing)
+	}
+
+	// Merge
+	for k, v := range meta {
+		existing[k] = v
+	}
+
+	data, _ := json.Marshal(existing)
+	return os.WriteFile(statusPath, data, 0644)
 }
 
 // IsDeployed returns true if the dev app is currently deployed to the catalog.

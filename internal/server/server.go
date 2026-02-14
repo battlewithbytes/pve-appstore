@@ -27,12 +27,13 @@ type Server struct {
 	engineInstallSvc EngineInstallService
 	engineStackSvc   EngineStackService
 	engineConfigSvc  EngineConfigService
-	devStore         *devmode.DevStore
-	devSvc           DevService
-	http             *http.Server
-	spa              fs.FS // embedded or disk-based SPA assets
-	storageMetas     []engine.StorageInfo
-	allowedPaths     []string // browsable filesystem roots from configured storages
+	devStore    *devmode.DevStore
+	devSvc      DevService
+	githubStore GitHubStore
+	http        *http.Server
+	spa               fs.FS // embedded or disk-based SPA assets
+	storageMetas      []engine.StorageInfo
+	allowedPaths      []string // browsable filesystem roots from configured storages
 }
 
 // Option configures the server.
@@ -60,17 +61,20 @@ func (s *Server) isPathAllowed(requested string) bool {
 // New creates a new Server.
 func New(cfg *config.Config, cat *catalog.Catalog, eng *engine.Engine, spaFS fs.FS, opts ...Option) *Server {
 	s := &Server{
-		cfg:        cfg,
-		configPath: config.DefaultConfigPath,
-		catalog:    cat,
-		catalogSvc: NewCatalogService(cat),
-		engine:     eng,
-		spa:        spaFS,
+		cfg:               cfg,
+		configPath:        config.DefaultConfigPath,
+		catalog:           cat,
+		catalogSvc:        NewCatalogService(cat),
+		engine:            eng,
+		spa:               spaFS,
 	}
 	engineSvc := NewEngineService(eng)
 	s.engineInstallSvc = engineSvc
 	s.engineStackSvc = engineSvc
 	s.engineConfigSvc = engineSvc
+	if eng != nil {
+		s.githubStore = eng
+	}
 	for _, opt := range opts {
 		opt(s)
 	}
@@ -167,6 +171,13 @@ func New(cfg *config.Config, cat *catalog.Catalog, eng *engine.Engine, spaFS fs.
 	mux.HandleFunc("POST /api/dev/import/dockerfile", s.withDevMode(s.withAuth(s.handleDevImportDockerfile)))
 	mux.HandleFunc("POST /api/dev/import/dockerfile/stream", s.withDevMode(s.withAuth(s.handleDevImportDockerfileStream)))
 	mux.HandleFunc("GET /api/dev/templates", s.withDevMode(s.handleDevListTemplates))
+
+	// API routes — developer GitHub integration
+	mux.HandleFunc("GET /api/dev/github/status", s.withDevMode(s.withAuth(s.handleDevGitHubStatus)))
+	mux.HandleFunc("POST /api/dev/github/connect", s.withDevMode(s.withAuth(s.handleDevGitHubConnect)))
+	mux.HandleFunc("POST /api/dev/github/disconnect", s.withDevMode(s.withAuth(s.handleDevGitHubDisconnect)))
+	mux.HandleFunc("GET /api/dev/apps/{id}/publish-status", s.withDevMode(s.withAuth(s.handleDevPublishStatus)))
+	mux.HandleFunc("POST /api/dev/apps/{id}/publish", s.withDevMode(s.withAuth(s.handleDevPublish)))
 
 	// API routes — filesystem browser
 	mux.HandleFunc("GET /api/browse/paths", s.withAuth(s.handleBrowsePaths))

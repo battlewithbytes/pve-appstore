@@ -20,6 +20,7 @@ type DevService interface {
 	ReadFile(id, relPath string) ([]byte, error)
 	Delete(id string) error
 	SetStatus(id, status string) error
+	SetGitHubMeta(id string, meta map[string]string) error
 	EnsureIcon(id string)
 }
 
@@ -61,4 +62,7 @@ func (s *defaultDevService) ReadFile(id, relPath string) ([]byte, error) {
 }
 func (s *defaultDevService) Delete(id string) error            { return s.store.Delete(id) }
 func (s *defaultDevService) SetStatus(id, status string) error { return s.store.SetStatus(id, status) }
-func (s *defaultDevService) EnsureIcon(id string)              { s.store.EnsureIcon(id) }
+func (s *defaultDevService) SetGitHubMeta(id string, meta map[string]string) error {
+	return s.store.SetGitHubMeta(id, meta)
+}
+func (s *defaultDevService) EnsureIcon(id string) { s.store.EnsureIcon(id) }

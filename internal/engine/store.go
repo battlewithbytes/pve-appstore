@@ -121,6 +121,17 @@ func (s *Store) migrate() error {
 		return err
 	}
 
+	// GitHub state table for developer mode OAuth
+	_, err = s.db.Exec(`
+		CREATE TABLE IF NOT EXISTS github_state (
+			key   TEXT PRIMARY KEY,
+			value TEXT NOT NULL
+		)
+	`)
+	if err != nil {
+		return err
+	}
+
 	// Idempotent migrations for enriched install fields
 	alterStmts := []string{
 		"ALTER TABLE installs ADD COLUMN app_version TEXT NOT NULL DEFAULT ''",
@@ -698,6 +709,30 @@ func scanStackRow(row *sql.Row) (*Stack, error) {
 	json.Unmarshal([]byte(envVarsJSON), &stack.EnvVars)
 	stack.CreatedAt, _ = time.Parse(time.RFC3339, createdAt)
 	return &stack, nil
+}
+
+// --- GitHub State ---
+
+// SetGitHubState stores a key-value pair in the github_state table.
+func (s *Store) SetGitHubState(key, value string) error {
+	_, err := s.db.Exec(`INSERT OR REPLACE INTO github_state (key, value) VALUES (?, ?)`, key, value)
+	return err
+}
+
+// GetGitHubState retrieves a value from the github_state table.
+func (s *Store) GetGitHubState(key string) (string, error) {
+	var value string
+	err := s.db.QueryRow(`SELECT value FROM github_state WHERE key=?`, key).Scan(&value)
+	if err == sql.ErrNoRows {
+		return "", nil
+	}
+	return value, err
+}
+
+// DeleteGitHubState removes a key from the github_state table.
+func (s *Store) DeleteGitHubState(key string) error {
+	_, err := s.db.Exec(`DELETE FROM github_state WHERE key=?`, key)
+	return err
 }
 
 func scanStackRows(rows *sql.Rows) (*Stack, error) {

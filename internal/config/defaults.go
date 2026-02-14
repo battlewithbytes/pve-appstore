@@ -1,5 +1,10 @@
 package config
 
+import (
+	"fmt"
+	"strings"
+)
+
 const (
 	// Filesystem paths
 	DefaultConfigPath = "/etc/pve-appstore/config.yml"
@@ -38,3 +43,23 @@ const (
 	RefreshWeekly = "weekly"
 	RefreshManual = "manual"
 )
+
+// ParseGitHubRepo extracts owner and repo from a GitHub URL.
+// Supports "https://github.com/owner/repo.git" and "https://github.com/owner/repo".
+func ParseGitHubRepo(repoURL string) (owner, repo string, err error) {
+	u := strings.TrimSuffix(repoURL, ".git")
+
+	// Remove scheme prefix
+	for _, prefix := range []string{"https://github.com/", "http://github.com/"} {
+		if strings.HasPrefix(u, prefix) {
+			u = strings.TrimPrefix(u, prefix)
+			parts := strings.SplitN(u, "/", 3)
+			if len(parts) < 2 || parts[0] == "" || parts[1] == "" {
+				return "", "", fmt.Errorf("invalid GitHub URL: %s", repoURL)
+			}
+			return parts[0], parts[1], nil
+		}
+	}
+
+	return "", "", fmt.Errorf("not a GitHub URL: %s", repoURL)
+}

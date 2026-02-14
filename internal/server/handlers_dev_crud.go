@@ -88,6 +88,9 @@ func (s *Server) handleDevForkApp(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// If GitHub is connected, also fork the catalog repo on GitHub
+	s.tryGitHubFork(req.NewID)
+
 	app, err := s.devSvc.Get(req.NewID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())

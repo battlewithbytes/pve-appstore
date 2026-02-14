@@ -7,7 +7,7 @@ import Markdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { api } from './api'
 import { CodeEditor } from './CodeEditor'
-import type { AppSummary, AppDetail, AppInput, HealthResponse, Job, LogEntry, InstallDetail, InstallListItem, ContainerLiveStatus, ConfigDefaultsResponse, MountPoint, MountInfo, BrowseEntry, ExportResponse, ApplyPreviewResponse, InstallRequest, EditRequest, ReconfigureRequest, DevicePassthrough, AppStatusResponse, StackListItem, StackDetail, StackCreateRequest, StackValidateResponse, StackApp, Settings, SettingsUpdate, DevAppMeta, DevApp, DevTemplate, ValidationResult, ValidationMsg, DockerfileChainEvent } from './types'
+import type { AppSummary, AppDetail, AppInput, HealthResponse, Job, LogEntry, InstallDetail, InstallListItem, ContainerLiveStatus, ConfigDefaultsResponse, MountPoint, MountInfo, BrowseEntry, ExportResponse, ApplyPreviewResponse, InstallRequest, EditRequest, ReconfigureRequest, DevicePassthrough, AppStatusResponse, StackListItem, StackDetail, StackCreateRequest, StackValidateResponse, StackApp, Settings, SettingsUpdate, DevAppMeta, DevApp, DevTemplate, ValidationResult, ValidationMsg, DockerfileChainEvent, GitHubStatus, PublishStatus } from './types'
 
 function useHash() {
   const [hash, setHash] = useState(window.location.hash)
@@ -3961,8 +3961,19 @@ function SettingsView({ requireAuth }: { requireAuth: (cb: () => void) => void }
   const [settings, setSettings] = useState<Settings | null>(null)
   const [saving, setSaving] = useState(false)
   const [msg, setMsg] = useState('')
+  const [activeTab, setActiveTab] = useState('general')
+  const [ghStatus, setGhStatus] = useState<GitHubStatus | null>(null)
+  const [ghLoading, setGhLoading] = useState(false)
+  const [ghToken, setGhToken] = useState('')
 
   useEffect(() => { api.settings().then(setSettings).catch(() => {}) }, [])
+
+  // Fetch GitHub status when on developer tab
+  useEffect(() => {
+    if (activeTab === 'developer' && settings?.developer.enabled) {
+      api.devGitHubStatus().then(setGhStatus).catch(() => {})
+    }
+  }, [activeTab, settings?.developer.enabled])
 
   const save = (update: SettingsUpdate) => {
     requireAuth(async () => {
@@ -3980,110 +3991,241 @@ function SettingsView({ requireAuth }: { requireAuth: (cb: () => void) => void }
     })
   }
 
+  const connectGitHub = () => {
+    const token = ghToken.trim()
+    if (!token) {
+      setMsg('Error: Enter a GitHub Personal Access Token')
+      return
+    }
+    requireAuth(async () => {
+      setGhLoading(true)
+      try {
+        const result = await api.devGitHubConnect(token)
+        setGhStatus({ connected: true, user: result.user })
+        setGhToken('')
+        setMsg('GitHub connected successfully!')
+        setTimeout(() => setMsg(''), 3000)
+      } catch (e: unknown) {
+        setMsg(`Error: ${e instanceof Error ? e.message : 'Failed to connect'}`)
+      }
+      setGhLoading(false)
+    })
+  }
+
+  const disconnectGitHub = () => {
+    requireAuth(async () => {
+      try {
+        await api.devGitHubDisconnect()
+        setGhStatus({ connected: false })
+        setMsg('GitHub disconnected')
+        setTimeout(() => setMsg(''), 2000)
+      } catch (e: unknown) {
+        setMsg(`Error: ${e instanceof Error ? e.message : 'Failed'}`)
+      }
+    })
+  }
+
   if (!settings) return <Center className="py-16"><span className="text-text-muted font-mono">Loading settings...</span></Center>
 
+  const tabs = [
+    { id: 'general', label: 'General' },
+    { id: 'developer', label: 'Developer' },
+    { id: 'catalog', label: 'Catalog' },
+    { id: 'gpu', label: 'GPU' },
+    { id: 'service', label: 'Service' },
+  ]
+
   return (
-    <div className="space-y-4">
-      <div className="flex items-center justify-between">
+    <div>
+      <div className="flex items-center justify-between mb-4">
         <h2 className="text-xl font-bold text-text-primary font-mono">Settings</h2>
         {msg && <span className={`text-sm font-mono ${msg.startsWith('Error') ? 'text-red-400' : 'text-primary'}`}>{msg}</span>}
       </div>
 
-      {/* Developer Mode */}
-      <InfoCard title="Developer Mode">
-        <div className="flex items-center justify-between">
-          <div>
-            <p className="text-sm text-text-secondary">Enable developer mode to create, edit, and test custom apps.</p>
-            <p className="text-xs text-text-muted mt-1">When enabled, a Developer tab appears in the navigation bar.</p>
-          </div>
-          <button
-            onClick={() => save({ developer: { enabled: !settings.developer.enabled } })}
-            disabled={saving}
-            className={`relative w-12 h-6 rounded-full transition-colors ${settings.developer.enabled ? 'bg-primary' : 'bg-border'} cursor-pointer`}
-          >
-            <span className={`absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white transition-transform ${settings.developer.enabled ? 'translate-x-6' : ''}`} />
-          </button>
-        </div>
-      </InfoCard>
-
-      {/* Resource Defaults */}
-      <InfoCard title="Resource Defaults">
-        <div className="grid grid-cols-3 gap-4">
-          <SettingsNumberField label="CPU Cores" value={settings.defaults.cores} onSave={(v) => save({ defaults: { cores: v } })} min={1} max={64} />
-          <SettingsNumberField label="Memory (MB)" value={settings.defaults.memory_mb} onSave={(v) => save({ defaults: { memory_mb: v } })} min={128} max={131072} step={128} />
-          <SettingsNumberField label="Disk (GB)" value={settings.defaults.disk_gb} onSave={(v) => save({ defaults: { disk_gb: v } })} min={1} max={10000} />
-        </div>
-      </InfoCard>
-
-      {/* Storage & Network */}
-      <InfoCard title="Storage & Network">
-        <div className="grid grid-cols-2 gap-4">
-          <div>
-            <label className="text-xs text-text-muted font-mono uppercase">Storages</label>
-            <div className="flex flex-wrap gap-1 mt-1">{settings.storages.map(s => <Badge key={s}>{s}</Badge>)}</div>
-          </div>
-          <div>
-            <label className="text-xs text-text-muted font-mono uppercase">Bridges</label>
-            <div className="flex flex-wrap gap-1 mt-1">{settings.bridges.map(b => <Badge key={b}>{b}</Badge>)}</div>
+      <div className="flex gap-4">
+        {/* Vertical tabs */}
+        <div className="w-40 shrink-0">
+          <div className="border border-border rounded-lg overflow-hidden">
+            {tabs.map(tab => (
+              <button
+                key={tab.id}
+                onClick={() => setActiveTab(tab.id)}
+                className={`w-full text-left px-4 py-2.5 text-sm font-mono cursor-pointer transition-colors border-b border-border last:border-b-0 ${activeTab === tab.id ? 'bg-primary/10 text-primary border-l-2 border-l-primary' : 'text-text-secondary hover:text-text-primary hover:bg-white/5'}`}
+              >
+                {tab.label}
+              </button>
+            ))}
           </div>
         </div>
-        <p className="text-xs text-text-muted mt-3">Storages and bridges are configured via the TUI installer.</p>
-      </InfoCard>
 
-      {/* Catalog */}
-      <InfoCard title="Catalog">
-        <div className="flex items-center gap-4">
-          <label className="text-xs text-text-muted font-mono uppercase w-20">Refresh</label>
-          <select
-            value={settings.catalog.refresh}
-            onChange={(e) => save({ catalog: { refresh: e.target.value } })}
-            className="bg-bg-primary border border-border rounded px-3 py-1.5 text-sm font-mono text-text-primary"
-          >
-            <option value="daily">Daily</option>
-            <option value="weekly">Weekly</option>
-            <option value="manual">Manual</option>
-          </select>
-        </div>
-      </InfoCard>
+        {/* Tab content */}
+        <div className="flex-1 space-y-4">
+          {activeTab === 'general' && (
+            <>
+              <InfoCard title="Resource Defaults">
+                <div className="grid grid-cols-3 gap-4">
+                  <SettingsNumberField label="CPU Cores" value={settings.defaults.cores} onSave={(v) => save({ defaults: { cores: v } })} min={1} max={64} />
+                  <SettingsNumberField label="Memory (MB)" value={settings.defaults.memory_mb} onSave={(v) => save({ defaults: { memory_mb: v } })} min={128} max={131072} step={128} />
+                  <SettingsNumberField label="Disk (GB)" value={settings.defaults.disk_gb} onSave={(v) => save({ defaults: { disk_gb: v } })} min={1} max={10000} />
+                </div>
+              </InfoCard>
 
-      {/* GPU */}
-      <InfoCard title="GPU Passthrough">
-        <div className="flex items-center justify-between mb-3">
-          <div>
-            <p className="text-sm text-text-secondary">Enable GPU passthrough for containers.</p>
-          </div>
-          <button
-            onClick={() => save({ gpu: { enabled: !settings.gpu.enabled, policy: settings.gpu.policy } })}
-            disabled={saving}
-            className={`relative w-12 h-6 rounded-full transition-colors ${settings.gpu.enabled ? 'bg-primary' : 'bg-border'} cursor-pointer`}
-          >
-            <span className={`absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white transition-transform ${settings.gpu.enabled ? 'translate-x-6' : ''}`} />
-          </button>
-        </div>
-        {settings.gpu.enabled && (
-          <div className="flex items-center gap-4">
-            <label className="text-xs text-text-muted font-mono uppercase w-20">Policy</label>
-            <select
-              value={settings.gpu.policy}
-              onChange={(e) => save({ gpu: { enabled: settings.gpu.enabled, policy: e.target.value } })}
-              className="bg-bg-primary border border-border rounded px-3 py-1.5 text-sm font-mono text-text-primary"
-            >
-              <option value="none">None</option>
-              <option value="allow">Allow</option>
-              <option value="allowlist">Allowlist</option>
-            </select>
-          </div>
-        )}
-      </InfoCard>
+              <InfoCard title="Storage & Network">
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="text-xs text-text-muted font-mono uppercase">Storages</label>
+                    <div className="flex flex-wrap gap-1 mt-1">{settings.storages.map(s => <Badge key={s}>{s}</Badge>)}</div>
+                  </div>
+                  <div>
+                    <label className="text-xs text-text-muted font-mono uppercase">Bridges</label>
+                    <div className="flex flex-wrap gap-1 mt-1">{settings.bridges.map(b => <Badge key={b}>{b}</Badge>)}</div>
+                  </div>
+                </div>
+                <p className="text-xs text-text-muted mt-3">Storages and bridges are configured via the TUI installer.</p>
+              </InfoCard>
+            </>
+          )}
 
-      {/* Service Info */}
-      <InfoCard title="Service">
-        <div className="grid grid-cols-2 gap-4 text-sm font-mono">
-          <div><span className="text-text-muted">Port:</span> <span className="text-text-primary">{settings.service.port}</span></div>
-          <div><span className="text-text-muted">Auth:</span> <span className="text-text-primary">{settings.auth.mode}</span></div>
+          {activeTab === 'developer' && (
+            <>
+              <InfoCard title="Developer Mode">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-sm text-text-secondary">Enable developer mode to create, edit, and test custom apps.</p>
+                    <p className="text-xs text-text-muted mt-1">When enabled, a Developer tab appears in the navigation bar.</p>
+                  </div>
+                  <button
+                    onClick={() => save({ developer: { enabled: !settings.developer.enabled } })}
+                    disabled={saving}
+                    className={`relative w-12 h-6 rounded-full transition-colors ${settings.developer.enabled ? 'bg-primary' : 'bg-border'} cursor-pointer`}
+                  >
+                    <span className={`absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white transition-transform ${settings.developer.enabled ? 'translate-x-6' : ''}`} />
+                  </button>
+                </div>
+              </InfoCard>
+
+              {settings.developer.enabled && (
+                <>
+                  <InfoCard title="GitHub Connection">
+                    {ghStatus?.connected ? (
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-3">
+                          {ghStatus.user?.avatar_url && (
+                            <img src={ghStatus.user.avatar_url} alt="" className="w-8 h-8 rounded-full" />
+                          )}
+                          <div>
+                            <span className="text-sm font-mono text-text-primary">{ghStatus.user?.login || 'Connected'}</span>
+                            {ghStatus.user?.name && <span className="text-xs text-text-muted ml-2">({ghStatus.user.name})</span>}
+                            {ghStatus.fork && (
+                              <p className="text-xs text-text-muted mt-0.5">Fork: {ghStatus.fork.full_name}</p>
+                            )}
+                          </div>
+                        </div>
+                        <button
+                          onClick={disconnectGitHub}
+                          className="bg-transparent border border-red-500/50 rounded px-3 py-1.5 text-xs font-mono text-red-400 cursor-pointer hover:border-red-500 hover:bg-red-500/10 transition-colors"
+                        >Disconnect</button>
+                      </div>
+                    ) : (
+                      <div className="space-y-3">
+                        <p className="text-sm text-text-secondary">Connect your GitHub account to submit apps via pull request.</p>
+                        <div>
+                          <label className="text-xs text-text-muted font-mono uppercase block mb-1">Personal Access Token</label>
+                          <input
+                            type="password"
+                            value={ghToken}
+                            onChange={(e) => setGhToken(e.target.value)}
+                            placeholder="ghp_... or github_pat_..."
+                            className="w-full bg-bg-primary border border-border rounded px-3 py-1.5 text-sm font-mono text-text-primary outline-none focus:border-primary"
+                          />
+                          <div className="mt-1.5 space-y-1.5">
+                            <p className="text-xs text-text-muted">
+                              <a href="https://github.com/settings/tokens/new?scopes=public_repo,read:user&description=PVE+App+Store" target="_blank" rel="noreferrer" className="text-primary hover:underline">
+                                Create a classic token
+                              </a>
+                              {' '}with exactly these scopes:
+                            </p>
+                            <div className="flex gap-2">
+                              <span className="text-xs font-mono bg-bg-primary border border-border rounded px-1.5 py-0.5 text-text-primary">public_repo</span>
+                              <span className="text-xs font-mono bg-bg-primary border border-border rounded px-1.5 py-0.5 text-text-primary">read:user</span>
+                            </div>
+                            <p className="text-xs text-yellow-500/80">
+                              Do not grant additional scopes. <span className="font-mono">public_repo</span> allows forking, pushing, and creating PRs on public repos only. <span className="font-mono">read:user</span> provides read-only access to your profile. Your token is encrypted (AES-256-GCM) and stored locally in the SQLite database — it is never sent anywhere except the GitHub API.
+                            </p>
+                          </div>
+                        </div>
+                        <button
+                          onClick={connectGitHub}
+                          disabled={ghLoading || !ghToken.trim()}
+                          className="bg-primary text-bg-primary rounded px-4 py-1.5 text-xs font-mono font-bold cursor-pointer hover:opacity-90 disabled:opacity-50"
+                        >{ghLoading ? 'Connecting...' : 'Connect GitHub'}</button>
+                      </div>
+                    )}
+                  </InfoCard>
+                </>
+              )}
+            </>
+          )}
+
+          {activeTab === 'catalog' && (
+            <InfoCard title="Catalog">
+              <div className="flex items-center gap-4">
+                <label className="text-xs text-text-muted font-mono uppercase w-20">Refresh</label>
+                <select
+                  value={settings.catalog.refresh}
+                  onChange={(e) => save({ catalog: { refresh: e.target.value } })}
+                  className="bg-bg-primary border border-border rounded px-3 py-1.5 text-sm font-mono text-text-primary"
+                >
+                  <option value="daily">Daily</option>
+                  <option value="weekly">Weekly</option>
+                  <option value="manual">Manual</option>
+                </select>
+              </div>
+            </InfoCard>
+          )}
+
+          {activeTab === 'gpu' && (
+            <InfoCard title="GPU Passthrough">
+              <div className="flex items-center justify-between mb-3">
+                <div>
+                  <p className="text-sm text-text-secondary">Enable GPU passthrough for containers.</p>
+                </div>
+                <button
+                  onClick={() => save({ gpu: { enabled: !settings.gpu.enabled, policy: settings.gpu.policy } })}
+                  disabled={saving}
+                  className={`relative w-12 h-6 rounded-full transition-colors ${settings.gpu.enabled ? 'bg-primary' : 'bg-border'} cursor-pointer`}
+                >
+                  <span className={`absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white transition-transform ${settings.gpu.enabled ? 'translate-x-6' : ''}`} />
+                </button>
+              </div>
+              {settings.gpu.enabled && (
+                <div className="flex items-center gap-4">
+                  <label className="text-xs text-text-muted font-mono uppercase w-20">Policy</label>
+                  <select
+                    value={settings.gpu.policy}
+                    onChange={(e) => save({ gpu: { enabled: settings.gpu.enabled, policy: e.target.value } })}
+                    className="bg-bg-primary border border-border rounded px-3 py-1.5 text-sm font-mono text-text-primary"
+                  >
+                    <option value="none">None</option>
+                    <option value="allow">Allow</option>
+                    <option value="allowlist">Allowlist</option>
+                  </select>
+                </div>
+              )}
+            </InfoCard>
+          )}
+
+          {activeTab === 'service' && (
+            <InfoCard title="Service">
+              <div className="grid grid-cols-2 gap-4 text-sm font-mono">
+                <div><span className="text-text-muted">Port:</span> <span className="text-text-primary">{settings.service.port}</span></div>
+                <div><span className="text-text-muted">Auth:</span> <span className="text-text-primary">{settings.auth.mode}</span></div>
+              </div>
+              <p className="text-xs text-text-muted mt-3">Port and auth mode are configured via the TUI installer.</p>
+            </InfoCard>
+          )}
         </div>
-        <p className="text-xs text-text-muted mt-3">Port and auth mode are configured via the TUI installer.</p>
-      </InfoCard>
+      </div>
     </div>
   )
 }
@@ -4875,16 +5017,35 @@ function SdkReferencePanel() {
 }
 
 function DevSubmitDialog({ id, appName, onClose, requireAuth }: { id: string; appName: string; onClose: () => void; requireAuth: (cb: () => void) => void }) {
-  const [validation, setValidation] = useState<ValidationResult | null>(null)
-  const [validating, setValidating] = useState(true)
+  const [publishStatus, setPublishStatus] = useState<PublishStatus | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [publishing, setPublishing] = useState(false)
+  const [prUrl, setPrUrl] = useState('')
+  const [error, setError] = useState('')
 
   useEffect(() => {
-    api.devValidate(id).then(v => { setValidation(v); setValidating(false) }).catch(() => setValidating(false))
+    api.devPublishStatus(id)
+      .then(s => { setPublishStatus(s); if (s.pr_url) setPrUrl(s.pr_url) })
+      .catch(() => {})
+      .finally(() => setLoading(false))
   }, [id])
 
-  const handleSubmit = () => {
+  const handlePublish = () => {
+    requireAuth(async () => {
+      setPublishing(true)
+      setError('')
+      try {
+        const result = await api.devPublish(id)
+        setPrUrl(result.pr_url)
+      } catch (e: unknown) {
+        setError(e instanceof Error ? e.message : 'Publish failed')
+      }
+      setPublishing(false)
+    })
+  }
+
+  const handleExportFallback = () => {
     requireAuth(() => {
-      // Download zip
       const form = document.createElement('form')
       form.method = 'POST'
       form.action = api.devExportUrl(id)
@@ -4893,66 +5054,83 @@ function DevSubmitDialog({ id, appName, onClose, requireAuth }: { id: string; ap
       form.submit()
       document.body.removeChild(form)
 
-      // Open GitHub issue
       const title = encodeURIComponent(`New App: ${appName}`)
-      const body = encodeURIComponent(`## App Submission\n\n**App ID:** ${id}\n**App Name:** ${appName}\n\nPlease attach the exported zip file to this issue.\n\n### Checklist\n- [ ] App has been tested locally\n- [ ] Manifest validates without errors\n- [ ] README is included\n- [ ] Icon is included\n`)
+      const body = encodeURIComponent(`## App Submission\n\n**App ID:** ${id}\n**App Name:** ${appName}\n\nPlease attach the exported zip file to this issue.`)
       window.open(`https://github.com/battlewithbytes/pve-appstore-catalog/issues/new?title=${title}&body=${body}`, '_blank')
       onClose()
     })
   }
 
-  const allChecksPassed = validation && validation.valid && validation.checklist.every(c => c.passed)
+  const checkLabels: Record<string, string> = {
+    github_connected: 'GitHub connected',
+    validation_passed: 'Manifest validates',
+    test_installed: 'Test install exists',
+    fork_exists: 'Catalog fork exists',
+  }
 
   return (
     <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50" onClick={onClose}>
       <div className="bg-bg-card border border-border rounded-lg p-6 w-full max-w-lg" onClick={(e) => e.stopPropagation()}>
         <h3 className="text-lg font-bold text-text-primary font-mono mb-4">Submit to Catalog</h3>
 
-        {validating ? (
-          <p className="text-text-muted font-mono text-sm">Validating app...</p>
-        ) : validation ? (
+        {prUrl ? (
           <div>
-            <div className="mb-4">
-              <span className={`text-sm font-mono font-bold ${validation.valid ? 'text-primary' : 'text-red-400'}`}>
-                {validation.valid ? 'Validation passed' : 'Validation failed'}
-              </span>
-              {validation.errors.length > 0 && (
-                <div className="mt-2">
-                  {validation.errors.map((e, i) => (
-                    <p key={i} className="text-xs text-red-300 font-mono">{e.message}</p>
-                  ))}
-                </div>
-              )}
+            <div className="flex items-center gap-2 mb-4">
+              <span className="text-primary text-lg">[OK]</span>
+              <span className="text-sm font-mono text-text-primary">Pull request created!</span>
             </div>
-
-            <div className="mb-4">
-              <span className="text-xs text-text-muted font-mono uppercase">Submission Checklist</span>
-              {validation.checklist.map((c, i) => (
-                <div key={i} className="flex items-center gap-2 py-0.5 text-xs font-mono">
-                  <span className={c.passed ? 'text-primary' : 'text-red-400'}>{c.passed ? '[x]' : '[ ]'}</span>
-                  <span className="text-text-secondary">{c.label}</span>
-                </div>
-              ))}
+            <a href={prUrl} target="_blank" rel="noopener noreferrer" className="text-sm font-mono text-primary underline break-all">{prUrl}</a>
+            <div className="flex justify-end mt-4">
+              <button onClick={onClose} className="bg-primary text-bg-primary rounded px-4 py-2 text-sm font-mono font-bold cursor-pointer hover:opacity-90">Done</button>
             </div>
-
-            <p className="text-xs text-text-muted mb-4">
-              Submitting will export a zip file and open a GitHub issue where you can attach it.
-            </p>
           </div>
+        ) : loading ? (
+          <p className="text-text-muted font-mono text-sm">Checking publish readiness...</p>
         ) : (
-          <p className="text-red-400 font-mono text-sm">Could not validate app.</p>
-        )}
+          <div>
+            {publishStatus && (
+              <div className="mb-4">
+                <span className="text-xs text-text-muted font-mono uppercase mb-2 block">Publish Checklist</span>
+                {Object.entries(publishStatus.checks).map(([key, passed]) => (
+                  <div key={key} className="flex items-center gap-2 py-0.5 text-xs font-mono">
+                    <span className={passed ? 'text-primary' : 'text-red-400'}>{passed ? '[x]' : '[ ]'}</span>
+                    <span className={passed ? 'text-text-secondary' : 'text-text-muted'}>{checkLabels[key] || key}</span>
+                  </div>
+                ))}
+              </div>
+            )}
 
-        <div className="flex justify-end gap-2">
-          <button onClick={onClose} className="bg-transparent border border-border rounded px-4 py-2 text-sm font-mono text-text-secondary cursor-pointer hover:border-primary transition-colors">Cancel</button>
-          <button
-            onClick={handleSubmit}
-            disabled={validating || !validation?.valid}
-            className="bg-primary text-bg-primary rounded px-4 py-2 text-sm font-mono font-bold cursor-pointer hover:opacity-90 disabled:opacity-50"
-          >
-            {allChecksPassed ? 'Submit' : 'Submit Anyway'}
-          </button>
-        </div>
+            {publishStatus?.checks.github_connected ? (
+              <div>
+                <p className="text-xs text-text-muted mb-4">
+                  This will push your app files to a GitHub fork and open a pull request on the official catalog repository.
+                </p>
+                {error && <p className="text-xs text-red-400 font-mono mb-3">{error}</p>}
+                <div className="flex justify-end gap-2">
+                  <button onClick={onClose} className="bg-transparent border border-border rounded px-4 py-2 text-sm font-mono text-text-secondary cursor-pointer hover:border-primary transition-colors">Cancel</button>
+                  <button
+                    onClick={handlePublish}
+                    disabled={publishing || !publishStatus?.ready}
+                    className="bg-primary text-bg-primary rounded px-4 py-2 text-sm font-mono font-bold cursor-pointer hover:opacity-90 disabled:opacity-50"
+                  >
+                    {publishing ? 'Publishing...' : 'Submit Pull Request'}
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div>
+                <p className="text-xs text-text-muted mb-2">
+                  GitHub is not connected. Connect GitHub in Settings to submit via pull request, or use the manual export method below.
+                </p>
+                <div className="flex justify-end gap-2">
+                  <button onClick={onClose} className="bg-transparent border border-border rounded px-4 py-2 text-sm font-mono text-text-secondary cursor-pointer hover:border-primary transition-colors">Cancel</button>
+                  <button onClick={() => { window.location.hash = '#/settings'; onClose() }} className="bg-transparent border border-border rounded px-4 py-2 text-sm font-mono text-text-secondary cursor-pointer hover:border-primary transition-colors">Go to Settings</button>
+                  <button onClick={handleExportFallback} className="bg-primary text-bg-primary rounded px-4 py-2 text-sm font-mono font-bold cursor-pointer hover:opacity-90">Export + Manual Submit</button>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
       </div>
     </div>
   )

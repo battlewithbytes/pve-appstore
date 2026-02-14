@@ -249,6 +249,21 @@ func (e *Engine) HasActiveJobForApp(appID string) (*Job, bool) {
 	return e.store.HasActiveJobForApp(appID)
 }
 
+// SetGitHubState stores a key-value pair for GitHub integration.
+func (e *Engine) SetGitHubState(key, value string) error {
+	return e.store.SetGitHubState(key, value)
+}
+
+// GetGitHubState retrieves a value for GitHub integration.
+func (e *Engine) GetGitHubState(key string) (string, error) {
+	return e.store.GetGitHubState(key)
+}
+
+// DeleteGitHubState removes a key from GitHub state.
+func (e *Engine) DeleteGitHubState(key string) error {
+	return e.store.DeleteGitHubState(key)
+}
+
 // StartInstall creates a new install job and runs it asynchronously.
 func (e *Engine) StartInstall(req InstallRequest) (*Job, error) {
 	// Look up the app

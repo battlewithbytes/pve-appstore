@@ -1,4 +1,4 @@
-import type { AppsResponse, AppDetail, CategoriesResponse, HealthResponse, JobsResponse, LogsResponse, InstallsResponse, InstallRequest, InstallDetail, Install, Job, ConfigDefaultsResponse, BrowseResponse, MountInfo, ExportResponse, ApplyResponse, ApplyPreviewResponse, AppStatusResponse, StacksResponse, StackDetail, StackCreateRequest, StackValidateResponse, EditRequest, ReconfigureRequest, Settings, SettingsUpdate, DevAppsResponse, DevApp, DevTemplate, ValidationResult, DockerfileChainEvent } from './types';
+import type { AppsResponse, AppDetail, CategoriesResponse, HealthResponse, JobsResponse, LogsResponse, InstallsResponse, InstallRequest, InstallDetail, Install, Job, ConfigDefaultsResponse, BrowseResponse, MountInfo, ExportResponse, ApplyResponse, ApplyPreviewResponse, AppStatusResponse, StacksResponse, StackDetail, StackCreateRequest, StackValidateResponse, EditRequest, ReconfigureRequest, Settings, SettingsUpdate, DevAppsResponse, DevApp, DevTemplate, ValidationResult, DockerfileChainEvent, GitHubStatus, PublishStatus } from './types';
 
 const BASE = '/api';
 
@@ -318,6 +318,26 @@ export const api = {
     }),
 
   devTemplates: () => fetchJSON<{ templates: DevTemplate[] }>(`${BASE}/dev/templates`),
+
+  // --- Developer GitHub Integration ---
+
+  devGitHubStatus: () => fetchJSON<GitHubStatus>(`${BASE}/dev/github/status`),
+
+  devGitHubConnect: (token: string) =>
+    fetchJSON<{ status: string; user?: { login: string; name: string; avatar_url: string } }>(`${BASE}/dev/github/connect`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token }),
+    }),
+
+  devGitHubDisconnect: () =>
+    fetchJSON<{ status: string }>(`${BASE}/dev/github/disconnect`, { method: 'POST' }),
+
+  devPublishStatus: (id: string) =>
+    fetchJSON<PublishStatus>(`${BASE}/dev/apps/${id}/publish-status`),
+
+  devPublish: (id: string) =>
+    fetchJSON<{ pr_url: string; pr_number: number }>(`${BASE}/dev/apps/${id}/publish`, { method: 'POST' }),
 
   devImportDockerfileStream: async (
     payload: { name: string; url?: string; dockerfile?: string },

@@ -55,7 +55,9 @@ func (s *Server) handleGetSettings(w http.ResponseWriter, r *http.Request) {
 		},
 		Storages:  s.cfg.Storages,
 		Bridges:   s.cfg.Bridges,
-		Developer: settingsDeveloper{Enabled: s.cfg.Developer.Enabled},
+		Developer: settingsDeveloper{
+			Enabled: s.cfg.Developer.Enabled,
+		},
 		Service:   settingsService{Port: s.cfg.Service.Port},
 		Auth:      settingsAuth{Mode: s.cfg.Auth.Mode},
 		Catalog:   settingsCatalog{Refresh: s.cfg.Catalog.Refresh},
@@ -112,3 +114,4 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 
 	s.handleGetSettings(w, r)
 }
+

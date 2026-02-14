@@ -341,6 +341,10 @@ func (s devSvcStub) SetStatus(id, status string) error {
 	return nil
 }
 
+func (s devSvcStub) SetGitHubMeta(id string, meta map[string]string) error {
+	return nil
+}
+
 func (s devSvcStub) EnsureIcon(id string) {
 	if s.ensureIconFn != nil {
 		s.ensureIconFn(id)

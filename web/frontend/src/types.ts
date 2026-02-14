@@ -470,6 +470,24 @@ export interface SettingsUpdate {
 
 // --- Developer Mode ---
 
+export interface GitHubStatus {
+  connected: boolean;
+  user?: { login: string; name: string; avatar_url: string };
+  fork?: { full_name: string; clone_url: string; owner: string };
+}
+
+export interface PublishStatus {
+  ready: boolean;
+  checks: {
+    github_connected: boolean;
+    validation_passed: boolean;
+    test_installed: boolean;
+    fork_exists: boolean;
+  };
+  published: boolean;
+  pr_url?: string;
+}
+
 export interface DevAppMeta {
   id: string;
   name: string;
@@ -478,6 +496,9 @@ export interface DevAppMeta {
   status: string;
   has_icon: boolean;
   has_readme: boolean;
+  github_branch?: string;
+  github_pr_url?: string;
+  test_install_id?: string;
   created_at: string;
   updated_at: string;
 }
