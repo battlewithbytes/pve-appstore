@@ -281,6 +281,7 @@ type devSvcStub struct {
 	appDirFn        func(id string) string
 	saveFileFn      func(id, relPath string, data []byte) error
 	readFileFn      func(id, relPath string) ([]byte, error)
+	deleteFileFn    func(id, relPath string) error
 	deleteFn        func(id string) error
 	setStatusFn     func(id, status string) error
 	ensureIconFn    func(id string)
@@ -361,6 +362,13 @@ func (s devSvcStub) ReadFile(id, relPath string) ([]byte, error) {
 		return s.readFileFn(id, relPath)
 	}
 	return nil, fmt.Errorf("not found")
+}
+
+func (s devSvcStub) DeleteFile(id, relPath string) error {
+	if s.deleteFileFn != nil {
+		return s.deleteFileFn(id, relPath)
+	}
+	return nil
 }
 
 func (s devSvcStub) Delete(id string) error {

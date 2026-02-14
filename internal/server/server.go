@@ -162,17 +162,20 @@ func New(cfg *config.Config, cat *catalog.Catalog, eng *engine.Engine, spaFS fs.
 	mux.HandleFunc("GET /api/dev/apps", s.withDevMode(s.withAuth(s.handleDevListApps)))
 	mux.HandleFunc("POST /api/dev/apps", s.withDevMode(s.withAuth(s.handleDevCreateApp)))
 	mux.HandleFunc("POST /api/dev/fork", s.withDevMode(s.withAuth(s.handleDevForkApp)))
+	mux.HandleFunc("POST /api/dev/branch", s.withDevMode(s.withAuth(s.handleDevBranchApp)))
 	mux.HandleFunc("GET /api/dev/apps/{id}", s.withDevMode(s.withAuth(s.handleDevGetApp)))
 	mux.HandleFunc("PUT /api/dev/apps/{id}/manifest", s.withDevMode(s.withAuth(s.handleDevSaveManifest)))
 	mux.HandleFunc("PUT /api/dev/apps/{id}/script", s.withDevMode(s.withAuth(s.handleDevSaveScript)))
 	mux.HandleFunc("GET /api/dev/apps/{id}/file", s.withDevMode(s.withAuth(s.handleDevGetFile)))
 	mux.HandleFunc("PUT /api/dev/apps/{id}/file", s.withDevMode(s.withAuth(s.handleDevSaveFile)))
+	mux.HandleFunc("DELETE /api/dev/apps/{id}/file", s.withDevMode(s.withAuth(s.handleDevDeleteFile)))
 	mux.HandleFunc("DELETE /api/dev/apps/{id}", s.withDevMode(s.withAuth(s.handleDevDeleteApp)))
 	mux.HandleFunc("POST /api/dev/apps/{id}/validate", s.withDevMode(s.withAuth(s.handleDevValidate)))
 	mux.HandleFunc("POST /api/dev/apps/{id}/deploy", s.withDevMode(s.withAuth(s.handleDevDeploy)))
 	mux.HandleFunc("POST /api/dev/apps/{id}/undeploy", s.withDevMode(s.withAuth(s.handleDevUndeploy)))
 	mux.HandleFunc("GET /api/dev/apps/{id}/icon", s.withDevMode(s.handleDevGetIcon))
 	mux.HandleFunc("PUT /api/dev/apps/{id}/icon", s.withDevMode(s.withAuth(s.handleDevSetIcon)))
+	mux.HandleFunc("POST /api/dev/apps/{id}/upload", s.withDevMode(s.withAuth(s.handleDevUploadFile)))
 	mux.HandleFunc("POST /api/dev/apps/{id}/export", s.withDevMode(s.withAuth(s.handleDevExport)))
 	mux.HandleFunc("POST /api/dev/import/unraid", s.withDevMode(s.withAuth(s.handleDevImportUnraid)))
 	mux.HandleFunc("POST /api/dev/import/dockerfile", s.withDevMode(s.withAuth(s.handleDevImportDockerfile)))
@@ -198,6 +201,8 @@ func New(cfg *config.Config, cat *catalog.Catalog, eng *engine.Engine, spaFS fs.
 	mux.HandleFunc("GET /api/dev/github/status", s.withDevMode(s.withAuth(s.handleDevGitHubStatus)))
 	mux.HandleFunc("POST /api/dev/github/connect", s.withDevMode(s.withAuth(s.handleDevGitHubConnect)))
 	mux.HandleFunc("POST /api/dev/github/disconnect", s.withDevMode(s.withAuth(s.handleDevGitHubDisconnect)))
+	mux.HandleFunc("GET /api/dev/github/repo-info", s.withDevMode(s.withAuth(s.handleDevGitHubRepoInfo)))
+	mux.HandleFunc("POST /api/dev/github/delete-branch", s.withDevMode(s.withAuth(s.handleDevGitHubDeleteBranch)))
 	mux.HandleFunc("GET /api/dev/apps/{id}/publish-status", s.withDevMode(s.withAuth(s.handleDevPublishStatus)))
 	mux.HandleFunc("POST /api/dev/apps/{id}/publish", s.withDevMode(s.withAuth(s.handleDevPublish)))
 
@@ -317,9 +322,10 @@ func (s *Server) resolveStorageMetas() {
 
 func maxBodyMiddleware(next http.Handler, maxBytes int64) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Only limit request body for API POST/PUT/DELETE, not WebSocket upgrades or static assets
+		// Only limit request body for API POST/PUT/DELETE, not WebSocket upgrades, static assets, or file uploads
 		if r.Body != nil && strings.HasPrefix(r.URL.Path, "/api/") && r.Method != "GET" &&
-			!strings.Contains(r.Header.Get("Upgrade"), "websocket") {
+			!strings.Contains(r.Header.Get("Upgrade"), "websocket") &&
+			!strings.HasSuffix(r.URL.Path, "/upload") {
 			r.Body = http.MaxBytesReader(w, r.Body, maxBytes)
 		}
 		next.ServeHTTP(w, r)

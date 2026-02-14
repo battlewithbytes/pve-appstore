@@ -1,12 +1,17 @@
 package server
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"image"
+	_ "image/jpeg" // register JPEG decoder for image.Decode
+	"image/png"
 	"io"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/battlewithbytes/pve-appstore/internal/devmode"
 )
@@ -87,9 +92,6 @@ func (s *Server) handleDevForkApp(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-
-	// If GitHub is connected, also fork the catalog repo on GitHub
-	s.tryGitHubFork(req.NewID)
 
 	app, err := s.devSvc.Get(req.NewID)
 	if err != nil {
@@ -210,6 +212,30 @@ func (s *Server) handleDevGetFile(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"content": string(data)})
 }
 
+func (s *Server) handleDevDeleteFile(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	path := r.URL.Query().Get("path")
+	if path == "" {
+		writeError(w, http.StatusBadRequest, "path query parameter required")
+		return
+	}
+	if err := s.devSvc.DeleteFile(id, path); err != nil {
+		if strings.Contains(err.Error(), "cannot delete core file") {
+			writeError(w, http.StatusBadRequest, err.Error())
+		} else if strings.Contains(err.Error(), "not found") {
+			writeError(w, http.StatusNotFound, err.Error())
+		} else {
+			writeError(w, http.StatusBadRequest, err.Error())
+		}
+		return
+	}
+
+	// Auto-refresh catalog if deployed
+	s.refreshDeployedDevApp(id)
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted", "path": path})
+}
+
 func (s *Server) handleDevDeleteApp(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 
@@ -223,4 +249,161 @@ func (s *Server) handleDevDeleteApp(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
+}
+
+func (s *Server) handleDevUploadFile(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+
+	// 2 MB upload limit
+	r.Body = http.MaxBytesReader(w, r.Body, 2<<20)
+	if err := r.ParseMultipartForm(2 << 20); err != nil {
+		writeError(w, http.StatusBadRequest, "file too large (max 2MB)")
+		return
+	}
+
+	destPath := r.FormValue("path")
+	if destPath == "" {
+		writeError(w, http.StatusBadRequest, "path field is required")
+		return
+	}
+
+	file, _, err := r.FormFile("file")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "file field is required")
+		return
+	}
+	defer file.Close()
+
+	data, err := io.ReadAll(file)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "could not read uploaded file")
+		return
+	}
+
+	resized := false
+	if destPath == "icon.png" {
+		data, resized, err = processIcon(data)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, fmt.Sprintf("icon processing failed: %v", err))
+			return
+		}
+	}
+
+	if err := s.devSvc.SaveFile(id, destPath, data); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	// Auto-refresh catalog if deployed
+	s.refreshDeployedDevApp(id)
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"status":  "saved",
+		"path":    destPath,
+		"resized": resized,
+	})
+}
+
+// processIcon decodes a PNG or JPEG image, resizes it to fit within 256x256
+// if larger, and re-encodes as PNG. Returns the processed bytes and whether
+// a resize occurred.
+func processIcon(data []byte) ([]byte, bool, error) {
+	img, _, err := image.Decode(bytes.NewReader(data))
+	if err != nil {
+		return nil, false, fmt.Errorf("unsupported image format: %w", err)
+	}
+
+	bounds := img.Bounds()
+	w, h := bounds.Dx(), bounds.Dy()
+
+	const maxDim = 256
+	resized := false
+
+	if w > maxDim || h > maxDim {
+		resized = true
+		newW, newH := w, h
+		if w >= h {
+			newW = maxDim
+			newH = h * maxDim / w
+		} else {
+			newH = maxDim
+			newW = w * maxDim / h
+		}
+		if newW < 1 {
+			newW = 1
+		}
+		if newH < 1 {
+			newH = 1
+		}
+
+		dst := image.NewNRGBA(image.Rect(0, 0, newW, newH))
+		for y := 0; y < newH; y++ {
+			srcY := bounds.Min.Y + y*h/newH
+			for x := 0; x < newW; x++ {
+				srcX := bounds.Min.X + x*w/newW
+				dst.Set(x, y, img.At(srcX, srcY))
+			}
+		}
+		img = dst
+	}
+
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, img); err != nil {
+		return nil, false, fmt.Errorf("PNG encode failed: %w", err)
+	}
+	return buf.Bytes(), resized, nil
+}
+
+func (s *Server) handleDevBranchApp(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		SourceID string `json:"source_id"` // catalog app to branch
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if req.SourceID == "" {
+		writeError(w, http.StatusBadRequest, "source_id is required")
+		return
+	}
+
+	// Dev app ID = source ID (no rename)
+	newID := req.SourceID
+
+	// Look up the catalog app to get its directory
+	if s.catalogSvc == nil {
+		writeError(w, http.StatusServiceUnavailable, "catalog service not available")
+		return
+	}
+	catApp, ok := s.catalogSvc.GetApp(req.SourceID)
+	if !ok {
+		writeError(w, http.StatusNotFound, fmt.Sprintf("catalog app %q not found", req.SourceID))
+		return
+	}
+	if catApp.DirPath == "" {
+		writeError(w, http.StatusBadRequest, "catalog app has no source directory")
+		return
+	}
+
+	if err := s.devSvc.Fork(newID, catApp.DirPath); err != nil {
+		if strings.Contains(err.Error(), "already exists") {
+			writeError(w, http.StatusConflict, fmt.Sprintf("dev copy of %q already exists — open it from the Developer Dashboard", newID))
+			return
+		}
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	// Track which catalog app was branched
+	s.devSvc.SetGitHubMeta(newID, map[string]string{
+		"source_app_id": req.SourceID,
+	})
+
+	app, err := s.devSvc.Get(newID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusCreated, app)
 }

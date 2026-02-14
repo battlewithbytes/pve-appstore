@@ -1,4 +1,4 @@
-import type { AppsResponse, AppDetail, CategoriesResponse, HealthResponse, JobsResponse, LogsResponse, InstallsResponse, InstallRequest, InstallDetail, Install, Job, ConfigDefaultsResponse, BrowseResponse, MountInfo, ExportResponse, ApplyResponse, ApplyPreviewResponse, AppStatusResponse, StacksResponse, StackDetail, StackCreateRequest, StackValidateResponse, EditRequest, ReconfigureRequest, Settings, SettingsUpdate, DiscoverResponse, DevAppsResponse, DevApp, DevTemplate, ValidationResult, DockerfileChainEvent, GitHubStatus, PublishStatus, DevStacksResponse, DevStack, CatalogStacksResponse, CatalogStack, ZipImportResponse } from './types';
+import type { AppsResponse, AppDetail, CategoriesResponse, HealthResponse, JobsResponse, LogsResponse, InstallsResponse, InstallRequest, InstallDetail, Install, Job, ConfigDefaultsResponse, BrowseResponse, MountInfo, ExportResponse, ApplyResponse, ApplyPreviewResponse, AppStatusResponse, StacksResponse, StackDetail, StackCreateRequest, StackValidateResponse, EditRequest, ReconfigureRequest, Settings, SettingsUpdate, DiscoverResponse, DevAppsResponse, DevApp, DevTemplate, ValidationResult, DockerfileChainEvent, GitHubStatus, GitHubRepoInfo, PublishStatus, DevStacksResponse, DevStack, CatalogStacksResponse, CatalogStack, ZipImportResponse } from './types';
 
 const BASE = '/api';
 
@@ -256,6 +256,13 @@ export const api = {
       body: JSON.stringify({ source_id: sourceId, new_id: newId }),
     }),
 
+  devBranchApp: (sourceId: string) =>
+    fetchJSON<DevApp>(`${BASE}/dev/branch`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ source_id: sourceId }),
+    }),
+
   devGetApp: (id: string) => fetchJSON<DevApp>(`${BASE}/dev/apps/${id}`),
 
   devSaveManifest: (id: string, content: string) =>
@@ -281,6 +288,9 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ path, content }),
     }),
+
+  devDeleteFile: (id: string, path: string) =>
+    fetchJSON<{ status: string; path: string }>(`${BASE}/dev/apps/${id}/file?path=${encodeURIComponent(path)}`, { method: 'DELETE' }),
 
   devDeleteApp: (id: string) =>
     fetchJSON<{ status: string }>(`${BASE}/dev/apps/${id}`, { method: 'DELETE' }),
@@ -326,7 +336,7 @@ export const api = {
   devGitHubStatus: () => fetchJSON<GitHubStatus>(`${BASE}/dev/github/status`),
 
   devGitHubConnect: (token: string) =>
-    fetchJSON<{ status: string; user?: { login: string; name: string; avatar_url: string } }>(`${BASE}/dev/github/connect`, {
+    fetchJSON<{ status: string; user?: { login: string; name: string; avatar_url: string }; fork?: { full_name: string; clone_url: string; owner: string } }>(`${BASE}/dev/github/connect`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ token }),
@@ -335,11 +345,20 @@ export const api = {
   devGitHubDisconnect: () =>
     fetchJSON<{ status: string }>(`${BASE}/dev/github/disconnect`, { method: 'POST' }),
 
+  devGitHubRepoInfo: () => fetchJSON<GitHubRepoInfo>(`${BASE}/dev/github/repo-info`),
+
+  devGitHubDeleteBranch: (branch: string) =>
+    fetchJSON<{ status: string; branch: string }>(`${BASE}/dev/github/delete-branch`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ branch }),
+    }),
+
   devPublishStatus: (id: string) =>
     fetchJSON<PublishStatus>(`${BASE}/dev/apps/${id}/publish-status`),
 
   devPublish: (id: string) =>
-    fetchJSON<{ pr_url: string; pr_number: number }>(`${BASE}/dev/apps/${id}/publish`, { method: 'POST' }),
+    fetchJSON<{ pr_url: string; pr_number: number; action?: string }>(`${BASE}/dev/apps/${id}/publish`, { method: 'POST' }),
 
   devImportDockerfileStream: async (
     payload: { name: string; url?: string; dockerfile?: string },
@@ -380,6 +399,15 @@ export const api = {
   },
 
   // --- Import ZIP ---
+
+  devUploadFile: async (id: string, path: string, file: File): Promise<{ status: string; path: string; resized?: boolean }> => {
+    const form = new FormData();
+    form.append('file', file);
+    form.append('path', path);
+    const res = await fetch(`${BASE}/dev/apps/${id}/upload`, { method: 'POST', body: form });
+    if (!res.ok) { const b = await res.json().catch(() => ({})); throw new Error(b.error || `HTTP ${res.status}`); }
+    return res.json();
+  },
 
   devImportZip: async (file: File): Promise<ZipImportResponse> => {
     const form = new FormData();
@@ -429,7 +457,7 @@ export const api = {
     fetchJSON<PublishStatus>(`${BASE}/dev/stacks/${id}/publish-status`),
 
   devPublishStack: (id: string) =>
-    fetchJSON<{ pr_url: string; pr_number: number }>(`${BASE}/dev/stacks/${id}/publish`, { method: 'POST' }),
+    fetchJSON<{ pr_url: string; pr_number: number; action?: string }>(`${BASE}/dev/stacks/${id}/publish`, { method: 'POST' }),
 
   // --- Catalog Stacks ---
 

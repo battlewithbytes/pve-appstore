@@ -19,17 +19,18 @@ var defaultIconPNG []byte
 
 // DevStackMeta is the summary for listing dev stacks.
 type DevStackMeta struct {
-	ID            string    `json:"id"`
-	Name          string    `json:"name"`
-	Version       string    `json:"version"`
-	Description   string    `json:"description"`
-	Status        string    `json:"status"`
-	AppCount      int       `json:"app_count"`
-	HasIcon       bool      `json:"has_icon"`
-	GitHubBranch  string    `json:"github_branch,omitempty"`
-	GitHubPRURL   string    `json:"github_pr_url,omitempty"`
-	CreatedAt     time.Time `json:"created_at"`
-	UpdatedAt     time.Time `json:"updated_at"`
+	ID             string    `json:"id"`
+	Name           string    `json:"name"`
+	Version        string    `json:"version"`
+	Description    string    `json:"description"`
+	Status         string    `json:"status"`
+	AppCount       int       `json:"app_count"`
+	HasIcon        bool      `json:"has_icon"`
+	GitHubBranch   string    `json:"github_branch,omitempty"`
+	GitHubPRURL    string    `json:"github_pr_url,omitempty"`
+	GitHubPRNumber int       `json:"github_pr_number,omitempty"`
+	CreatedAt      time.Time `json:"created_at"`
+	UpdatedAt      time.Time `json:"updated_at"`
 }
 
 // DevStack is the full dev stack with file contents.
@@ -42,18 +43,20 @@ type DevStack struct {
 
 // DevAppMeta is the summary for listing dev apps.
 type DevAppMeta struct {
-	ID            string    `json:"id"`
-	Name          string    `json:"name"`
-	Version       string    `json:"version"`
-	Description   string    `json:"description"`
-	Status        string    `json:"status"` // "draft", "validated", "deployed"
-	HasIcon       bool      `json:"has_icon"`
-	HasReadme     bool      `json:"has_readme"`
-	GitHubBranch  string    `json:"github_branch,omitempty"`
-	GitHubPRURL   string    `json:"github_pr_url,omitempty"`
-	TestInstallID string    `json:"test_install_id,omitempty"`
-	CreatedAt     time.Time `json:"created_at"`
-	UpdatedAt     time.Time `json:"updated_at"`
+	ID             string    `json:"id"`
+	Name           string    `json:"name"`
+	Version        string    `json:"version"`
+	Description    string    `json:"description"`
+	Status         string    `json:"status"` // "draft", "validated", "deployed"
+	HasIcon        bool      `json:"has_icon"`
+	HasReadme      bool      `json:"has_readme"`
+	SourceAppID    string    `json:"source_app_id,omitempty"`
+	GitHubBranch   string    `json:"github_branch,omitempty"`
+	GitHubPRURL    string    `json:"github_pr_url,omitempty"`
+	GitHubPRNumber int       `json:"github_pr_number,omitempty"`
+	TestInstallID  string    `json:"test_install_id,omitempty"`
+	CreatedAt      time.Time `json:"created_at"`
+	UpdatedAt      time.Time `json:"updated_at"`
 }
 
 // DevApp is the full dev app with file contents.
@@ -246,6 +249,26 @@ func (d *DevStore) ReadFile(id, relPath string) ([]byte, error) {
 	return os.ReadFile(filepath.Join(d.baseDir, id, clean))
 }
 
+// DeleteFile removes a single file from a dev app directory.
+// Core files (app.yml, provision/install.py) cannot be deleted.
+func (d *DevStore) DeleteFile(id, relPath string) error {
+	if !isValidID(id) {
+		return fmt.Errorf("invalid app id")
+	}
+	clean := filepath.Clean(relPath)
+	if strings.Contains(clean, "..") {
+		return fmt.Errorf("invalid path")
+	}
+	if clean == "app.yml" || clean == filepath.Join("provision", "install.py") {
+		return fmt.Errorf("cannot delete core file %q", clean)
+	}
+	fullPath := filepath.Join(d.baseDir, id, clean)
+	if _, err := os.Stat(fullPath); os.IsNotExist(err) {
+		return fmt.Errorf("file %q not found", clean)
+	}
+	return os.Remove(fullPath)
+}
+
 // Delete removes a dev app directory.
 func (d *DevStore) Delete(id string) error {
 	if !isValidID(id) {
@@ -301,37 +324,44 @@ func (d *DevStore) readMeta(id string) (*DevAppMeta, error) {
 
 	// Check status file
 	status := "draft"
-	var githubBranch, githubPRURL, testInstallID string
+	var githubBranch, githubPRURL, testInstallID, sourceAppID string
+	var githubPRNumber int
 	if statusData, err := os.ReadFile(filepath.Join(appDir, ".devstatus")); err == nil {
 		var s struct {
-			Status        string `json:"status"`
-			GitHubBranch  string `json:"github_branch"`
-			GitHubPRURL   string `json:"github_pr_url"`
-			TestInstallID string `json:"test_install_id"`
+			Status         string `json:"status"`
+			SourceAppID    string `json:"source_app_id"`
+			GitHubBranch   string `json:"github_branch"`
+			GitHubPRURL    string `json:"github_pr_url"`
+			GitHubPRNumber int    `json:"github_pr_number"`
+			TestInstallID  string `json:"test_install_id"`
 		}
 		if json.Unmarshal(statusData, &s) == nil {
 			if s.Status != "" {
 				status = s.Status
 			}
+			sourceAppID = s.SourceAppID
 			githubBranch = s.GitHubBranch
 			githubPRURL = s.GitHubPRURL
+			githubPRNumber = s.GitHubPRNumber
 			testInstallID = s.TestInstallID
 		}
 	}
 
 	return &DevAppMeta{
-		ID:            manifest.ID,
-		Name:          manifest.Name,
-		Version:       manifest.Version,
-		Description:   manifest.Description,
-		Status:        status,
-		HasIcon:       hasIcon == nil,
-		HasReadme:     hasReadme == nil,
-		GitHubBranch:  githubBranch,
-		GitHubPRURL:   githubPRURL,
-		TestInstallID: testInstallID,
-		CreatedAt:     createdAt,
-		UpdatedAt:     info.ModTime(),
+		ID:             manifest.ID,
+		Name:           manifest.Name,
+		Version:        manifest.Version,
+		Description:    manifest.Description,
+		Status:         status,
+		HasIcon:        hasIcon == nil,
+		HasReadme:      hasReadme == nil,
+		SourceAppID:    sourceAppID,
+		GitHubBranch:   githubBranch,
+		GitHubPRURL:    githubPRURL,
+		GitHubPRNumber: githubPRNumber,
+		TestInstallID:  testInstallID,
+		CreatedAt:      createdAt,
+		UpdatedAt:      info.ModTime(),
 	}, nil
 }
 
@@ -629,11 +659,13 @@ func (d *DevStore) readStackMeta(id string) (*DevStackMeta, error) {
 
 	status := "draft"
 	var githubBranch, githubPRURL string
+	var githubPRNumber int
 	if statusData, err := os.ReadFile(filepath.Join(stackDir, ".devstatus")); err == nil {
 		var s struct {
-			Status       string `json:"status"`
-			GitHubBranch string `json:"github_branch"`
-			GitHubPRURL  string `json:"github_pr_url"`
+			Status         string `json:"status"`
+			GitHubBranch   string `json:"github_branch"`
+			GitHubPRURL    string `json:"github_pr_url"`
+			GitHubPRNumber int    `json:"github_pr_number"`
 		}
 		if json.Unmarshal(statusData, &s) == nil {
 			if s.Status != "" {
@@ -641,21 +673,23 @@ func (d *DevStore) readStackMeta(id string) (*DevStackMeta, error) {
 			}
 			githubBranch = s.GitHubBranch
 			githubPRURL = s.GitHubPRURL
+			githubPRNumber = s.GitHubPRNumber
 		}
 	}
 
 	return &DevStackMeta{
-		ID:           manifest.ID,
-		Name:         manifest.Name,
-		Version:      manifest.Version,
-		Description:  manifest.Description,
-		Status:       status,
-		AppCount:     len(manifest.Apps),
-		HasIcon:      hasIcon == nil,
-		GitHubBranch: githubBranch,
-		GitHubPRURL:  githubPRURL,
-		CreatedAt:    createdAt,
-		UpdatedAt:    info.ModTime(),
+		ID:             manifest.ID,
+		Name:           manifest.Name,
+		Version:        manifest.Version,
+		Description:    manifest.Description,
+		Status:         status,
+		AppCount:       len(manifest.Apps),
+		HasIcon:        hasIcon == nil,
+		GitHubBranch:   githubBranch,
+		GitHubPRURL:    githubPRURL,
+		GitHubPRNumber: githubPRNumber,
+		CreatedAt:      createdAt,
+		UpdatedAt:      info.ModTime(),
 	}, nil
 }
 

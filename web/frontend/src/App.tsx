@@ -7,7 +7,8 @@ import Markdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { api } from './api'
 import { CodeEditor } from './CodeEditor'
-import type { AppSummary, AppDetail, AppInput, HealthResponse, Job, LogEntry, InstallDetail, InstallListItem, ContainerLiveStatus, ConfigDefaultsResponse, MountPoint, MountInfo, BrowseEntry, ExportResponse, ApplyPreviewResponse, InstallRequest, EditRequest, ReconfigureRequest, DevicePassthrough, AppStatusResponse, StackListItem, StackDetail, StackCreateRequest, StackValidateResponse, StackApp, Settings, SettingsUpdate, DiscoverResponse, DevAppMeta, DevApp, DevTemplate, ValidationResult, ValidationMsg, DockerfileChainEvent, GitHubStatus, PublishStatus, DevStackMeta, DevStack, CatalogStack } from './types'
+import { DevAppEditor, DevSubmitDialog, DevValidationMsg } from './DevAppEditor'
+import type { AppSummary, AppDetail, AppInput, HealthResponse, Job, LogEntry, InstallDetail, InstallListItem, ContainerLiveStatus, ConfigDefaultsResponse, MountPoint, MountInfo, BrowseEntry, ExportResponse, ApplyPreviewResponse, InstallRequest, EditRequest, ReconfigureRequest, DevicePassthrough, AppStatusResponse, StackListItem, StackDetail, StackCreateRequest, StackValidateResponse, StackApp, Settings, SettingsUpdate, DiscoverResponse, DevAppMeta, DevTemplate, ValidationResult, DockerfileChainEvent, GitHubStatus, GitHubRepoInfo, DevStackMeta, DevStack, CatalogStack } from './types'
 
 function useHash() {
   const [hash, setHash] = useState(window.location.hash)
@@ -231,37 +232,43 @@ function groupInputs(inputs: AppInput[]): Record<string, AppInput[]> {
   return groups
 }
 
-function ForkDialog({ sourceId, sourceName, onClose }: { sourceId: string; sourceName: string; onClose: () => void }) {
-  const [newId, setNewId] = useState(sourceId + '-custom')
+function BranchDialog({ sourceId, sourceName, onClose }: { sourceId: string; sourceName: string; onClose: () => void }) {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
 
-  const isValid = /^[a-z0-9]+(-[a-z0-9]+)*$/.test(newId) && newId.length <= 64
-
-  const handleFork = async () => {
+  const handleBranch = async () => {
     setLoading(true); setError('')
     try {
-      await api.devForkApp(sourceId, newId)
-      window.location.hash = `#/dev/${newId}`
+      await api.devBranchApp(sourceId)
+      window.location.hash = `#/dev/${sourceId}`
       onClose()
     } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : 'Fork failed')
+      const msg = e instanceof Error ? e.message : 'Branch failed'
+      if (msg.includes('already exists')) {
+        setError(`Dev copy already exists.`)
+      } else {
+        setError(msg)
+      }
     } finally { setLoading(false) }
   }
 
   return (
     <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-[200]">
-      <div className="bg-bg-card border border-border rounded-xl p-8 w-full max-w-[420px]">
-        <h2 className="text-lg font-bold text-text-primary mb-2 font-mono">Fork {sourceName}</h2>
-        <p className="text-sm text-text-secondary mb-4">Copy this app into Developer Mode so you can customize it.</p>
-        <label className="block text-xs text-text-muted font-mono mb-1">New App ID</label>
-        <input value={newId} onChange={e => setNewId(e.target.value)} className="w-full bg-bg-primary border border-border rounded px-3 py-2 text-sm font-mono text-text-primary focus:border-primary focus:outline-none" placeholder="my-custom-app" />
-        {!isValid && newId && <p className="text-xs text-status-stopped mt-1">Must be lowercase kebab-case (a-z, 0-9, hyphens)</p>}
-        {error && <p className="text-xs text-status-stopped mt-2">{error}</p>}
+      <div className="bg-bg-card border border-border rounded-xl p-8 w-full max-w-[460px]">
+        <h2 className="text-lg font-bold text-text-primary mb-2 font-mono">Branch {sourceName}</h2>
+        <p className="text-sm text-text-secondary mb-4">Create a development branch for <span className="font-mono text-text-primary">{sourceName}</span>? This will copy the app into Developer Mode for editing. Your changes will be pushed to branch <span className="font-mono text-primary">app/{sourceId}</span> on your GitHub fork when you submit.</p>
+        {error && (
+          <div className="text-xs text-status-stopped mt-2">
+            {error}
+            {error.includes('already exists') && (
+              <a href={`#/dev/${sourceId}`} className="ml-2 text-primary hover:underline" onClick={onClose}>Open it</a>
+            )}
+          </div>
+        )}
         <div className="flex gap-3 mt-5 justify-end">
           <button onClick={onClose} className="px-5 py-2.5 text-sm font-semibold border border-border rounded-lg cursor-pointer text-text-secondary bg-transparent hover:border-text-secondary transition-colors font-mono">Cancel</button>
-          <button onClick={handleFork} disabled={!isValid || loading} className="px-5 py-2.5 text-sm font-semibold border-none rounded-lg cursor-pointer bg-yellow-400 text-bg-primary hover:shadow-[0_0_20px_rgba(255,200,0,0.3)] transition-all disabled:opacity-50 font-mono">
-            {loading ? 'Forking...' : 'Fork to Dev'}
+          <button onClick={handleBranch} disabled={loading} className="px-5 py-2.5 text-sm font-semibold border-none rounded-lg cursor-pointer bg-yellow-400 text-bg-primary hover:shadow-[0_0_20px_rgba(255,200,0,0.3)] transition-all disabled:opacity-50 font-mono">
+            {loading ? 'Branching...' : 'Branch to Dev'}
           </button>
         </div>
       </div>
@@ -275,7 +282,8 @@ function AppDetailView({ id, requireAuth, devMode }: { id: string; requireAuth: 
   const [error, setError] = useState('')
   const [showInstall, setShowInstall] = useState(false)
   const [appStatus, setAppStatus] = useState<AppStatusResponse | null>(null)
-  const [showFork, setShowFork] = useState(false)
+  const [showBranch, setShowBranch] = useState(false)
+  const [ghStatus, setGhStatus] = useState<GitHubStatus | null>(null)
 
   useEffect(() => {
     setApp(null); setError(''); setAppStatus(null)
@@ -283,6 +291,12 @@ function AppDetailView({ id, requireAuth, devMode }: { id: string; requireAuth: 
     api.appReadme(id).then(setReadme)
     api.appStatus(id).then(setAppStatus).catch(() => {})
   }, [id])
+
+  useEffect(() => {
+    if (devMode) {
+      api.devGitHubStatus().then(setGhStatus).catch(() => {})
+    }
+  }, [devMode])
 
   if (error) return <div><BackLink /><Center className="text-status-stopped">{error}</Center></div>
   if (!app) return <Center>Loading...</Center>
@@ -317,11 +331,11 @@ function AppDetailView({ id, requireAuth, devMode }: { id: string; requireAuth: 
           ) : (
             <button onClick={() => requireAuth(() => setShowInstall(true))} className="px-6 py-2.5 bg-primary text-bg-primary font-semibold font-mono uppercase text-sm rounded-lg hover:shadow-[0_0_20px_rgba(0,255,157,0.3)] transition-all cursor-pointer border-none">Install</button>
           )}
-          {devMode && <button onClick={() => requireAuth(() => setShowFork(true))} className="px-4 py-2.5 bg-bg-secondary border border-yellow-400 text-yellow-400 font-semibold font-mono uppercase text-sm rounded-lg hover:bg-yellow-400/10 transition-all cursor-pointer">Fork</button>}
+          {devMode && ghStatus?.connected && ghStatus?.fork && <button onClick={() => requireAuth(() => setShowBranch(true))} className="px-4 py-2.5 bg-bg-secondary border border-yellow-400 text-yellow-400 font-semibold font-mono uppercase text-sm rounded-lg hover:bg-yellow-400/10 transition-all cursor-pointer">Branch</button>}
         </div>
       </div>
 
-      {showFork && <ForkDialog sourceId={app.id} sourceName={app.name} onClose={() => setShowFork(false)} />}
+      {showBranch && <BranchDialog sourceId={app.id} sourceName={app.name} onClose={() => setShowBranch(false)} />}
 
       {app.overview && (
         <div className="mt-5 bg-bg-card border border-border rounded-lg p-6">
@@ -2995,11 +3009,11 @@ function LoginModal({ onSuccess, onClose }: { onSuccess: () => void; onClose: ()
 
 // --- Shared Components ---
 
-function Center({ children, className }: { children: React.ReactNode; className?: string }) {
+export function Center({ children, className }: { children: React.ReactNode; className?: string }) {
   return <div className={`text-center py-12 text-text-muted ${className || ''}`}>{children}</div>
 }
 
-function BackLink({ href = '#/', label = 'Back to apps' }: { href?: string; label?: string }) {
+export function BackLink({ href = '#/', label = 'Back to apps' }: { href?: string; label?: string }) {
   return <a href={href} className="text-primary text-sm no-underline font-mono hover:underline">&larr; {label}</a>
 }
 
@@ -3976,6 +3990,134 @@ function formatBytesShort(bytes: number): string {
   return `${(bytes / Math.pow(1024, i)).toFixed(1)}${units[i]}`
 }
 
+// --- Repository Info Card (Developer Settings) ---
+
+function RepoInfoCard() {
+  const [info, setInfo] = useState<GitHubRepoInfo | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+  const [deleting, setDeleting] = useState<string | null>(null)
+
+  const fetchInfo = () => {
+    api.devGitHubRepoInfo()
+      .then(data => { setInfo(data); setLoading(false) })
+      .catch(e => { setError(e instanceof Error ? e.message : 'Failed to load'); setLoading(false) })
+  }
+
+  useEffect(() => { fetchInfo() }, [])
+
+  const deleteBranch = (branch: string) => {
+    if (!confirm(`Delete remote branch "${branch}" from your fork? This cannot be undone.`)) return
+    setDeleting(branch)
+    api.devGitHubDeleteBranch(branch)
+      .then(() => {
+        // Remove from local state immediately
+        if (info) {
+          const updated = { ...info, branches: (info.branches || []).filter(b => b.name !== branch) }
+          setInfo(updated)
+        }
+      })
+      .catch(e => alert(e instanceof Error ? e.message : 'Failed to delete branch'))
+      .finally(() => setDeleting(null))
+  }
+
+  if (loading) return <InfoCard title="Repository Info"><p className="text-sm text-text-muted font-mono">Loading...</p></InfoCard>
+  if (error) return <InfoCard title="Repository Info"><p className="text-sm text-red-400 font-mono">{error}</p></InfoCard>
+  if (!info) return null
+
+  const prDot = (state: string) => {
+    if (state === 'pr_open') return <span className="inline-block w-2 h-2 rounded-full bg-green-400" />
+    if (state === 'pr_merged') return <span className="inline-block w-2 h-2 rounded-full bg-purple-400" />
+    if (state === 'pr_closed') return <span className="inline-block w-2 h-2 rounded-full bg-gray-500" />
+    return <span className="text-text-muted">—</span>
+  }
+
+  const prLabel = (state: string) => {
+    if (state === 'pr_open') return <span className="text-green-400">open</span>
+    if (state === 'pr_merged') return <span className="text-purple-400">merged</span>
+    if (state === 'pr_closed') return <span className="text-gray-500">closed</span>
+    return null
+  }
+
+  const branches = info.branches || []
+
+  return (
+    <InfoCard title="Repository Info">
+      <div className="space-y-4">
+        {/* Upstream & Fork */}
+        <div className="space-y-2">
+          <div className="flex items-center gap-3">
+            <span className="text-xs text-text-muted font-mono uppercase w-20 shrink-0">Upstream</span>
+            <a href={info.upstream.url} target="_blank" rel="noreferrer" className="text-sm font-mono text-primary hover:underline truncate">{info.upstream.url.replace(/^https?:\/\//, '')}</a>
+            <span className="text-xs text-text-muted font-mono">({info.upstream.branch})</span>
+          </div>
+          <div className="flex items-center gap-3">
+            <span className="text-xs text-text-muted font-mono uppercase w-20 shrink-0">Fork</span>
+            <a href={info.fork.url} target="_blank" rel="noreferrer" className="text-sm font-mono text-primary hover:underline truncate">{info.fork.full_name}</a>
+          </div>
+        </div>
+
+        {/* Local Paths */}
+        <div className="space-y-2">
+          <h4 className="text-xs text-text-muted font-mono uppercase">Local Paths</h4>
+          <div className="flex items-center gap-3">
+            <span className="text-xs text-text-muted font-mono w-20 shrink-0">Catalog</span>
+            <span className="text-sm font-mono text-text-secondary">{info.local.catalog_path}</span>
+          </div>
+          <div className="flex items-center gap-3">
+            <span className="text-xs text-text-muted font-mono w-20 shrink-0">Dev Apps</span>
+            <span className="text-sm font-mono text-text-secondary">{info.local.dev_apps_path}</span>
+          </div>
+        </div>
+
+        {/* Branches */}
+        <div className="space-y-2">
+          <h4 className="text-xs text-text-muted font-mono uppercase">Branches ({branches.length})</h4>
+          {branches.length === 0 ? (
+            <p className="text-sm text-text-muted">No app branches yet.</p>
+          ) : (
+            <div className="border border-border rounded overflow-hidden">
+              <table className="w-full text-sm font-mono">
+                <tbody>
+                  {branches.map(b => (
+                    <tr key={b.name} className="border-b border-border last:border-b-0 hover:bg-white/5">
+                      <td className="px-3 py-2">
+                        <a href={`#/dev/${b.app_id}`} className="text-primary hover:underline">{b.name}</a>
+                      </td>
+                      <td className="px-3 py-2 w-24">
+                        {b.pr_state ? (
+                          <span className="inline-flex items-center gap-1.5">{prDot(b.pr_state)} {prLabel(b.pr_state)}</span>
+                        ) : (
+                          <span className="text-text-muted">—</span>
+                        )}
+                      </td>
+                      <td className="px-3 py-2 w-24 text-right">
+                        {b.pr_url && (
+                          <a href={b.pr_url} target="_blank" rel="noreferrer" className="text-primary hover:underline text-xs">View PR &rarr;</a>
+                        )}
+                      </td>
+                      <td className="px-3 py-2 w-10 text-right">
+                        <button
+                          onClick={() => deleteBranch(b.name)}
+                          disabled={deleting === b.name}
+                          className="text-red-400/60 hover:text-red-400 cursor-pointer transition-colors disabled:opacity-50"
+                          title={`Delete branch ${b.name}`}
+                        >
+                          {deleting === b.name ? '...' : '\u00D7'}
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      </div>
+    </InfoCard>
+  )
+}
+
 // --- Settings View ---
 
 function SettingsView({ requireAuth, onDevModeChange }: { requireAuth: (cb: () => void) => void; onDevModeChange?: (enabled: boolean) => void }) {
@@ -4033,7 +4175,7 @@ function SettingsView({ requireAuth, onDevModeChange }: { requireAuth: (cb: () =
       setGhLoading(true)
       try {
         const result = await api.devGitHubConnect(token)
-        setGhStatus({ connected: true, user: result.user })
+        setGhStatus({ connected: true, user: result.user, fork: result.fork })
         setGhToken('')
         setMsg('GitHub connected successfully!')
         setTimeout(() => setMsg(''), 3000)
@@ -4281,6 +4423,8 @@ function SettingsView({ requireAuth, onDevModeChange }: { requireAuth: (cb: () =
                       </div>
                     )}
                   </InfoCard>
+
+                  {ghStatus?.connected && <RepoInfoCard />}
                 </>
               )}
             </>
@@ -4544,7 +4688,7 @@ function DeveloperDashboard({ requireAuth }: { requireAuth: (cb: () => void) => 
   )
 }
 
-function DevStatusBadge({ status }: { status: string }) {
+export function DevStatusBadge({ status }: { status: string }) {
   const colors: Record<string, string> = {
     draft: 'border-text-muted text-text-muted',
     validated: 'border-blue-400 text-blue-400',
@@ -4878,490 +5022,6 @@ function DevDockerfileImport({ onClose, onCreated, requireAuth }: { onClose: () 
   )
 }
 
-// --- Dev App Editor ---
-
-function DevAppEditor({ id, requireAuth }: { id: string; requireAuth: (cb: () => void) => void }) {
-  const [app, setApp] = useState<DevApp | null>(null)
-  const [activeFile, setActiveFile] = useState('app.yml')
-  const [manifest, setManifest] = useState('')
-  const [script, setScript] = useState('')
-  const [readme, setReadme] = useState('')
-  const [extraFiles, setExtraFiles] = useState<Record<string, string>>({})
-  const [saving, setSaving] = useState(false)
-  const [saveMsg, setSaveMsg] = useState('')
-  const [validation, setValidation] = useState<ValidationResult | null>(null)
-  const [deploying, setDeploying] = useState(false)
-  const [showSubmit, setShowSubmit] = useState(false)
-  const [showSdkRef, setShowSdkRef] = useState(false)
-  const [iconUrl, setIconUrl] = useState('')
-  const [showIconInput, setShowIconInput] = useState(false)
-  const [iconKey, setIconKey] = useState(0)
-
-  const fetchApp = useCallback(async () => {
-    try {
-      const data = await api.devGetApp(id)
-      setApp(data)
-      setManifest(data.manifest)
-      setScript(data.script)
-      setReadme(data.readme)
-    } catch { /* ignore */ }
-  }, [id])
-
-  useEffect(() => { fetchApp() }, [fetchApp])
-
-  const saveFile = useCallback((file: string, content: string) => {
-    requireAuth(async () => {
-      setSaving(true)
-      setSaveMsg('')
-      try {
-        if (file === 'app.yml') await api.devSaveManifest(id, content)
-        else if (file === 'provision/install.py') await api.devSaveScript(id, content)
-        else await api.devSaveFile(id, file, content)
-        setSaveMsg('Saved')
-        setTimeout(() => setSaveMsg(''), 1500)
-      } catch (e: unknown) {
-        setSaveMsg(`Error: ${e instanceof Error ? e.message : 'unknown'}`)
-      }
-      setSaving(false)
-    })
-  }, [id, requireAuth])
-
-  const handleValidate = () => {
-    requireAuth(async () => {
-      try {
-        // Save all files before validating
-        await api.devSaveManifest(id, manifest)
-        await api.devSaveScript(id, script)
-        if (readme) await api.devSaveFile(id, 'README.md', readme)
-        const result = await api.devValidate(id)
-        setValidation(result)
-      } catch (e: unknown) {
-        alert(e instanceof Error ? e.message : 'Validation failed')
-      }
-    })
-  }
-
-  const handleDeploy = () => {
-    requireAuth(async () => {
-      setDeploying(true)
-      try {
-        // Save all files before deploying
-        await api.devSaveManifest(id, manifest)
-        await api.devSaveScript(id, script)
-        if (readme) await api.devSaveFile(id, 'README.md', readme)
-        const result = await api.devDeploy(id)
-        alert(result.message)
-        fetchApp()
-      } catch (e: unknown) {
-        alert(e instanceof Error ? e.message : 'Deploy failed')
-      }
-      setDeploying(false)
-    })
-  }
-
-  const handleUndeploy = () => {
-    requireAuth(async () => {
-      try {
-        await api.devUndeploy(id)
-        fetchApp()
-      } catch (e: unknown) {
-        alert(e instanceof Error ? e.message : 'Undeploy failed')
-      }
-    })
-  }
-
-  const handleExport = () => {
-    requireAuth(() => {
-      const form = document.createElement('form')
-      form.method = 'POST'
-      form.action = api.devExportUrl(id)
-      form.target = '_blank'
-      document.body.appendChild(form)
-      form.submit()
-      document.body.removeChild(form)
-    })
-  }
-
-  const handleSetIcon = () => {
-    if (!iconUrl.trim()) return
-    requireAuth(async () => {
-      try {
-        await api.devSetIcon(id, iconUrl.trim())
-        setIconUrl('')
-        setShowIconInput(false)
-        setIconKey(k => k + 1) // bust cache
-      } catch (e: unknown) {
-        alert(e instanceof Error ? e.message : 'Failed to set icon')
-      }
-    })
-  }
-
-  const coreFileSet = useMemo(() => new Set(['app.yml', 'provision/install.py', 'README.md']), [])
-  const allFiles = useMemo(() => {
-    if (!app) return ['app.yml', 'provision/install.py', 'README.md']
-    const core = ['app.yml', 'provision/install.py']
-    const extra = (app.files || [])
-      .filter(f => !f.is_dir && !coreFileSet.has(f.path) && !f.path.startsWith('.') && !f.path.endsWith('.png') && !f.path.endsWith('.jpg') && !f.path.endsWith('.ico'))
-      .map(f => f.path)
-      .sort()
-    return [...core, ...extra, 'README.md']
-  }, [app, coreFileSet])
-
-  const selectFile = useCallback(async (f: string) => {
-    setActiveFile(f)
-    if (!coreFileSet.has(f) && !(f in extraFiles)) {
-      try {
-        const data = await api.devGetFile(id, f)
-        setExtraFiles(prev => ({ ...prev, [f]: data.content }))
-      } catch { setExtraFiles(prev => ({ ...prev, [f]: '' })) }
-    }
-  }, [id, extraFiles, coreFileSet])
-
-  if (!app) return <Center className="py-16"><span className="text-text-muted font-mono">Loading...</span></Center>
-
-  const currentContent = activeFile === 'app.yml' ? manifest : activeFile === 'provision/install.py' ? script : activeFile === 'README.md' ? readme : (extraFiles[activeFile] ?? '')
-  const setCurrentContent = activeFile === 'app.yml' ? setManifest : activeFile === 'provision/install.py' ? setScript : activeFile === 'README.md' ? setReadme : ((v: string) => setExtraFiles(prev => ({ ...prev, [activeFile]: v })))
-
-  return (
-    <div>
-      <BackLink href="#/developer" label="Back to dashboard" />
-
-      {/* Header */}
-      <div className="flex items-center justify-between mt-4 mb-4">
-        <div className="flex items-center gap-3">
-          <div className="relative group cursor-pointer" onClick={() => setShowIconInput(!showIconInput)}>
-            <img key={iconKey} src={api.devIconUrl(id) + `?t=${iconKey}`} alt="" className="w-12 h-12 rounded-lg border border-border" onError={e => { (e.target as HTMLImageElement).style.display = 'none' }} />
-            <div className="absolute inset-0 bg-black/50 rounded-lg opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
-              <span className="text-[10px] text-white font-mono">edit</span>
-            </div>
-          </div>
-          <div>
-            <h2 className="text-xl font-bold text-text-primary font-mono">{app.name || app.id}</h2>
-            <div className="flex items-center gap-3 mt-1">
-              <span className="text-xs text-text-muted font-mono">v{app.version}</span>
-              <DevStatusBadge status={app.status} />
-            </div>
-          </div>
-        </div>
-        <div className="flex gap-2">
-          <button onClick={handleValidate} className="bg-transparent border border-border rounded px-3 py-1.5 text-xs font-mono text-text-secondary cursor-pointer hover:border-blue-400 hover:text-blue-400 transition-colors">Validate</button>
-          {app.status === 'deployed' ? (
-            <button onClick={handleUndeploy} className="bg-transparent border border-yellow-400 rounded px-3 py-1.5 text-xs font-mono text-yellow-400 cursor-pointer hover:bg-yellow-400/10 transition-colors">Undeploy</button>
-          ) : (
-            <button onClick={handleDeploy} disabled={deploying} className="bg-primary text-bg-primary rounded px-3 py-1.5 text-xs font-mono font-bold cursor-pointer hover:opacity-90 disabled:opacity-50">{deploying ? 'Deploying...' : 'Deploy'}</button>
-          )}
-          <button onClick={handleExport} className="bg-transparent border border-border rounded px-3 py-1.5 text-xs font-mono text-text-secondary cursor-pointer hover:border-primary hover:text-primary transition-colors">Export</button>
-          <button onClick={() => setShowSdkRef(!showSdkRef)} className={`bg-transparent border rounded px-3 py-1.5 text-xs font-mono cursor-pointer transition-colors ${showSdkRef ? 'border-primary text-primary' : 'border-border text-text-secondary hover:border-primary hover:text-primary'}`}>SDK Ref</button>
-          <button onClick={() => setShowSubmit(true)} className="bg-transparent border border-border rounded px-3 py-1.5 text-xs font-mono text-text-secondary cursor-pointer hover:border-primary hover:text-primary transition-colors">Submit</button>
-          {app.status === 'deployed' && <a href={`#/app/${app.id}`} className="bg-transparent border border-primary rounded px-3 py-1.5 text-xs font-mono text-primary no-underline hover:bg-primary/10 transition-colors">Test Install</a>}
-          <button onClick={() => { requireAuth(async () => { if (!confirm(`Delete "${app.name || id}"? This cannot be undone.`)) return; try { await api.devDeleteApp(id); window.location.hash = '#/developer' } catch (e: unknown) { alert(e instanceof Error ? e.message : 'Failed') } }) }} className="bg-transparent border border-red-500/50 rounded px-3 py-1.5 text-xs font-mono text-red-400 cursor-pointer hover:border-red-500 hover:bg-red-500/10 transition-colors">Delete</button>
-        </div>
-      </div>
-
-      {showIconInput && (
-        <div className="mb-4 p-3 border border-border rounded-lg bg-bg-card flex items-center gap-2">
-          <span className="text-xs font-mono text-text-muted whitespace-nowrap">Icon URL:</span>
-          <input
-            type="text"
-            value={iconUrl}
-            onChange={e => setIconUrl(e.target.value)}
-            placeholder="https://example.com/icon.png"
-            className="flex-1 bg-bg-primary border border-border rounded px-2 py-1 text-xs font-mono text-text-primary outline-none focus:border-primary"
-            onKeyDown={e => e.key === 'Enter' && handleSetIcon()}
-          />
-          <button onClick={handleSetIcon} className="bg-primary text-bg-primary rounded px-3 py-1 text-xs font-mono font-bold cursor-pointer hover:opacity-90">Set</button>
-          <button onClick={() => setShowIconInput(false)} className="text-text-muted hover:text-text-secondary text-xs font-mono cursor-pointer">Cancel</button>
-        </div>
-      )}
-
-      {/* Main editor area */}
-      <div className="flex gap-4" style={{ height: 'calc(100vh - 280px)' }}>
-        {/* File tree */}
-        <div className="w-48 border border-border rounded-lg overflow-hidden shrink-0">
-          <div className="bg-bg-card px-3 py-2 border-b border-border text-xs text-text-muted font-mono uppercase">Files</div>
-          <div className="p-1">
-            {allFiles.map(f => (
-              <button
-                key={f}
-                onClick={() => selectFile(f)}
-                className={`w-full text-left px-3 py-1.5 text-xs font-mono rounded cursor-pointer transition-colors ${activeFile === f ? 'bg-primary/10 text-primary' : 'text-text-secondary hover:text-text-primary hover:bg-white/5'}`}
-              >
-                {f}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        {/* Editor */}
-        <div className="flex-1 flex flex-col border border-border rounded-lg overflow-hidden">
-          <div className="bg-bg-card px-4 py-2 border-b border-border flex items-center justify-between">
-            <span className="text-xs font-mono text-text-muted">{activeFile}</span>
-            <div className="flex items-center gap-2">
-              {saveMsg && <span className={`text-xs font-mono ${saveMsg.startsWith('Error') ? 'text-red-400' : 'text-primary'}`}>{saveMsg}</span>}
-              <button
-                onClick={() => saveFile(activeFile, currentContent)}
-                disabled={saving}
-                className="bg-primary text-bg-primary rounded px-3 py-1 text-xs font-mono font-bold cursor-pointer hover:opacity-90 disabled:opacity-50"
-              >{saving ? 'Saving...' : 'Save'}</button>
-            </div>
-          </div>
-          <div className="flex-1 overflow-hidden">
-            <CodeEditor
-              value={currentContent}
-              onChange={setCurrentContent}
-              filename={activeFile}
-              onSave={() => saveFile(activeFile, currentContent)}
-            />
-          </div>
-        </div>
-
-        {/* Validation panel */}
-        {validation && (
-          <div className="w-72 border border-border rounded-lg overflow-hidden shrink-0">
-            <div className="bg-bg-card px-3 py-2 border-b border-border flex items-center justify-between">
-              <span className="text-xs text-text-muted font-mono uppercase">Validation</span>
-              <span className={`text-xs font-mono font-bold ${validation.valid ? 'text-primary' : 'text-red-400'}`}>{validation.valid ? 'PASS' : 'FAIL'}</span>
-            </div>
-            <div className="p-2 overflow-y-auto" style={{ maxHeight: 'calc(100vh - 340px)' }}>
-              {validation.errors.length > 0 && (
-                <div className="mb-3">
-                  <span className="text-xs font-mono text-red-400 font-bold px-1">Errors ({validation.errors.length})</span>
-                  {validation.errors.map((e, i) => <DevValidationMsg key={i} msg={e} type="error" />)}
-                </div>
-              )}
-              {validation.warnings.length > 0 && (
-                <div className="mb-3">
-                  <span className="text-xs font-mono text-yellow-400 font-bold px-1">Warnings ({validation.warnings.length})</span>
-                  {validation.warnings.map((e, i) => <DevValidationMsg key={i} msg={e} type="warning" />)}
-                </div>
-              )}
-              <div>
-                <span className="text-xs font-mono text-text-muted font-bold px-1">Checklist</span>
-                {validation.checklist.map((c, i) => (
-                  <div key={i} className="flex items-center gap-2 px-1 py-1 text-xs font-mono">
-                    <span className={c.passed ? 'text-primary' : 'text-text-muted'}>{c.passed ? '[x]' : '[ ]'}</span>
-                    <span className={c.passed ? 'text-text-secondary' : 'text-text-muted'}>{c.label}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </div>
-        )}
-      </div>
-      {showSdkRef && <SdkReferencePanel />}
-      {showSubmit && <DevSubmitDialog id={id} appName={app.name || app.id} onClose={() => setShowSubmit(false)} requireAuth={requireAuth} />}
-    </div>
-  )
-}
-
-const sdkReference = [
-  { group: 'Package Management', methods: [
-    { name: 'self.apt_install(packages)', desc: 'Install apt packages. packages: list[str]' },
-    { name: 'self.pip_install(packages)', desc: 'Install pip packages. packages: list[str]' },
-    { name: 'self.add_apt_key(url, keyring)', desc: 'Download GPG key and save to keyring path' },
-    { name: 'self.add_apt_repo(line, file)', desc: 'Add APT repository source line to file' },
-  ]},
-  { group: 'File Operations', methods: [
-    { name: 'self.write_config(path, content)', desc: 'Write content to a file, creating dirs as needed' },
-    { name: 'self.create_dir(path, owner?, mode?)', desc: 'Create a directory with optional owner and mode' },
-    { name: 'self.chown(path, user, group)', desc: 'Change ownership of a file or directory' },
-    { name: 'self.download(url, dest)', desc: 'Download a file from URL to destination path' },
-  ]},
-  { group: 'Service Management', methods: [
-    { name: 'self.enable_service(name)', desc: 'Enable and start a systemd service' },
-    { name: 'self.restart_service(name)', desc: 'Restart a systemd service' },
-  ]},
-  { group: 'Commands', methods: [
-    { name: 'self.run_command(cmd)', desc: 'Run a shell command, raises on non-zero exit' },
-    { name: 'self.run_installer_script(url)', desc: 'Download and execute an installer script' },
-  ]},
-  { group: 'User Management', methods: [
-    { name: 'self.create_user(username, ...)', desc: 'Create a system user with optional home dir, shell, groups' },
-  ]},
-  { group: 'Inputs', methods: [
-    { name: 'self.inputs.string(key, default?)', desc: 'Get string input value' },
-    { name: 'self.inputs.integer(key, default?)', desc: 'Get integer input value' },
-    { name: 'self.inputs.boolean(key, default?)', desc: 'Get boolean input value' },
-    { name: 'self.inputs.secret(key)', desc: 'Get secret input value (not logged)' },
-  ]},
-  { group: 'Logging', methods: [
-    { name: 'self.log(message)', desc: 'Log a message to the job output' },
-  ]},
-]
-
-function SdkReferencePanel() {
-  return (
-    <div className="border border-border rounded-lg mt-4 overflow-hidden">
-      <div className="bg-bg-card px-4 py-2 border-b border-border">
-        <span className="text-xs text-text-muted font-mono uppercase">Python SDK Reference</span>
-      </div>
-      <div className="p-4 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 max-h-64 overflow-y-auto">
-        {sdkReference.map(group => (
-          <div key={group.group}>
-            <h4 className="text-xs font-mono text-primary font-bold mb-1">{group.group}</h4>
-            {group.methods.map(m => (
-              <div key={m.name} className="mb-1.5">
-                <code className="text-xs font-mono text-text-primary">{m.name}</code>
-                <p className="text-xs text-text-muted mt-0.5">{m.desc}</p>
-              </div>
-            ))}
-          </div>
-        ))}
-      </div>
-    </div>
-  )
-}
-
-function DevSubmitDialog({ id, appName, onClose, requireAuth, isStack }: { id: string; appName: string; onClose: () => void; requireAuth: (cb: () => void) => void; isStack?: boolean }) {
-  const [publishStatus, setPublishStatus] = useState<PublishStatus | null>(null)
-  const [loading, setLoading] = useState(true)
-  const [publishing, setPublishing] = useState(false)
-  const [prUrl, setPrUrl] = useState('')
-  const [error, setError] = useState('')
-
-  useEffect(() => {
-    const fetchStatus = isStack ? api.devStackPublishStatus(id) : api.devPublishStatus(id)
-    fetchStatus
-      .then(s => { setPublishStatus(s); if (s.pr_url) setPrUrl(s.pr_url) })
-      .catch(() => {})
-      .finally(() => setLoading(false))
-  }, [id, isStack])
-
-  const handlePublish = () => {
-    requireAuth(async () => {
-      setPublishing(true)
-      setError('')
-      try {
-        const result = isStack ? await api.devPublishStack(id) : await api.devPublish(id)
-        setPrUrl(result.pr_url)
-      } catch (e: unknown) {
-        setError(e instanceof Error ? e.message : 'Publish failed')
-      }
-      setPublishing(false)
-    })
-  }
-
-  const handleExportFallback = () => {
-    requireAuth(() => {
-      const form = document.createElement('form')
-      form.method = 'POST'
-      form.action = isStack ? api.devExportStackUrl(id) : api.devExportUrl(id)
-      form.target = '_blank'
-      document.body.appendChild(form)
-      form.submit()
-      document.body.removeChild(form)
-
-      const kind = isStack ? 'Stack' : 'App'
-      const title = encodeURIComponent(`New ${kind}: ${appName}`)
-      const body = encodeURIComponent(`## ${kind} Submission\n\n**${kind} ID:** ${id}\n**${kind} Name:** ${appName}\n\nPlease attach the exported zip file to this issue.`)
-      window.open(`https://github.com/battlewithbytes/pve-appstore-catalog/issues/new?title=${title}&body=${body}`, '_blank')
-      onClose()
-    })
-  }
-
-  const checkLabels: Record<string, string> = {
-    github_connected: 'GitHub connected',
-    validation_passed: 'Manifest validates',
-    test_installed: 'Test install exists',
-    fork_exists: 'Catalog fork exists',
-  }
-
-  return (
-    <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50" onClick={onClose}>
-      <div className="bg-bg-card border border-border rounded-lg p-6 w-full max-w-lg" onClick={(e) => e.stopPropagation()}>
-        <h3 className="text-lg font-bold text-text-primary font-mono mb-4">Submit to Catalog</h3>
-
-        {prUrl ? (
-          <div>
-            <div className="flex items-center gap-2 mb-4">
-              <span className="text-primary text-lg">[OK]</span>
-              <span className="text-sm font-mono text-text-primary">Pull request created!</span>
-              {publishStatus?.pr_state && <PRStateBadge state={publishStatus.pr_state} />}
-            </div>
-            <a href={prUrl} target="_blank" rel="noopener noreferrer" className="text-sm font-mono text-primary underline break-all">{prUrl}</a>
-            <div className="flex justify-end mt-4">
-              <button onClick={onClose} className="bg-primary text-bg-primary rounded px-4 py-2 text-sm font-mono font-bold cursor-pointer hover:opacity-90">Done</button>
-            </div>
-          </div>
-        ) : loading ? (
-          <p className="text-text-muted font-mono text-sm">Checking publish readiness...</p>
-        ) : (
-          <div>
-            {publishStatus && (
-              <div className="mb-4">
-                <span className="text-xs text-text-muted font-mono uppercase mb-2 block">Publish Checklist</span>
-                {Object.entries(publishStatus.checks).map(([key, passed]) => (
-                  <div key={key} className="flex items-center gap-2 py-0.5 text-xs font-mono">
-                    <span className={passed ? 'text-primary' : 'text-red-400'}>{passed ? '[x]' : '[ ]'}</span>
-                    <span className={passed ? 'text-text-secondary' : 'text-text-muted'}>{checkLabels[key] || key}</span>
-                  </div>
-                ))}
-              </div>
-            )}
-
-            {publishStatus?.checks.github_connected ? (
-              <div>
-                <p className="text-xs text-text-muted mb-4">
-                  This will push your app files to a GitHub fork and open a pull request on the official catalog repository.
-                </p>
-                {error && <p className="text-xs text-red-400 font-mono mb-3">{error}</p>}
-                <div className="flex justify-end gap-2">
-                  <button onClick={onClose} className="bg-transparent border border-border rounded px-4 py-2 text-sm font-mono text-text-secondary cursor-pointer hover:border-primary transition-colors">Cancel</button>
-                  <button
-                    onClick={handlePublish}
-                    disabled={publishing || !publishStatus?.ready}
-                    className="bg-primary text-bg-primary rounded px-4 py-2 text-sm font-mono font-bold cursor-pointer hover:opacity-90 disabled:opacity-50"
-                  >
-                    {publishing ? 'Publishing...' : 'Submit Pull Request'}
-                  </button>
-                </div>
-              </div>
-            ) : (
-              <div>
-                <p className="text-xs text-text-muted mb-2">
-                  GitHub is not connected. Connect GitHub in Settings to submit via pull request, or use the manual export method below.
-                </p>
-                <div className="flex justify-end gap-2">
-                  <button onClick={onClose} className="bg-transparent border border-border rounded px-4 py-2 text-sm font-mono text-text-secondary cursor-pointer hover:border-primary transition-colors">Cancel</button>
-                  <button onClick={() => { window.location.hash = '#/settings'; onClose() }} className="bg-transparent border border-border rounded px-4 py-2 text-sm font-mono text-text-secondary cursor-pointer hover:border-primary transition-colors">Go to Settings</button>
-                  <button onClick={handleExportFallback} className="bg-primary text-bg-primary rounded px-4 py-2 text-sm font-mono font-bold cursor-pointer hover:opacity-90">Export + Manual Submit</button>
-                </div>
-              </div>
-            )}
-          </div>
-        )}
-      </div>
-    </div>
-  )
-}
-
-function DevValidationMsg({ msg, type }: { msg: ValidationMsg; type: 'error' | 'warning' }) {
-  const color = type === 'error' ? 'border-red-400/30' : 'border-yellow-400/30'
-  return (
-    <div className={`border-l-2 ${color} px-2 py-1.5 my-1 text-xs font-mono`}>
-      <div className="text-text-muted">{msg.file}{msg.line ? `:${msg.line}` : ''}</div>
-      <div className={type === 'error' ? 'text-red-300' : 'text-yellow-300'}>{msg.message}</div>
-    </div>
-  )
-}
-
-// --- PR State Badge ---
-
-function PRStateBadge({ state }: { state: string }) {
-  const styles: Record<string, string> = {
-    pr_open: 'border-yellow-400 text-yellow-400',
-    pr_merged: 'border-primary text-primary',
-    pr_closed: 'border-red-400 text-red-400',
-  }
-  const labels: Record<string, string> = {
-    pr_open: 'PR Open',
-    pr_merged: 'PR Merged',
-    pr_closed: 'PR Closed',
-  }
-  if (!state || !labels[state]) return null
-  return <span className={`text-xs font-mono px-2 py-0.5 border rounded ${styles[state] || ''}`}>{labels[state]}</span>
-}
-
 // --- Dev Create Stack Wizard ---
 
 function DevCreateStackWizard({ onClose, onCreated, requireAuth }: { onClose: () => void; onCreated: (id: string) => void; requireAuth: (cb: () => void) => void }) {
@@ -5495,7 +5155,7 @@ function DevStackEditor({ id, requireAuth }: { id: string; requireAuth: (cb: () 
         </div>
         <div className="flex gap-2">
           <button onClick={handleExport} className="bg-transparent border border-border rounded px-3 py-1.5 text-xs font-mono text-text-secondary cursor-pointer hover:border-primary transition-colors">Export</button>
-          <button onClick={() => setShowSubmit(true)} className="bg-transparent border border-border rounded px-3 py-1.5 text-xs font-mono text-text-secondary cursor-pointer hover:border-primary transition-colors">Submit</button>
+          <button onClick={() => setShowSubmit(true)} className="bg-transparent border border-border rounded px-3 py-1.5 text-xs font-mono text-text-secondary cursor-pointer hover:border-primary transition-colors">Publish</button>
           {stack.deployed ? (
             <button onClick={handleUndeploy} className="bg-transparent border border-yellow-400 rounded px-3 py-1.5 text-xs font-mono text-yellow-400 cursor-pointer hover:opacity-80">Undeploy</button>
           ) : (
