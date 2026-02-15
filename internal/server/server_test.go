@@ -973,11 +973,18 @@ func TestConfigDefaultsWithStorageDetails(t *testing.T) {
 	if detail["id"] != "local-lvm" {
 		t.Errorf("storage detail id = %v, want local-lvm", detail["id"])
 	}
-	if detail["type"] != "dir" {
-		t.Errorf("storage detail type = %v, want dir", detail["type"])
+	if detail["type"] != "lvmthin" {
+		t.Errorf("storage detail type = %v, want lvmthin", detail["type"])
 	}
-	if detail["browsable"] != true {
-		t.Error("expected storage to be browsable")
+
+	// Verify capacity fields are present
+	totalGB := detail["total_gb"].(float64)
+	if totalGB != 100 {
+		t.Errorf("total_gb = %v, want 100", totalGB)
+	}
+	availGB := detail["available_gb"].(float64)
+	if availGB != 80 {
+		t.Errorf("available_gb = %v, want 80", availGB)
 	}
 }
 

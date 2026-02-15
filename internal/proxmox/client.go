@@ -106,6 +106,52 @@ func (c *Client) GetStorageInfo(ctx context.Context, storage string) (*StorageIn
 	return nil, fmt.Errorf("storage %q not found", storage)
 }
 
+// NodeStorageStatus holds per-node storage status from GET /nodes/{node}/storage.
+// Unlike StorageInfo (from GET /storage), this includes capacity/usage data.
+type NodeStorageStatus struct {
+	ID      string `json:"storage"`
+	Type    string `json:"type"`
+	Content string `json:"content"`
+	Active  int    `json:"active"`
+	Enabled int    `json:"enabled"`
+	Total   int64  `json:"total"` // bytes
+	Used    int64  `json:"used"`  // bytes
+	Avail   int64  `json:"avail"` // bytes
+}
+
+// ListNodeStorages returns all storages for this node with capacity data.
+func (c *Client) ListNodeStorages(ctx context.Context) ([]NodeStorageStatus, error) {
+	var storages []NodeStorageStatus
+	if err := c.doRequest(ctx, "GET", "/nodes/"+c.node+"/storage", nil, &storages); err != nil {
+		return nil, fmt.Errorf("listing node storages: %w", err)
+	}
+	return storages, nil
+}
+
+// NodeNetworkIface holds network interface info from GET /nodes/{node}/network.
+type NodeNetworkIface struct {
+	Iface          string `json:"iface"`
+	Type           string `json:"type"`
+	Address        string `json:"address"`
+	Netmask        string `json:"netmask"`
+	CIDR           string `json:"cidr"`
+	Gateway        string `json:"gateway"`
+	BridgePorts    string `json:"bridge_ports"`
+	Active         int    `json:"active"`
+	Comments       string `json:"comments"`
+	BridgeVLANAware int   `json:"bridge_vlan_aware"`
+	BridgeVIDs     string `json:"bridge_vids"`
+}
+
+// ListNodeNetworks returns all network interfaces for this node.
+func (c *Client) ListNodeNetworks(ctx context.Context) ([]NodeNetworkIface, error) {
+	var ifaces []NodeNetworkIface
+	if err := c.doRequest(ctx, "GET", "/nodes/"+c.node+"/network", nil, &ifaces); err != nil {
+		return nil, fmt.Errorf("listing node networks: %w", err)
+	}
+	return ifaces, nil
+}
+
 // apiResponse wraps the standard Proxmox {"data": ...} envelope.
 type apiResponse struct {
 	Data   json.RawMessage        `json:"data"`

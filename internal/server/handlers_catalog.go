@@ -7,6 +7,7 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/battlewithbytes/pve-appstore/internal/catalog"
 	"github.com/battlewithbytes/pve-appstore/internal/version"
@@ -20,12 +21,16 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusServiceUnavailable, "catalog service not available")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]interface{}{
+	resp := map[string]interface{}{
 		"status":    "ok",
 		"version":   version.Version,
 		"node":      s.cfg.NodeName,
 		"app_count": s.catalogSvc.AppCount(),
-	})
+	}
+	if lr := s.catalogSvc.LastRefresh(); !lr.IsZero() {
+		resp["last_refresh"] = lr.Format(time.RFC3339)
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 func (s *Server) handleListApps(w http.ResponseWriter, r *http.Request) {
@@ -176,11 +181,15 @@ func (s *Server) handleCatalogRefresh(w http.ResponseWriter, r *http.Request) {
 	// After refresh, reconcile dev apps whose PRs have been merged
 	merged := s.ReconcileDevApps()
 
-	writeJSON(w, http.StatusOK, map[string]interface{}{
+	resp := map[string]interface{}{
 		"status":    "refreshed",
 		"app_count": s.catalogSvc.AppCount(),
 		"merged":    merged,
-	})
+	}
+	if lr := s.catalogSvc.LastRefresh(); !lr.IsZero() {
+		resp["last_refresh"] = lr.Format(time.RFC3339)
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 // appResponse is a lightweight summary for the app list.

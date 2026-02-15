@@ -85,12 +85,26 @@ export interface StorageDetail {
   type: string;
   browsable: boolean;
   path?: string;
+  total_gb?: number;
+  used_gb?: number;
+  available_gb?: number;
+}
+
+export interface BridgeDetail {
+  name: string;
+  cidr?: string;
+  gateway?: string;
+  ports?: string;
+  comment?: string;
+  vlan_aware?: boolean;
+  vlans?: string;
 }
 
 export interface ConfigDefaultsResponse {
   storages: string[];
   storage_details: StorageDetail[];
   bridges: string[];
+  bridge_details: BridgeDetail[];
   defaults: {
     cores: number;
     memory_mb: number;
@@ -482,7 +496,7 @@ export interface SettingsUpdate {
 
 export interface DiscoverResponse {
   storages: { id: string; type: string }[];
-  bridges: string[];
+  bridges: BridgeDetail[];
 }
 
 // --- Developer Mode ---

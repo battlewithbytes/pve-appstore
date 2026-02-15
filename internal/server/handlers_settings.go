@@ -162,6 +162,16 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 	s.handleGetSettings(w, r)
 }
 
+type discoverBridgeItem struct {
+	Name      string `json:"name"`
+	CIDR      string `json:"cidr,omitempty"`
+	Gateway   string `json:"gateway,omitempty"`
+	Ports     string `json:"ports,omitempty"`
+	Comment   string `json:"comment,omitempty"`
+	VLANAware bool   `json:"vlan_aware,omitempty"`
+	VLANs     string `json:"vlans,omitempty"`
+}
+
 // handleDiscoverResources returns available storages and bridges from the system.
 func (s *Server) handleDiscoverResources(w http.ResponseWriter, r *http.Request) {
 	type storageItem struct {
@@ -169,9 +179,10 @@ func (s *Server) handleDiscoverResources(w http.ResponseWriter, r *http.Request)
 		Type string `json:"type"`
 	}
 
+	ctx := context.Background()
+
 	var storages []storageItem
 	if s.engine != nil {
-		ctx := context.Background()
 		if list, err := s.engine.ListStorages(ctx); err == nil {
 			for _, si := range list {
 				storages = append(storages, storageItem{ID: si.ID, Type: si.Type})
@@ -182,9 +193,28 @@ func (s *Server) handleDiscoverResources(w http.ResponseWriter, r *http.Request)
 		storages = []storageItem{}
 	}
 
-	bridges := discoverBridges()
+	var bridges []discoverBridgeItem
+	if s.engine != nil {
+		if list, err := s.engine.ListBridges(ctx); err == nil {
+			for _, bi := range list {
+				bridges = append(bridges, discoverBridgeItem{
+					Name:      bi.Name,
+					CIDR:      bi.CIDR,
+					Gateway:   bi.Gateway,
+					Ports:     bi.Ports,
+					Comment:   bi.Comment,
+					VLANAware: bi.VLANAware,
+					VLANs:     bi.VLANs,
+				})
+			}
+		}
+	}
+	// Fallback to shell if engine not available
 	if bridges == nil {
-		bridges = []string{}
+		bridges = discoverBridgesShell()
+	}
+	if bridges == nil {
+		bridges = []discoverBridgeItem{}
 	}
 
 	writeJSON(w, http.StatusOK, map[string]interface{}{
@@ -193,17 +223,17 @@ func (s *Server) handleDiscoverResources(w http.ResponseWriter, r *http.Request)
 	})
 }
 
-// discoverBridges returns all vmbr* network interfaces on the host.
-func discoverBridges() []string {
+// discoverBridgesShell returns vmbr* bridges via shell command (fallback when engine is nil).
+func discoverBridgesShell() []discoverBridgeItem {
 	out, err := exec.Command("ip", "-brief", "link", "show").Output()
 	if err != nil {
 		return nil
 	}
-	var bridges []string
+	var bridges []discoverBridgeItem
 	for _, line := range strings.Split(string(out), "\n") {
 		fields := strings.Fields(line)
 		if len(fields) >= 1 && strings.HasPrefix(fields[0], "vmbr") {
-			bridges = append(bridges, fields[0])
+			bridges = append(bridges, discoverBridgeItem{Name: fields[0]})
 		}
 	}
 	return bridges

@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -672,10 +673,8 @@ func stepProvision(ctx *installContext) error {
 		trimmed := strings.TrimSpace(line)
 		if strings.HasPrefix(trimmed, "@@APPLOG@@") {
 			jsonStr := strings.TrimPrefix(trimmed, "@@APPLOG@@")
-			if extractJSONField(jsonStr, "level") == "error" {
-				if msg := extractJSONField(jsonStr, "msg"); msg != "" {
-					lastError = msg
-				}
+			if entry, ok := parseAppLog(jsonStr); ok && entry.Level == "error" && entry.Msg != "" {
+				lastError = entry.Msg
 			}
 		}
 	})
@@ -705,19 +704,20 @@ func parseProvisionLine(ctx *installContext, line string) {
 	}
 	if strings.HasPrefix(line, "@@APPLOG@@") {
 		jsonStr := strings.TrimPrefix(line, "@@APPLOG@@")
-		level := extractJSONField(jsonStr, "level")
-		msg := extractJSONField(jsonStr, "msg")
-		if level == "output" {
-			key := extractJSONField(jsonStr, "key")
-			value := extractJSONField(jsonStr, "value")
-			if key != "" {
+		entry, ok := parseAppLog(jsonStr)
+		if !ok {
+			ctx.info("[provision] %s", line)
+			return
+		}
+		if entry.Level == "output" {
+			if entry.Key != "" {
 				if ctx.job.Outputs == nil {
 					ctx.job.Outputs = make(map[string]string)
 				}
-				ctx.job.Outputs[key] = value
+				ctx.job.Outputs[entry.Key] = entry.Value
 			}
-		} else if msg != "" {
-			ctx.log(level, "[provision] %s", msg)
+		} else if entry.Msg != "" {
+			ctx.log(entry.Level, "[provision] %s", entry.Msg)
 		}
 	} else {
 		ctx.info("[provision] %s", line)
@@ -732,22 +732,24 @@ func parseProvisionOutput(ctx *installContext, output string) {
 	}
 }
 
-// extractJSONField is a simple field extractor for JSON strings.
-// It avoids importing encoding/json in the hot path for simple key lookups.
-func extractJSONField(jsonStr, key string) string {
-	// Look for "key":"value" pattern
-	search := `"` + key + `":"`
-	idx := strings.Index(jsonStr, search)
-	if idx < 0 {
-		return ""
-	}
-	start := idx + len(search)
-	end := strings.Index(jsonStr[start:], `"`)
-	if end < 0 {
-		return ""
-	}
-	return jsonStr[start : start+end]
+// appLogEntry represents a structured log line from the provisioning SDK.
+type appLogEntry struct {
+	Level string `json:"level"`
+	Msg   string `json:"msg"`
+	Key   string `json:"key"`
+	Value string `json:"value"`
 }
+
+// parseAppLog unmarshals an @@APPLOG@@ JSON payload, properly unescaping
+// unicode sequences like \u001b (ESC) that the Python SDK emits.
+func parseAppLog(jsonStr string) (appLogEntry, bool) {
+	var e appLogEntry
+	if err := json.Unmarshal([]byte(jsonStr), &e); err != nil {
+		return e, false
+	}
+	return e, true
+}
+
 
 func stepHealthcheck(ctx *installContext) error {
 	// Check if the app's install.py implements healthcheck (always try via runner)

@@ -18,14 +18,26 @@ func (s *Server) ReconcileDevApps() []string {
 		log.Printf("[reconcile] failed to list dev apps: %v", err)
 	} else {
 		for _, app := range apps {
-			if app.Status != "published" || app.GitHubPRURL == "" {
+			// Clean up legacy "merged" status entries from before delete-on-merge
+			if app.Status == "merged" {
+				log.Printf("[reconcile] dev app %s: cleaning up stale merged entry", app.ID)
+				s.catalogSvc.RemoveDevApp(app.ID)
+				if err := s.devSvc.Delete(app.ID); err != nil {
+					log.Printf("[reconcile] failed to delete dev app %s: %v", app.ID, err)
+				}
+				merged = append(merged, app.ID)
+				continue
+			}
+			if (app.Status != "published" && app.Status != "deployed") || app.GitHubPRURL == "" {
 				continue
 			}
 			state := s.getPRState(app.GitHubPRURL)
 			if state == "pr_merged" {
-				log.Printf("[reconcile] dev app %s: PR merged, auto-undeploying", app.ID)
+				log.Printf("[reconcile] dev app %s: PR merged, removing dev app", app.ID)
 				s.catalogSvc.RemoveDevApp(app.ID)
-				s.devSvc.SetGitHubMeta(app.ID, map[string]string{"status": "merged"})
+				if err := s.devSvc.Delete(app.ID); err != nil {
+					log.Printf("[reconcile] failed to delete dev app %s: %v", app.ID, err)
+				}
 				merged = append(merged, app.ID)
 			}
 		}
@@ -37,14 +49,25 @@ func (s *Server) ReconcileDevApps() []string {
 		log.Printf("[reconcile] failed to list dev stacks: %v", err)
 	} else {
 		for _, stack := range stacks {
-			if stack.Status != "published" || stack.GitHubPRURL == "" {
+			if stack.Status == "merged" {
+				log.Printf("[reconcile] dev stack %s: cleaning up stale merged entry", stack.ID)
+				s.catalogSvc.RemoveDevStack(stack.ID)
+				if err := s.devSvc.DeleteStack(stack.ID); err != nil {
+					log.Printf("[reconcile] failed to delete dev stack %s: %v", stack.ID, err)
+				}
+				merged = append(merged, stack.ID)
+				continue
+			}
+			if (stack.Status != "published" && stack.Status != "deployed") || stack.GitHubPRURL == "" {
 				continue
 			}
 			state := s.getPRState(stack.GitHubPRURL)
 			if state == "pr_merged" {
-				log.Printf("[reconcile] dev stack %s: PR merged, auto-undeploying", stack.ID)
+				log.Printf("[reconcile] dev stack %s: PR merged, removing dev stack", stack.ID)
 				s.catalogSvc.RemoveDevStack(stack.ID)
-				s.devSvc.SetGitHubMeta(stack.ID, map[string]string{"status": "merged"})
+				if err := s.devSvc.DeleteStack(stack.ID); err != nil {
+					log.Printf("[reconcile] failed to delete dev stack %s: %v", stack.ID, err)
+				}
 				merged = append(merged, stack.ID)
 			}
 		}
@@ -55,6 +78,23 @@ func (s *Server) ReconcileDevApps() []string {
 	}
 
 	return merged
+}
+
+// tryRefreshInBackground triggers a catalog refresh + reconciliation in a
+// background goroutine. Uses TryLock to prevent duplicate goroutines from
+// rapid frontend polling — if a refresh is already running, the new trigger
+// is silently dropped.
+func (s *Server) tryRefreshInBackground(reason string) {
+	go func() {
+		if !s.refreshing.TryLock() {
+			return // already refreshing
+		}
+		defer s.refreshing.Unlock()
+		log.Printf("[catalog] background refresh: %s", reason)
+		if err := s.RefreshAndReconcile(); err != nil {
+			log.Printf("[catalog] background refresh failed: %v", err)
+		}
+	}()
 }
 
 // RefreshAndReconcile refreshes the catalog and then reconciles dev apps.

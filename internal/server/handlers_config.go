@@ -14,32 +14,140 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+type bridgeDefault struct {
+	Name      string `json:"name"`
+	CIDR      string `json:"cidr,omitempty"`
+	Gateway   string `json:"gateway,omitempty"`
+	Ports     string `json:"ports,omitempty"`
+	Comment   string `json:"comment,omitempty"`
+	VLANAware bool   `json:"vlan_aware,omitempty"`
+	VLANs     string `json:"vlans,omitempty"`
+}
+
 type storageDefault struct {
 	ID        string `json:"id"`
 	Type      string `json:"type"`
 	Browsable bool   `json:"browsable"`
 	Path      string `json:"path,omitempty"`
+	TotalGB   int    `json:"total_gb"`
+	UsedGB    int    `json:"used_gb"`
+	AvailGB   int    `json:"available_gb"`
 }
 
 func (s *Server) handleConfigDefaults(w http.ResponseWriter, r *http.Request) {
-	// Build enriched storage details from resolved metadata
 	var details []storageDefault
-	for _, sm := range s.storageMetas {
-		details = append(details, storageDefault{
-			ID:        sm.ID,
-			Type:      sm.Type,
-			Browsable: sm.Browsable,
-			Path:      sm.Path,
-		})
+	var storageIDs []string
+
+	// Try live discovery from Proxmox node endpoint
+	if s.engine != nil {
+		allStorages, err := s.engine.ListStorages(r.Context())
+		if err == nil {
+			// Build a filter set from config.yml storages (if any)
+			filterSet := make(map[string]bool, len(s.cfg.Storages))
+			for _, id := range s.cfg.Storages {
+				filterSet[id] = true
+			}
+
+			for _, si := range allStorages {
+				// If config.yml has storages listed, use as filter; otherwise show all
+				if len(filterSet) > 0 && !filterSet[si.ID] {
+					continue
+				}
+				const gb = 1024 * 1024 * 1024
+				details = append(details, storageDefault{
+					ID:        si.ID,
+					Type:      si.Type,
+					Browsable: si.Browsable,
+					Path:      si.Path,
+					TotalGB:   int(si.TotalBytes / gb),
+					UsedGB:    int(si.UsedBytes / gb),
+					AvailGB:   int(si.AvailBytes / gb),
+				})
+				storageIDs = append(storageIDs, si.ID)
+			}
+		}
+	}
+
+	// Fallback to static storageMetas if live discovery returned nothing
+	if len(details) == 0 {
+		for _, sm := range s.storageMetas {
+			details = append(details, storageDefault{
+				ID:        sm.ID,
+				Type:      sm.Type,
+				Browsable: sm.Browsable,
+				Path:      sm.Path,
+			})
+			storageIDs = append(storageIDs, sm.ID)
+		}
 	}
 	if details == nil {
 		details = []storageDefault{}
 	}
+	if storageIDs == nil {
+		storageIDs = s.cfg.Storages
+	}
+
+	// Discover ALL bridges from Proxmox API — configured bridges sort first
+	var bridgeNames []string
+	var bridgeDetails []bridgeDefault
+	if s.engine != nil {
+		allBridges, err := s.engine.ListBridges(r.Context())
+		if err == nil {
+			configSet := make(map[string]bool, len(s.cfg.Bridges))
+			for _, b := range s.cfg.Bridges {
+				configSet[b] = true
+			}
+			// Configured bridges first (in config order)
+			for _, cfgName := range s.cfg.Bridges {
+				for _, bi := range allBridges {
+					if bi.Name == cfgName {
+						bridgeNames = append(bridgeNames, bi.Name)
+						bridgeDetails = append(bridgeDetails, bridgeDefault{
+							Name:      bi.Name,
+							CIDR:      bi.CIDR,
+							Gateway:   bi.Gateway,
+							Ports:     bi.Ports,
+							Comment:   bi.Comment,
+							VLANAware: bi.VLANAware,
+							VLANs:     bi.VLANs,
+						})
+						break
+					}
+				}
+			}
+			// Then remaining bridges
+			for _, bi := range allBridges {
+				if configSet[bi.Name] {
+					continue
+				}
+				bridgeNames = append(bridgeNames, bi.Name)
+				bridgeDetails = append(bridgeDetails, bridgeDefault{
+					Name:      bi.Name,
+					CIDR:      bi.CIDR,
+					Gateway:   bi.Gateway,
+					Ports:     bi.Ports,
+					Comment:   bi.Comment,
+					VLANAware: bi.VLANAware,
+					VLANs:     bi.VLANs,
+				})
+			}
+		}
+	}
+	if len(bridgeNames) == 0 {
+		bridgeNames = s.cfg.Bridges
+	}
+	if bridgeNames == nil {
+		bridgeNames = []string{}
+	}
+	if bridgeDetails == nil {
+		bridgeDetails = []bridgeDefault{}
+	}
 
 	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"storages":        s.cfg.Storages,
+		"storages":        storageIDs,
 		"storage_details": details,
-		"bridges":         s.cfg.Bridges,
+		"bridges":         bridgeNames,
+		"bridge_details":  bridgeDetails,
 		"defaults": map[string]interface{}{
 			"cores":     s.cfg.Defaults.Cores,
 			"memory_mb": s.cfg.Defaults.MemoryMB,

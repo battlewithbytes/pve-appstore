@@ -549,6 +549,13 @@ func (s *Server) handleDevStackPublishStatus(w http.ResponseWriter, r *http.Requ
 		}
 	}
 
+	// Auto-refresh catalog when PR is merged so the stack appears immediately
+	if prState == "pr_merged" {
+		if stack, err := s.devSvc.GetStack(id); err == nil && stack != nil && (stack.Status == "published" || stack.Status == "deployed") {
+			s.tryRefreshInBackground("PR merged for stack " + id)
+		}
+	}
+
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"ready":     ready,
 		"checks":    checks,

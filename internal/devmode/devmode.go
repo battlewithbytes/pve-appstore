@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -327,23 +328,31 @@ func (d *DevStore) readMeta(id string) (*DevAppMeta, error) {
 	var githubBranch, githubPRURL, testInstallID, sourceAppID string
 	var githubPRNumber int
 	if statusData, err := os.ReadFile(filepath.Join(appDir, ".devstatus")); err == nil {
-		var s struct {
-			Status         string `json:"status"`
-			SourceAppID    string `json:"source_app_id"`
-			GitHubBranch   string `json:"github_branch"`
-			GitHubPRURL    string `json:"github_pr_url"`
-			GitHubPRNumber int    `json:"github_pr_number"`
-			TestInstallID  string `json:"test_install_id"`
-		}
-		if json.Unmarshal(statusData, &s) == nil {
-			if s.Status != "" {
-				status = s.Status
+		// Use map[string]interface{} to handle mixed types (pr_number stored as string by SetGitHubMeta)
+		var raw map[string]interface{}
+		if json.Unmarshal(statusData, &raw) == nil {
+			if v, ok := raw["status"].(string); ok && v != "" {
+				status = v
 			}
-			sourceAppID = s.SourceAppID
-			githubBranch = s.GitHubBranch
-			githubPRURL = s.GitHubPRURL
-			githubPRNumber = s.GitHubPRNumber
-			testInstallID = s.TestInstallID
+			if v, ok := raw["source_app_id"].(string); ok {
+				sourceAppID = v
+			}
+			if v, ok := raw["github_branch"].(string); ok {
+				githubBranch = v
+			}
+			if v, ok := raw["github_pr_url"].(string); ok {
+				githubPRURL = v
+			}
+			if v, ok := raw["test_install_id"].(string); ok {
+				testInstallID = v
+			}
+			// github_pr_number may be stored as string or number
+			switch v := raw["github_pr_number"].(type) {
+			case string:
+				githubPRNumber, _ = strconv.Atoi(v)
+			case float64:
+				githubPRNumber = int(v)
+			}
 		}
 	}
 
@@ -661,19 +670,23 @@ func (d *DevStore) readStackMeta(id string) (*DevStackMeta, error) {
 	var githubBranch, githubPRURL string
 	var githubPRNumber int
 	if statusData, err := os.ReadFile(filepath.Join(stackDir, ".devstatus")); err == nil {
-		var s struct {
-			Status         string `json:"status"`
-			GitHubBranch   string `json:"github_branch"`
-			GitHubPRURL    string `json:"github_pr_url"`
-			GitHubPRNumber int    `json:"github_pr_number"`
-		}
-		if json.Unmarshal(statusData, &s) == nil {
-			if s.Status != "" {
-				status = s.Status
+		var raw map[string]interface{}
+		if json.Unmarshal(statusData, &raw) == nil {
+			if v, ok := raw["status"].(string); ok && v != "" {
+				status = v
 			}
-			githubBranch = s.GitHubBranch
-			githubPRURL = s.GitHubPRURL
-			githubPRNumber = s.GitHubPRNumber
+			if v, ok := raw["github_branch"].(string); ok {
+				githubBranch = v
+			}
+			if v, ok := raw["github_pr_url"].(string); ok {
+				githubPRURL = v
+			}
+			switch v := raw["github_pr_number"].(type) {
+			case string:
+				githubPRNumber, _ = strconv.Atoi(v)
+			case float64:
+				githubPRNumber = int(v)
+			}
 		}
 	}
 

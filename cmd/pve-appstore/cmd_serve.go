@@ -136,21 +136,31 @@ var serveCmd = &cobra.Command{
 		// Start server
 		srv := server.New(cfg, cat, eng, spaFS, server.WithConfigPath(serveConfigPath))
 
-		// Start auto-refresh if configured (after server creation so reconciliation has access to dev services)
+		// Reconcile dev apps on startup (e.g. merged PRs while service was down)
+		if merged := srv.ReconcileDevApps(); len(merged) > 0 {
+			fmt.Printf("  reconcile: %d dev apps auto-undeployed (PRs merged)\n", len(merged))
+		}
+
+		// Start smart auto-refresh if configured (after server creation so reconciliation has access to dev services)
 		if serveCatalogDir == "" && cfg.Catalog.Refresh != config.RefreshManual {
-			interval := 24 * time.Hour
-			if cfg.Catalog.Refresh == config.RefreshWeekly {
-				interval = 7 * 24 * time.Hour
-			}
+			const checkInterval = 5 * time.Minute
 			refreshCtx, refreshCancel := context.WithCancel(context.Background())
 			defer refreshCancel()
 			go func() {
-				ticker := time.NewTicker(interval)
+				ticker := time.NewTicker(checkInterval)
 				defer ticker.Stop()
 				for {
 					select {
 					case <-ticker.C:
-						fmt.Printf("  catalog: auto-refreshing (%s)...\n", cfg.Catalog.Refresh)
+						stale, err := cat.IsStale()
+						if err != nil {
+							fmt.Fprintf(os.Stderr, "warning: staleness check failed: %v\n", err)
+							continue
+						}
+						if !stale {
+							continue
+						}
+						fmt.Printf("  catalog: remote HEAD changed, auto-refreshing...\n")
 						if err := srv.RefreshAndReconcile(); err != nil {
 							fmt.Fprintf(os.Stderr, "warning: auto-refresh failed: %v\n", err)
 						} else {
@@ -161,7 +171,7 @@ var serveCmd = &cobra.Command{
 					}
 				}
 			}()
-			fmt.Printf("  refresh: %s (every %s)\n", cfg.Catalog.Refresh, interval)
+			fmt.Printf("  refresh: smart (%s, checking every %s)\n", cfg.Catalog.Refresh, checkInterval)
 		}
 
 		// Graceful shutdown

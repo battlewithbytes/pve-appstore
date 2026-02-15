@@ -190,28 +190,58 @@ func TestMergeEnvVarsNoOverlap(t *testing.T) {
 	}
 }
 
-// --- extractJSONField ---
+// --- parseAppLog ---
 
-func TestExtractJSONFieldFound(t *testing.T) {
-	json := `{"level":"error","msg":"something failed"}`
-	if got := extractJSONField(json, "level"); got != "error" {
-		t.Errorf("extractJSONField(level) = %q, want %q", got, "error")
+func TestParseAppLogFound(t *testing.T) {
+	entry, ok := parseAppLog(`{"level":"error","msg":"something failed"}`)
+	if !ok {
+		t.Fatal("parseAppLog returned !ok")
 	}
-	if got := extractJSONField(json, "msg"); got != "something failed" {
-		t.Errorf("extractJSONField(msg) = %q, want %q", got, "something failed")
+	if entry.Level != "error" {
+		t.Errorf("level = %q, want %q", entry.Level, "error")
 	}
-}
-
-func TestExtractJSONFieldMissing(t *testing.T) {
-	json := `{"level":"info"}`
-	if got := extractJSONField(json, "msg"); got != "" {
-		t.Errorf("extractJSONField(msg) = %q, want empty", got)
+	if entry.Msg != "something failed" {
+		t.Errorf("msg = %q, want %q", entry.Msg, "something failed")
 	}
 }
 
-func TestExtractJSONFieldEmptyJSON(t *testing.T) {
-	if got := extractJSONField("", "key"); got != "" {
-		t.Errorf("extractJSONField empty = %q, want empty", got)
+func TestParseAppLogMissing(t *testing.T) {
+	entry, ok := parseAppLog(`{"level":"info"}`)
+	if !ok {
+		t.Fatal("parseAppLog returned !ok")
+	}
+	if entry.Msg != "" {
+		t.Errorf("msg = %q, want empty", entry.Msg)
+	}
+}
+
+func TestParseAppLogInvalid(t *testing.T) {
+	_, ok := parseAppLog("")
+	if ok {
+		t.Error("parseAppLog should return !ok for empty string")
+	}
+}
+
+func TestParseAppLogUnescapesUnicode(t *testing.T) {
+	entry, ok := parseAppLog(`{"level":"info","msg":"color \u001b[37mwhite\u001b[0m done"}`)
+	if !ok {
+		t.Fatal("parseAppLog returned !ok")
+	}
+	// \u001b should be unescaped to the actual ESC byte (0x1B)
+	want := "color \x1b[37mwhite\x1b[0m done"
+	if entry.Msg != want {
+		t.Errorf("msg = %q, want %q", entry.Msg, want)
+	}
+}
+
+func TestParseAppLogEscapedQuotes(t *testing.T) {
+	entry, ok := parseAppLog(`{"level":"info","msg":"said \"hello\" world"}`)
+	if !ok {
+		t.Fatal("parseAppLog returned !ok")
+	}
+	want := `said "hello" world`
+	if entry.Msg != want {
+		t.Errorf("msg = %q, want %q", entry.Msg, want)
 	}
 }
 

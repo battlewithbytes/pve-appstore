@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/battlewithbytes/pve-appstore/internal/catalog"
@@ -34,6 +35,7 @@ type Server struct {
 	spa               fs.FS // embedded or disk-based SPA assets
 	storageMetas      []engine.StorageInfo
 	allowedPaths      []string // browsable filesystem roots from configured storages
+	refreshing        sync.Mutex
 }
 
 // Option configures the server.

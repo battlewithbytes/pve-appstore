@@ -73,6 +73,64 @@ export function InstallWizard({ app, onClose, replaceExisting, keepVolumes, exis
   const bindVolumes = (app.volumes || []).filter(v => v.type === 'bind')
   const hasMounts = volumeVolumes.length > 0 || bindVolumes.length > 0
 
+  // Build a lookup map for storage details (capacity info)
+  const storageDetailMap = useMemo(() => {
+    const m = new Map<string, { type: string; total_gb: number; available_gb: number }>()
+    if (defaults?.storage_details) {
+      for (const sd of defaults.storage_details) {
+        m.set(sd.id, { type: sd.type, total_gb: sd.total_gb || 0, available_gb: sd.available_gb || 0 })
+      }
+    }
+    return m
+  }, [defaults])
+
+  const formatSize = (gb: number) => gb >= 1024 ? `${(gb / 1024).toFixed(1)} TB` : `${gb} GB`
+
+  const storageLabel = (id: string) => {
+    const sd = storageDetailMap.get(id)
+    if (!sd || !sd.total_gb) return id
+    return `${id}  (${sd.type})  ${formatSize(sd.available_gb)} free / ${formatSize(sd.total_gb)}`
+  }
+
+  // Build a lookup map for bridge details (CIDR, comment, VLANs)
+  const bridgeDetailMap = useMemo(() => {
+    const m = new Map<string, { cidr?: string; gateway?: string; comment?: string; vlan_aware?: boolean; vlans?: string }>()
+    if (defaults?.bridge_details) {
+      for (const bd of defaults.bridge_details) {
+        m.set(bd.name, { cidr: bd.cidr, gateway: bd.gateway, comment: bd.comment, vlan_aware: bd.vlan_aware, vlans: bd.vlans })
+      }
+    }
+    return m
+  }, [defaults])
+
+  const bridgeLabel = (name: string) => {
+    const bd = bridgeDetailMap.get(name)
+    if (!bd) return name
+    const parts = [name]
+    if (bd.cidr) {
+      const slashIdx = bd.cidr.indexOf('/')
+      if (slashIdx > 0) {
+        const prefix = bd.cidr.substring(slashIdx)
+        const octets = bd.cidr.substring(0, slashIdx).split('.')
+        if (octets.length === 4) {
+          const mask = parseInt(prefix.substring(1))
+          if (mask <= 8) octets[1] = octets[2] = octets[3] = '0'
+          else if (mask <= 16) octets[2] = octets[3] = '0'
+          else if (mask <= 24) octets[3] = '0'
+          parts.push(`${octets.join('.')}${prefix}`)
+        } else {
+          parts.push(bd.cidr)
+        }
+      }
+    } else {
+      parts.push('(no IP)')
+    }
+    if (bd.vlan_aware && bd.vlans) parts.push(`VLAN ${bd.vlans}`)
+    else if (bd.vlan_aware) parts.push('VLAN-aware')
+    if (bd.comment) parts.push(bd.comment)
+    return parts.join('    ')
+  }
+
   // Input validation
   const inputErrors = useMemo(() => {
     const errors: Record<string, string> = {}
@@ -240,7 +298,7 @@ export function InstallWizard({ app, onClose, replaceExisting, keepVolumes, exis
 
   return (
     <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-[100]">
-      <div className="bg-bg-card border border-border rounded-xl p-8 w-full max-w-[560px] max-h-[90vh] overflow-auto">
+      <div className="bg-bg-card border border-border rounded-xl p-8 w-full max-w-[700px] max-h-[90vh] overflow-auto">
         <h2 className="text-xl font-bold text-text-primary mb-5 font-mono">Install {app.name}</h2>
 
         <SectionTitle>Resources</SectionTitle>
@@ -252,19 +310,19 @@ export function InstallWizard({ app, onClose, replaceExisting, keepVolumes, exis
         <FormRow label="Storage Pool" description="Proxmox storage where the container's virtual disk will be created." help={`Disk size: ${disk} GB`}>
           {defaults && defaults.storages.length > 1 ? (
             <select value={storage} onChange={e => setStorage(e.target.value)} className="w-full px-3 py-2 bg-bg-secondary border border-border rounded-md text-text-primary text-sm outline-none focus:border-primary font-mono">
-              {defaults.storages.map(s => <option key={s} value={s}>{s}</option>)}
+              {defaults.storages.map(s => <option key={s} value={s}>{storageLabel(s)}</option>)}
             </select>
           ) : (
-            <span className="block px-3 py-2 bg-bg-primary border border-border rounded-md text-text-secondary text-sm font-mono">{storage}</span>
+            <span className="block px-3 py-2 bg-bg-primary border border-border rounded-md text-text-secondary text-sm font-mono">{storageLabel(storage)}</span>
           )}
         </FormRow>
         <FormRow label="Network Bridge" description="Proxmox virtual bridge that connects the container to your network." help="Container gets its own IP via DHCP on this bridge">
           {defaults && defaults.bridges.length > 1 ? (
             <select value={bridge} onChange={e => setBridge(e.target.value)} className="w-full px-3 py-2 bg-bg-secondary border border-border rounded-md text-text-primary text-sm outline-none focus:border-primary font-mono">
-              {defaults.bridges.map(b => <option key={b} value={b}>{b}</option>)}
+              {defaults.bridges.map(b => <option key={b} value={b}>{bridgeLabel(b)}</option>)}
             </select>
           ) : (
-            <span className="block px-3 py-2 bg-bg-primary border border-border rounded-md text-text-secondary text-sm font-mono">{bridge}</span>
+            <span className="block px-3 py-2 bg-bg-primary border border-border rounded-md text-text-secondary text-sm font-mono">{bridgeLabel(bridge)}</span>
           )}
         </FormRow>
 
@@ -323,10 +381,10 @@ export function InstallWizard({ app, onClose, replaceExisting, keepVolumes, exis
                           <select value={volumeStorages[vol.name] || storage}
                             onChange={e => setVolumeStorages(p => ({ ...p, [vol.name]: e.target.value }))}
                             className="px-2 py-1 text-xs bg-bg-primary border border-border rounded text-text-primary font-mono">
-                            {defaults.storages.map(s => <option key={s} value={s}>{s}</option>)}
+                            {defaults.storages.map(s => <option key={s} value={s}>{storageLabel(s)}</option>)}
                           </select>
                         ) : (
-                          <span className="text-xs text-text-secondary font-mono">{storage}</span>
+                          <span className="text-xs text-text-secondary font-mono">{storageLabel(storage)}</span>
                         )}
                         <Badge className="bg-primary/10 text-primary">pve volume</Badge>
                       </>

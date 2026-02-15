@@ -46,6 +46,8 @@ func TestParseDockerfileUnknownBase(t *testing.T) {
 func TestParseDockerfileScratchFallback(t *testing.T) {
 	// Rootfs-builder pattern: first FROM is real OS, last FROM is scratch.
 	// BaseImage/BaseOS should fall back to the previous FROM.
+	// Since scratch is a fresh image (not an alias), packages from earlier
+	// stages are reset — only packages from the scratch stage survive.
 	content := `FROM alpine:3.21 AS rootfs-stage
 RUN apk add --no-cache bash curl
 FROM scratch
@@ -58,13 +60,16 @@ RUN apk add --no-cache shadow coreutils
 	if df.BaseOS != "alpine" {
 		t.Errorf("expected BaseOS=alpine, got %q", df.BaseOS)
 	}
-	// Packages from all stages should still be collected
+	// Only scratch-stage packages survive (builder packages reset on fresh FROM)
 	pkgSet := map[string]bool{}
 	for _, p := range df.Packages {
 		pkgSet[p] = true
 	}
-	if !pkgSet["bash"] || !pkgSet["shadow"] {
-		t.Errorf("expected packages from both stages, got %v", df.Packages)
+	if !pkgSet["shadow"] || !pkgSet["coreutils"] {
+		t.Errorf("expected scratch-stage packages [shadow, coreutils], got %v", df.Packages)
+	}
+	if pkgSet["bash"] || pkgSet["curl"] {
+		t.Errorf("builder-stage packages should be reset on fresh FROM, got %v", df.Packages)
 	}
 }
 
@@ -326,9 +331,136 @@ RUN sed -i 's/foo/bar/' /etc/nginx/nginx.conf
 	if len(df.RunCommands) != 1 {
 		t.Errorf("expected 1 RunCommand from final stage, got %d", len(df.RunCommands))
 	}
-	// Packages from all stages should accumulate
+	// Packages from all stages should accumulate (alias chain: FROM base)
 	if len(df.Packages) != 1 || df.Packages[0] != "nginx" {
 		t.Errorf("expected [nginx] packages, got %v", df.Packages)
+	}
+}
+
+func TestMultiStageAliasChainKeepsPackages(t *testing.T) {
+	// When FROM references a previously-defined stage alias, packages accumulate.
+	content := `FROM alpine:3.22 AS base
+RUN apk add --no-cache nginx curl
+
+FROM base AS final
+RUN apk add --no-cache vim
+`
+	df := ParseDockerfile(content)
+	pkgSet := map[string]bool{}
+	for _, p := range df.Packages {
+		pkgSet[p] = true
+	}
+	if !pkgSet["nginx"] || !pkgSet["curl"] || !pkgSet["vim"] {
+		t.Errorf("expected packages from both stages via alias chain, got %v", df.Packages)
+	}
+}
+
+func TestMultiStageFreshImageResetsPackages(t *testing.T) {
+	// When FROM references a fresh external image (not an alias), packages reset.
+	content := `FROM golang:1.22 AS builder
+RUN apt-get update && apt-get install -y build-essential cmake
+ENV GO111MODULE=on
+ENV CGO_ENABLED=0
+
+FROM debian:bookworm-slim
+RUN apt-get update && apt-get install -y ca-certificates curl
+ENV APP_PORT=8080
+EXPOSE 9090
+`
+	df := ParseDockerfile(content)
+
+	// Only final-stage packages survive
+	pkgSet := map[string]bool{}
+	for _, p := range df.Packages {
+		pkgSet[p] = true
+	}
+	if !pkgSet["ca-certificates"] || !pkgSet["curl"] {
+		t.Errorf("expected final-stage packages, got %v", df.Packages)
+	}
+	if pkgSet["build-essential"] || pkgSet["cmake"] {
+		t.Errorf("builder packages should be reset on fresh FROM, got %v", df.Packages)
+	}
+
+	// Only final-stage env vars survive (GO111MODULE, CGO_ENABLED reset)
+	envKeys := map[string]bool{}
+	for _, ev := range df.EnvVars {
+		envKeys[ev.Key] = true
+	}
+	if !envKeys["APP_PORT"] {
+		t.Errorf("expected APP_PORT env var from final stage, got %v", df.EnvVars)
+	}
+	// GO111MODULE and CGO_ENABLED are reset (fresh FROM) AND filtered (build vars)
+	if envKeys["GO111MODULE"] || envKeys["CGO_ENABLED"] {
+		t.Errorf("build env vars should not survive fresh FROM, got %v", df.EnvVars)
+	}
+
+	// Ports accumulate across stages
+	if len(df.Ports) != 1 || df.Ports[0] != "9090" {
+		t.Errorf("expected port 9090, got %v", df.Ports)
+	}
+}
+
+func TestContinuationLineComments(t *testing.T) {
+	// Inline # comments in continuation blocks should be stripped.
+	content := `FROM debian:bookworm
+ENV FOO=bar \
+    # This is a comment \
+    BAZ=qux
+`
+	df := ParseDockerfile(content)
+	envKeys := map[string]bool{}
+	for _, ev := range df.EnvVars {
+		envKeys[ev.Key] = true
+	}
+	if !envKeys["FOO"] {
+		t.Error("expected FOO env var")
+	}
+	if !envKeys["BAZ"] {
+		t.Error("expected BAZ env var")
+	}
+	// The comment should NOT appear as an env key
+	for _, ev := range df.EnvVars {
+		if strings.HasPrefix(ev.Key, "#") {
+			t.Errorf("comment leaked as env key: %q", ev.Key)
+		}
+	}
+}
+
+func TestBuildEnvVarsFiltered(t *testing.T) {
+	content := `FROM debian:bookworm
+ENV GO111MODULE=on
+ENV CGO_ENABLED=0
+ENV RUSTFLAGS="-C target-feature=+crt-static"
+ENV CARGO_HOME=/usr/local/cargo
+ENV JAVA_HOME=/usr/lib/jvm/java-17
+ENV GRADLE_HOME=/opt/gradle
+ENV CI=true
+ENV DOCKER_BUILDKIT=1
+ENV NPM_CONFIG_LOGLEVEL=warn
+ENV NEXT_TELEMETRY_DISABLED=1
+ENV TARGET_GOOS=linux
+ENV TARGET_GOARCH=amd64
+ENV APP_NAME=myapp
+`
+	df := ParseDockerfile(content)
+	envKeys := map[string]bool{}
+	for _, ev := range df.EnvVars {
+		envKeys[ev.Key] = true
+	}
+	// APP_NAME should survive
+	if !envKeys["APP_NAME"] {
+		t.Error("expected APP_NAME to survive filtering")
+	}
+	// All build vars should be filtered
+	for _, key := range []string{
+		"GO111MODULE", "CGO_ENABLED", "RUSTFLAGS", "CARGO_HOME",
+		"JAVA_HOME", "GRADLE_HOME", "CI", "DOCKER_BUILDKIT",
+		"NPM_CONFIG_LOGLEVEL", "NEXT_TELEMETRY_DISABLED",
+		"TARGET_GOOS", "TARGET_GOARCH",
+	} {
+		if envKeys[key] {
+			t.Errorf("build env var %q should be filtered out", key)
+		}
 	}
 }
 
@@ -769,25 +901,22 @@ VOLUME /config /sync
 		t.Errorf("expected debian, got %q", df.BaseOS)
 	}
 
-	// Packages should be deduplicated and include all from both stages
+	// Second FROM is a fresh external image (not an alias), so builder-stage
+	// packages are reset. Only runtime packages from the final stage survive.
 	pkgSet := map[string]bool{}
 	for _, p := range df.Packages {
 		pkgSet[p] = true
 	}
-	for _, expected := range []string{"ca-certificates", "curl", "resilio-sync", "build-essential", "cmake", "libssl-dev", "libssl3"} {
+	for _, expected := range []string{"ca-certificates", "curl", "resilio-sync", "libssl3"} {
 		if !pkgSet[expected] {
-			t.Errorf("missing package %q (got %v)", expected, df.Packages)
+			t.Errorf("missing runtime package %q (got %v)", expected, df.Packages)
 		}
 	}
-	// curl should appear only once
-	curlCount := 0
-	for _, p := range df.Packages {
-		if p == "curl" {
-			curlCount++
+	// Builder-stage packages should NOT be present
+	for _, buildPkg := range []string{"build-essential", "cmake", "libssl-dev"} {
+		if pkgSet[buildPkg] {
+			t.Errorf("builder package %q should be reset on fresh FROM, got %v", buildPkg, df.Packages)
 		}
-	}
-	if curlCount != 1 {
-		t.Errorf("curl appeared %d times, expected 1", curlCount)
 	}
 
 	// Ports

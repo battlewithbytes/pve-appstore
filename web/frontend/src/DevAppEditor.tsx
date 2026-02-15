@@ -23,10 +23,27 @@ function DevAppEditor({ id, requireAuth }: { id: string; requireAuth: (cb: () =>
   const [iconKey, setIconKey] = useState(0)
   const [showNewFile, setShowNewFile] = useState(false)
   const [newFileName, setNewFileName] = useState('')
+  const [gotoLine, setGotoLine] = useState(0)
   const [showAddMenu, setShowAddMenu] = useState(false)
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; file: string } | null>(null)
   const uploadInputRef = useRef<HTMLInputElement>(null)
   const uploadModeRef = useRef<'general' | 'icon'>('general')
+
+  const navigateToFile = useCallback((file: string, search?: string) => {
+    setActiveFile(file)
+    if (search && file === 'app.yml') {
+      const lines = manifest.split('\n')
+      const needle = `${search}:`
+      let found = 0
+      for (let i = 0; i < lines.length; i++) {
+        if (lines[i].trimStart().startsWith(needle)) {
+          found = i + 1
+          break
+        }
+      }
+      setGotoLine(found > 0 ? found + Math.random() * 0.001 : 0)
+    }
+  }, [manifest])
 
   const fetchApp = useCallback(async () => {
     try {
@@ -442,6 +459,7 @@ function DevAppEditor({ id, requireAuth }: { id: string; requireAuth: (cb: () =>
                 onChange={setCurrentContent}
                 filename={activeFile}
                 onSave={() => saveFile(activeFile, currentContent)}
+                gotoLine={gotoLine}
               />
             </div>
           )}
@@ -458,13 +476,13 @@ function DevAppEditor({ id, requireAuth }: { id: string; requireAuth: (cb: () =>
               {validation.errors.length > 0 && (
                 <div className="mb-3">
                   <span className="text-xs font-mono text-red-400 font-bold px-1">Errors ({validation.errors.length})</span>
-                  {validation.errors.map((e, i) => <DevValidationMsg key={i} msg={e} type="error" />)}
+                  {validation.errors.map((e, i) => <DevValidationMsg key={i} msg={e} type="error" onNavigate={navigateToFile} />)}
                 </div>
               )}
               {validation.warnings.length > 0 && (
                 <div className="mb-3">
                   <span className="text-xs font-mono text-yellow-400 font-bold px-1">Warnings ({validation.warnings.length})</span>
-                  {validation.warnings.map((e, i) => <DevValidationMsg key={i} msg={e} type="warning" />)}
+                  {validation.warnings.map((e, i) => <DevValidationMsg key={i} msg={e} type="warning" onNavigate={navigateToFile} />)}
                 </div>
               )}
               <div>
@@ -489,27 +507,42 @@ function DevAppEditor({ id, requireAuth }: { id: string; requireAuth: (cb: () =>
 
 const sdkReference = [
   { group: 'Package Management', methods: [
-    { name: 'self.apt_install(packages)', desc: 'Install apt packages. packages: list[str]' },
-    { name: 'self.pip_install(packages)', desc: 'Install pip packages. packages: list[str]' },
-    { name: 'self.add_apt_key(url, keyring)', desc: 'Download GPG key and save to keyring path' },
-    { name: 'self.add_apt_repo(line, file)', desc: 'Add APT repository source line to file' },
+    { name: 'self.pkg_install(*packages)', desc: 'OS-aware install: apt on Debian, apk on Alpine' },
+    { name: 'self.apt_install(*packages)', desc: 'Install apt packages (Debian only)' },
+    { name: 'self.pip_install(*packages, venv?)', desc: 'Install pip packages in venv (default /opt/venv)' },
+    { name: 'self.create_venv(path)', desc: 'Create a Python virtual environment' },
+    { name: 'self.add_apt_key(url, keyring_path)', desc: 'Download GPG key; auto-dearmors for .gpg extension' },
+    { name: 'self.add_apt_repo(repo_line, filename)', desc: 'Add APT repository source line to file' },
+    { name: 'self.add_apt_repository(repo_url, key_url, name?, ...)', desc: 'Add repo + key in one call with signed-by' },
+    { name: 'self.pull_oci_binary(image, dest, tag?)', desc: 'Download binary from Docker/OCI image without Docker' },
   ]},
   { group: 'File Operations', methods: [
-    { name: 'self.write_config(path, content)', desc: 'Write content to a file, creating dirs as needed' },
-    { name: 'self.create_dir(path, owner?, mode?)', desc: 'Create a directory with optional owner and mode' },
-    { name: 'self.chown(path, user, group)', desc: 'Change ownership of a file or directory' },
+    { name: 'self.write_config(path, template, **vars)', desc: 'Write config file with $var and {{#cond}} templates' },
+    { name: 'self.render_template(name, dest, **vars)', desc: 'Render a template file from provision/ directory' },
+    { name: 'self.provision_file(name)', desc: 'Read a file from provision/ dir, return contents' },
+    { name: 'self.deploy_provision_file(name, dest, mode?)', desc: 'Copy file from provision/ dir to destination' },
+    { name: 'self.write_env_file(path, env_dict, mode?)', desc: 'Write KEY=VALUE env file, skips None/empty values' },
+    { name: 'self.create_dir(path, owner?, mode?)', desc: 'Create directory with optional ownership and mode' },
+    { name: 'self.chown(path, owner, recursive?)', desc: 'Change file/directory ownership' },
     { name: 'self.download(url, dest)', desc: 'Download a file from URL to destination path' },
   ]},
   { group: 'Service Management', methods: [
-    { name: 'self.enable_service(name)', desc: 'Enable and start a systemd service' },
-    { name: 'self.restart_service(name)', desc: 'Restart a systemd service' },
+    { name: 'self.create_service(name, exec_start, ...)', desc: 'Create, enable & start a systemd/OpenRC service' },
+    { name: 'self.enable_service(name)', desc: 'Enable and start an existing service' },
+    { name: 'self.restart_service(name)', desc: 'Restart a service' },
   ]},
-  { group: 'Commands', methods: [
-    { name: 'self.run_command(cmd)', desc: 'Run a shell command, raises on non-zero exit' },
+  { group: 'Commands & System', methods: [
+    { name: 'self.run_command(cmd, check?, input_text?)', desc: 'Run a command list, raises on non-zero by default' },
     { name: 'self.run_installer_script(url)', desc: 'Download and execute an installer script' },
+    { name: 'self.sysctl(settings)', desc: 'Apply sysctl settings persistently' },
+    { name: 'self.disable_ipv6()', desc: 'Disable IPv6 system-wide via sysctl' },
+    { name: 'self.wait_for_http(url, timeout?, interval?)', desc: 'Poll URL until HTTP 200 (default 60s timeout)' },
   ]},
   { group: 'User Management', methods: [
-    { name: 'self.create_user(username, ...)', desc: 'Create a system user with optional home dir, shell, groups' },
+    { name: 'self.create_user(name, system?, home?, shell?)', desc: 'Create user: useradd on Debian, adduser on Alpine' },
+  ]},
+  { group: 'Advanced', methods: [
+    { name: 'self.status_page(port, title, api_url, fields)', desc: 'Deploy a status page server with CCO theme' },
   ]},
   { group: 'Inputs', methods: [
     { name: 'self.inputs.string(key, default?)', desc: 'Get string input value' },
@@ -517,8 +550,11 @@ const sdkReference = [
     { name: 'self.inputs.boolean(key, default?)', desc: 'Get boolean input value' },
     { name: 'self.inputs.secret(key)', desc: 'Get secret input value (not logged)' },
   ]},
-  { group: 'Logging', methods: [
-    { name: 'self.log(message)', desc: 'Log a message to the job output' },
+  { group: 'Logging & Outputs', methods: [
+    { name: 'self.log.info(message)', desc: 'Log info message to job output' },
+    { name: 'self.log.warn(message)', desc: 'Log warning message' },
+    { name: 'self.log.error(message)', desc: 'Log error message' },
+    { name: 'self.log.output(key, value)', desc: 'Emit a key-value output (shown in UI)' },
   ]},
 ]
 
@@ -780,12 +816,20 @@ function DevSubmitDialog({ id, appName, onClose, requireAuth, isStack }: { id: s
   )
 }
 
-function DevValidationMsg({ msg, type }: { msg: ValidationMsg; type: 'error' | 'warning' }) {
+function DevValidationMsg({ msg, type, onNavigate }: { msg: ValidationMsg; type: 'error' | 'warning'; onNavigate?: (file: string, search?: string) => void }) {
   const color = type === 'error' ? 'border-red-400/30' : 'border-yellow-400/30'
+  const permLink = msg.code?.startsWith('PERM_MISSING_')
+  const permSection = permLink ? msg.code!.replace('PERM_MISSING_', '').toLowerCase() + 's' : ''
   return (
     <div className={`border-l-2 ${color} px-2 py-1.5 my-1 text-xs font-mono`}>
       <div className="text-text-muted">{msg.file}{msg.line ? `:${msg.line}` : ''}</div>
       <div className={type === 'error' ? 'text-red-300' : 'text-yellow-300'}>{msg.message}</div>
+      {permLink && onNavigate && (
+        <button
+          onClick={() => onNavigate('app.yml', permSection)}
+          className="mt-1 text-primary hover:underline bg-transparent border-0 p-0 cursor-pointer text-xs font-mono"
+        >→ Edit permissions.{permSection} in app.yml</button>
+      )}
     </div>
   )
 }

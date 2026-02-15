@@ -1,6 +1,10 @@
 package server
 
-import "github.com/battlewithbytes/pve-appstore/internal/catalog"
+import (
+	"time"
+
+	"github.com/battlewithbytes/pve-appstore/internal/catalog"
+)
 
 // CatalogService isolates catalog access from HTTP handlers.
 type CatalogService interface {
@@ -10,6 +14,7 @@ type CatalogService interface {
 	GetApp(id string) (*catalog.AppManifest, bool)
 	Categories() []string
 	Refresh() error
+	LastRefresh() time.Time
 	MergeDevApp(app *catalog.AppManifest)
 	RemoveDevApp(id string)
 	ListStacks() []*catalog.StackManifest
@@ -39,8 +44,9 @@ func (s *defaultCatalogService) SearchApps(query string) []*catalog.AppManifest 
 func (s *defaultCatalogService) GetApp(id string) (*catalog.AppManifest, bool) {
 	return s.cat.Get(id)
 }
-func (s *defaultCatalogService) Categories() []string { return s.cat.Categories() }
-func (s *defaultCatalogService) Refresh() error       { return s.cat.Refresh() }
+func (s *defaultCatalogService) Categories() []string  { return s.cat.Categories() }
+func (s *defaultCatalogService) Refresh() error        { return s.cat.Refresh() }
+func (s *defaultCatalogService) LastRefresh() time.Time { return s.cat.LastRefresh() }
 func (s *defaultCatalogService) MergeDevApp(app *catalog.AppManifest) {
 	s.cat.MergeDevApp(app)
 }

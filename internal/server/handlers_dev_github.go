@@ -381,6 +381,13 @@ func (s *Server) handleDevPublishStatus(w http.ResponseWriter, r *http.Request) 
 		}
 	}
 
+	// Auto-refresh catalog when PR is merged so the app appears immediately
+	if prState == "pr_merged" {
+		if meta, err := s.devSvc.Get(id); err == nil && meta != nil && (meta.Status == "published" || meta.Status == "deployed") {
+			s.tryRefreshInBackground("PR merged for app " + id)
+		}
+	}
+
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"ready":     ready,
 		"checks":    checks,

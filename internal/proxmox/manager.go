@@ -155,7 +155,80 @@ func (m *Manager) AppendLXCConfig(ctid int, lines []string) error {
 	return pct.AppendConf(ctid, lines)
 }
 
+func (m *Manager) ListBridges(ctx context.Context) ([]engine.BridgeInfo, error) {
+	ifaces, err := m.client.ListNodeNetworks(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("listing bridges: %w", err)
+	}
+	var result []engine.BridgeInfo
+	for _, iface := range ifaces {
+		if iface.Type != "bridge" || !strings.HasPrefix(iface.Iface, "vmbr") {
+			continue
+		}
+		result = append(result, engine.BridgeInfo{
+			Name:      iface.Iface,
+			CIDR:      iface.CIDR,
+			Gateway:   iface.Gateway,
+			Ports:     iface.BridgePorts,
+			Comment:   iface.Comments,
+			Active:    iface.Active == 1,
+			VLANAware: iface.BridgeVLANAware == 1,
+			VLANs:     iface.BridgeVIDs,
+		})
+	}
+	return result, nil
+}
+
 func (m *Manager) ListStorages(ctx context.Context) ([]engine.StorageInfo, error) {
+	// Use the node endpoint to get capacity data alongside config
+	nodeStorages, err := m.client.ListNodeStorages(ctx)
+	if err != nil {
+		// Fall back to config-only endpoint if node endpoint fails
+		return m.listStoragesFallback(ctx)
+	}
+	// Also fetch config endpoint for path/mountpoint info (node endpoint doesn't have these)
+	configStorages, _ := m.client.ListStorages(ctx)
+	configMap := make(map[string]StorageInfo, len(configStorages))
+	for _, cs := range configStorages {
+		configMap[cs.ID] = cs
+	}
+
+	var result []engine.StorageInfo
+	for _, ns := range nodeStorages {
+		if !strings.Contains(ns.Content, "rootdir") && !strings.Contains(ns.Content, "images") {
+			continue
+		}
+		if ns.Active == 0 || ns.Enabled == 0 {
+			continue
+		}
+		info := engine.StorageInfo{
+			ID:         ns.ID,
+			Type:       ns.Type,
+			Content:    ns.Content,
+			TotalBytes: ns.Total,
+			UsedBytes:  ns.Used,
+			AvailBytes: ns.Avail,
+		}
+		// Resolve path from config endpoint data
+		if cs, ok := configMap[ns.ID]; ok {
+			switch ns.Type {
+			case "zfspool":
+				info.Path = cs.Mountpoint
+				info.Browsable = cs.Mountpoint != ""
+			case "dir", "nfs", "nfs4", "cifs":
+				info.Path = cs.Path
+				info.Browsable = cs.Path != ""
+			default:
+				info.Browsable = false
+			}
+		}
+		result = append(result, info)
+	}
+	return result, nil
+}
+
+// listStoragesFallback uses the config-only endpoint (no capacity data).
+func (m *Manager) listStoragesFallback(ctx context.Context) ([]engine.StorageInfo, error) {
 	storages, err := m.client.ListStorages(ctx)
 	if err != nil {
 		return nil, err

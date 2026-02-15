@@ -63,10 +63,16 @@ func (m *mockCM) MountHostPath(ctid int, mpIndex int, hostPath, containerPath st
 	return nil
 }
 func (m *mockCM) AppendLXCConfig(ctid int, lines []string) error { return nil }
+func (m *mockCM) ListBridges(ctx context.Context) ([]engine.BridgeInfo, error) {
+	return []engine.BridgeInfo{
+		{Name: "vmbr0", CIDR: "192.168.1.1/24", Gateway: "192.168.1.1", Ports: "enp0s3", Comment: "LAN", Active: true},
+		{Name: "vmbr1", CIDR: "10.100.0.1/24", Gateway: "", Ports: "", Comment: "Isolated", Active: true},
+	}, nil
+}
 func (m *mockCM) ListStorages(ctx context.Context) ([]engine.StorageInfo, error) {
 	return []engine.StorageInfo{
-		{ID: "local-lvm", Type: "lvmthin", Content: "rootdir,images"},
-		{ID: "local", Type: "dir", Content: "iso,vztmpl,rootdir", Path: "/var/lib/vz", Browsable: true},
+		{ID: "local-lvm", Type: "lvmthin", Content: "rootdir,images", TotalBytes: 100 * 1024 * 1024 * 1024, UsedBytes: 20 * 1024 * 1024 * 1024, AvailBytes: 80 * 1024 * 1024 * 1024},
+		{ID: "local", Type: "dir", Content: "iso,vztmpl,rootdir", Path: "/var/lib/vz", Browsable: true, TotalBytes: 500 * 1024 * 1024 * 1024, UsedBytes: 200 * 1024 * 1024 * 1024, AvailBytes: 300 * 1024 * 1024 * 1024},
 	}, nil
 }
 func (m *mockCM) GetStorageInfo(ctx context.Context, storageID string) (*engine.StorageInfo, error) {
@@ -229,6 +235,8 @@ func (s catalogSvcStub) Refresh() error {
 	}
 	return nil
 }
+
+func (s catalogSvcStub) LastRefresh() time.Time { return time.Time{} }
 
 func (s catalogSvcStub) MergeDevApp(app *catalog.AppManifest) {
 	if s.mergeDevAppFn != nil {

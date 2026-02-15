@@ -7,17 +7,19 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 )
 
 // Catalog manages the local cache of the app catalog.
 type Catalog struct {
-	mu       sync.RWMutex
-	repoURL  string
-	branch   string
-	localDir string
-	apps     map[string]*AppManifest
-	stacks   map[string]*StackManifest
-	shadowed map[string]*AppManifest // original apps displaced by dev apps
+	mu          sync.RWMutex
+	repoURL     string
+	branch      string
+	localDir    string
+	apps        map[string]*AppManifest
+	stacks      map[string]*StackManifest
+	shadowed    map[string]*AppManifest // original apps displaced by dev apps
+	lastRefresh time.Time
 }
 
 // New creates a new Catalog instance.
@@ -75,6 +77,7 @@ func (c *Catalog) Refresh() error {
 		c.stacks[stack.ID] = stack
 	}
 
+	c.lastRefresh = time.Now()
 	return nil
 }
 
@@ -92,6 +95,7 @@ func (c *Catalog) LoadLocal(dir string) error {
 		return err
 	}
 	c.indexStacks()
+	c.lastRefresh = time.Now()
 	return nil
 }
 
@@ -183,6 +187,45 @@ func (c *Catalog) AppCount() int {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return len(c.apps)
+}
+
+// LastRefresh returns the time of the most recent successful refresh or load.
+func (c *Catalog) LastRefresh() time.Time {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.lastRefresh
+}
+
+// IsStale checks whether the remote catalog has new commits by comparing
+// the local HEAD with the remote HEAD via git ls-remote. Returns false on
+// error (network failure) so the caller can safely skip and retry later.
+func (c *Catalog) IsStale() (bool, error) {
+	gitDir := filepath.Join(c.localDir, ".git")
+	if _, err := os.Stat(gitDir); err != nil {
+		return false, nil // no local repo yet — Refresh will clone
+	}
+
+	// Get local HEAD
+	localCmd := exec.Command("git", "-C", c.localDir, "rev-parse", "HEAD")
+	localOut, err := localCmd.Output()
+	if err != nil {
+		return false, fmt.Errorf("git rev-parse HEAD: %w", err)
+	}
+	localSHA := strings.TrimSpace(string(localOut))
+
+	// Get remote HEAD
+	remoteCmd := exec.Command("git", "ls-remote", "--heads", c.repoURL, c.branch)
+	remoteOut, err := remoteCmd.Output()
+	if err != nil {
+		return false, fmt.Errorf("git ls-remote: %w", err)
+	}
+	remoteLine := strings.TrimSpace(string(remoteOut))
+	if remoteLine == "" {
+		return false, nil // branch not found on remote
+	}
+	remoteSHA := strings.Fields(remoteLine)[0]
+
+	return localSHA != remoteSHA, nil
 }
 
 func (c *Catalog) fetchRepo() error {

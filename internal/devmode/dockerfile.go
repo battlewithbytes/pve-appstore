@@ -196,6 +196,12 @@ func ParseDockerfile(content string) *DockerfileInfo {
 			buf.WriteString(" ")
 			continue
 		}
+		// Skip pure comment lines inside continuation blocks —
+		// Docker BuildKit ignores inline # comments in multi-line
+		// RUN/ENV blocks, and including them mangles ENV key parsing.
+		if buf.Len() > 0 && strings.HasPrefix(strings.TrimSpace(trimmed), "#") {
+			continue
+		}
 		buf.WriteString(trimmed)
 		joined = append(joined, buf.String())
 		buf.Reset()
@@ -207,6 +213,20 @@ func ParseDockerfile(content string) *DockerfileInfo {
 	// Track ARG values and stage aliases for FROM chain resolution
 	argValues := map[string]string{}
 	stageAliases := map[string]string{}
+
+	// Per-stage metadata snapshots: alias → snapshot taken at end of stage.
+	// Docker stages are isolated — FROM alias restores exactly that stage's
+	// metadata, not everything accumulated across all stages.
+	type stageSnapshot struct {
+		Packages      []string
+		PipPackages   []string
+		AptKeys       []AptKey
+		AptRepos      []AptRepo
+		PackageLayers []PackageLayer
+		EnvVars       []EnvVar
+	}
+	stageSnapshots := map[string]*stageSnapshot{}
+	var currentStageAlias string // alias of the stage currently being built
 
 	// Track all FROM images in order (for scratch fallback)
 	var fromImages []string
@@ -225,13 +245,25 @@ func ParseDockerfile(content string) *DockerfileInfo {
 			continue
 		}
 
-		// FROM — each new stage resets action fields (RunCommands, Users, etc.)
-		// because earlier stages are build-time only (e.g. rootfs-builder).
-		// Metadata (Ports, Volumes, EnvVars) and install data (Packages,
-		// PipPackages, AptKeys, AptRepos) accumulate — Docker inherits
-		// these across stages and they represent what's in the final image.
+		// FROM — each new stage is isolated in Docker.  We snapshot the
+		// current stage's metadata, then either restore from a parent
+		// stage snapshot (alias chain) or start fresh (external image).
+		// Ports and Volumes always accumulate (useful hints regardless).
 		if strings.HasPrefix(stripped, "FROM ") {
 			if len(fromImages) > 0 {
+				// Snapshot the current stage before transitioning
+				if currentStageAlias != "" {
+					stageSnapshots[currentStageAlias] = &stageSnapshot{
+						Packages:      copyStrings(info.Packages),
+						PipPackages:   copyStrings(info.PipPackages),
+						AptKeys:       copyAptKeys(info.AptKeys),
+						AptRepos:      copyAptRepos(info.AptRepos),
+						PackageLayers: copyPackageLayers(info.PackageLayers),
+						EnvVars:       copyEnvVars(info.EnvVars),
+					}
+				}
+
+				// Always reset action fields on new stage
 				info.RunCommands = nil
 				info.Users = nil
 				info.Directories = nil
@@ -240,9 +272,32 @@ func ParseDockerfile(content string) *DockerfileInfo {
 				info.CopyInstructions = nil
 				info.StartupCmd = ""
 				info.EntrypointCmd = ""
+
+				// Extract and expand image ref to check for alias
+				imageRef := extractFromImageRef(stripped)
+				imageRef = expandVariables(imageRef, argValues)
+
+				if snap, ok := stageSnapshots[imageRef]; ok {
+					// FROM references a previous stage — restore its snapshot
+					info.Packages = copyStrings(snap.Packages)
+					info.PipPackages = copyStrings(snap.PipPackages)
+					info.AptKeys = copyAptKeys(snap.AptKeys)
+					info.AptRepos = copyAptRepos(snap.AptRepos)
+					info.PackageLayers = copyPackageLayers(snap.PackageLayers)
+					info.EnvVars = copyEnvVars(snap.EnvVars)
+				} else {
+					// Fresh external image — reset install metadata
+					info.EnvVars = nil
+					info.Packages = nil
+					info.PipPackages = nil
+					info.AptKeys = nil
+					info.AptRepos = nil
+					info.PackageLayers = nil
+				}
 			}
 			parseFrom(stripped, info, argValues, stageAliases)
 			fromImages = append(fromImages, info.BaseImage)
+			currentStageAlias = extractFromAlias(stripped)
 			continue
 		}
 
@@ -448,10 +503,26 @@ var dockerSpecificEnvVars = map[string]bool{
 	// Python/pip internals
 	"PYTHONDONTWRITEBYTECODE": true, "PYTHONUNBUFFERED": true,
 	"PIP_NO_CACHE_DIR": true, "PIP_DISABLE_PIP_VERSION_CHECK": true,
-	// Go/Node build vars
-	"GOPATH": true, "GOROOT": true, "NODE_ENV": true,
+	// Go build vars
+	"GOPATH": true, "GOROOT": true,
+	"GO111MODULE": true, "CGO_ENABLED": true, "GOFLAGS": true,
+	"GOPROXY": true, "GOCACHE": true, "GOMODCACHE": true,
+	// Rust build vars
+	"RUSTFLAGS": true, "CARGO_HOME": true, "RUSTUP_HOME": true,
+	// Java build vars
+	"JAVA_HOME": true, "GRADLE_HOME": true, "MAVEN_HOME": true,
+	// Node build vars
+	"NODE_ENV": true, "NPM_CONFIG_LOGLEVEL": true, "YARN_VERSION": true,
+	"NEXT_TELEMETRY_DISABLED": true,
+	// CI/Docker build vars
+	"CI": true, "DOCKER_BUILDKIT": true,
 	// XDG dirs
 	"XDG_DATA_HOME": true, "XDG_CONFIG_HOME": true, "XDG_CACHE_HOME": true,
+}
+
+// buildEnvPrefixes lists key prefixes that are always build-time vars.
+var buildEnvPrefixes = []string{
+	"TARGET_", // Docker BuildKit platform vars (TARGET_GOOS, TARGET_GOARCH, etc.)
 }
 
 // filterEnvVars removes Docker-specific env vars and deduplicates.
@@ -460,6 +531,17 @@ func filterEnvVars(vars []EnvVar) []EnvVar {
 	var out []EnvVar
 	for _, v := range vars {
 		if dockerSpecificEnvVars[v.Key] {
+			continue
+		}
+		// Skip vars matching build-time prefixes
+		skip := false
+		for _, pfx := range buildEnvPrefixes {
+			if strings.HasPrefix(v.Key, pfx) {
+				skip = true
+				break
+			}
+		}
+		if skip {
 			continue
 		}
 		// Skip vars that reference other variables (not user-configurable)
@@ -473,6 +555,32 @@ func filterEnvVars(vars []EnvVar) []EnvVar {
 		out = append(out, v)
 	}
 	return out
+}
+
+// extractFromImageRef extracts the image reference from a FROM line,
+// skipping the FROM keyword and any --platform flags, without modifying state.
+func extractFromImageRef(line string) string {
+	parts := strings.Fields(line)
+	idx := 1 // skip "FROM"
+	for idx < len(parts) && strings.HasPrefix(parts[idx], "--") {
+		idx++
+	}
+	if idx >= len(parts) {
+		return ""
+	}
+	return parts[idx]
+}
+
+// extractFromAlias extracts the stage alias from a FROM line (the name after AS).
+// Returns "" if no alias is defined.
+func extractFromAlias(line string) string {
+	parts := strings.Fields(line)
+	for i := 1; i < len(parts)-1; i++ {
+		if strings.EqualFold(parts[i], "AS") {
+			return parts[i+1]
+		}
+	}
+	return ""
 }
 
 func parseFrom(line string, info *DockerfileInfo, argValues map[string]string, stageAliases map[string]string) {
@@ -1229,6 +1337,55 @@ func ParseS6RunScript(content string) string {
 // stripQuotes removes surrounding or trailing quote characters from a string.
 func stripQuotes(s string) string {
 	return strings.Trim(s, `"'`)
+}
+
+// Copy helpers for stage snapshots (avoid aliasing slices across stages).
+
+func copyStrings(s []string) []string {
+	if s == nil {
+		return nil
+	}
+	out := make([]string, len(s))
+	copy(out, s)
+	return out
+}
+
+func copyAptKeys(keys []AptKey) []AptKey {
+	if keys == nil {
+		return nil
+	}
+	out := make([]AptKey, len(keys))
+	copy(out, keys)
+	return out
+}
+
+func copyAptRepos(repos []AptRepo) []AptRepo {
+	if repos == nil {
+		return nil
+	}
+	out := make([]AptRepo, len(repos))
+	copy(out, repos)
+	return out
+}
+
+func copyPackageLayers(layers []PackageLayer) []PackageLayer {
+	if layers == nil {
+		return nil
+	}
+	out := make([]PackageLayer, len(layers))
+	for i, l := range layers {
+		out[i] = PackageLayer{Image: l.Image, Packages: copyStrings(l.Packages)}
+	}
+	return out
+}
+
+func copyEnvVars(vars []EnvVar) []EnvVar {
+	if vars == nil {
+		return nil
+	}
+	out := make([]EnvVar, len(vars))
+	copy(out, vars)
+	return out
 }
 
 func dedup(items []string) []string {

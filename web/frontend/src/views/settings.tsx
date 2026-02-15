@@ -326,7 +326,7 @@ function SettingsView({ requireAuth, onDevModeChange }: { requireAuth: (cb: () =
                     </span>
                   ))}
                   {(() => {
-                    const available = discovered?.bridges.filter(b => !settings.bridges.includes(b)) || []
+                    const available = discovered?.bridges.filter(b => !settings.bridges.includes(b.name)) || []
                     if (available.length === 0) return null
                     return showBridgeAdd ? (
                       <select
@@ -343,7 +343,7 @@ function SettingsView({ requireAuth, onDevModeChange }: { requireAuth: (cb: () =
                       >
                         <option value="" disabled>Select bridge...</option>
                         {available.map(b => (
-                          <option key={b} value={b}>{b}</option>
+                          <option key={b.name} value={b.name}>{b.name}{b.comment ? ` — ${b.comment}` : ''}</option>
                         ))}
                       </select>
                     ) : (

@@ -159,9 +159,10 @@ interface CodeEditorProps {
   onChange: (value: string) => void
   filename: string
   onSave?: () => void
+  gotoLine?: number
 }
 
-export function CodeEditor({ value, onChange, filename, onSave }: CodeEditorProps) {
+export function CodeEditor({ value, onChange, filename, onSave, gotoLine }: CodeEditorProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const viewRef = useRef<EditorView | null>(null)
   const onChangeRef = useRef(onChange)
@@ -253,6 +254,19 @@ export function CodeEditor({ value, onChange, filename, onSave }: CodeEditorProp
       }
     }
   }, [filename, value, syncValue])
+
+  // Scroll to a specific line when gotoLine changes
+  useEffect(() => {
+    const view = viewRef.current
+    if (!view || !gotoLine || gotoLine < 1) return
+    const line = Math.min(Math.floor(gotoLine), view.state.doc.lines)
+    const lineInfo = view.state.doc.line(line)
+    view.dispatch({
+      selection: { anchor: lineInfo.from },
+      scrollIntoView: true,
+    })
+    view.focus()
+  }, [gotoLine])
 
   return <div ref={containerRef} className="h-full overflow-hidden" />
 }

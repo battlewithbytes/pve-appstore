@@ -665,18 +665,19 @@ func (e *Engine) runStackInstall(bgCtx context.Context, job *Job, stackID, osTem
 			}
 			if strings.HasPrefix(line, "@@APPLOG@@") {
 				jsonStr := strings.TrimPrefix(line, "@@APPLOG@@")
-				level := extractJSONField(jsonStr, "level")
-				msg := extractJSONField(jsonStr, "msg")
-				if level == "output" {
-					key := extractJSONField(jsonStr, "key")
-					value := extractJSONField(jsonStr, "value")
-					if key != "" {
-						appOutputs[key] = value
+				entry, ok := parseAppLog(jsonStr)
+				if !ok {
+					ctx.info("[%s] %s", app.AppID, line)
+					return
+				}
+				if entry.Level == "output" {
+					if entry.Key != "" {
+						appOutputs[entry.Key] = entry.Value
 					}
-				} else if msg != "" {
-					ctx.log(level, "[%s] %s", app.AppID, msg)
-					if level == "error" {
-						lastError = msg
+				} else if entry.Msg != "" {
+					ctx.log(entry.Level, "[%s] %s", app.AppID, entry.Msg)
+					if entry.Level == "error" {
+						lastError = entry.Msg
 					}
 				}
 			} else {

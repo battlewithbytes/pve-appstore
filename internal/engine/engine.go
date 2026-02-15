@@ -35,11 +35,26 @@ type ContainerStatusDetail struct {
 
 // StorageInfo holds resolved information about a Proxmox storage.
 type StorageInfo struct {
-	ID        string // Proxmox storage ID (e.g. "media-storage")
-	Type      string // Storage type (e.g. "zfspool", "dir", "lvmthin")
-	Content   string // Content types (e.g. "rootdir,images")
-	Path      string // Resolved filesystem path (empty if not browsable)
-	Browsable bool   // true if the storage has a real filesystem path
+	ID         string // Proxmox storage ID (e.g. "media-storage")
+	Type       string // Storage type (e.g. "zfspool", "dir", "lvmthin")
+	Content    string // Content types (e.g. "rootdir,images")
+	Path       string // Resolved filesystem path (empty if not browsable)
+	Browsable  bool   // true if the storage has a real filesystem path
+	TotalBytes int64  // Total capacity in bytes (from node endpoint)
+	UsedBytes  int64  // Used capacity in bytes
+	AvailBytes int64  // Available capacity in bytes
+}
+
+// BridgeInfo holds information about a Proxmox network bridge.
+type BridgeInfo struct {
+	Name      string // e.g. "vmbr0"
+	CIDR      string // e.g. "192.168.1.221/24" (empty if no IP)
+	Gateway   string // e.g. "192.168.1.1"
+	Ports     string // physical uplink (e.g. "enp103s0"), empty = internal-only
+	Comment   string // user-set comment from Proxmox
+	Active    bool
+	VLANAware bool   // bridge-vlan-aware flag
+	VLANs     string // bridge-vids (e.g. "44" or "2-4094")
 }
 
 // ContainerManager abstracts container lifecycle operations.
@@ -64,6 +79,7 @@ type ContainerManager interface {
 	DetachMountPoints(ctx context.Context, ctid int, indexes []int) error
 	GetStorageInfo(ctx context.Context, storageID string) (*StorageInfo, error)
 	ListStorages(ctx context.Context) ([]StorageInfo, error)
+	ListBridges(ctx context.Context) ([]BridgeInfo, error)
 	ConfigureDevices(ctid int, devices []DevicePassthrough) error
 	MountHostPath(ctid int, mpIndex int, hostPath, containerPath string, readOnly bool) error
 	AppendLXCConfig(ctid int, lines []string) error
@@ -2349,16 +2365,17 @@ func (e *Engine) runStackInstallWithHWAddr(bgCtx context.Context, job *Job, stac
 			}
 			if strings.HasPrefix(line, "@@APPLOG@@") {
 				jsonStr := strings.TrimPrefix(line, "@@APPLOG@@")
-				level := extractJSONField(jsonStr, "level")
-				msg := extractJSONField(jsonStr, "msg")
-				if level == "output" {
-					key := extractJSONField(jsonStr, "key")
-					value := extractJSONField(jsonStr, "value")
-					if key != "" {
-						appOutputs[key] = value
+				entry, ok := parseAppLog(jsonStr)
+				if !ok {
+					ctx.info("[%s] %s", app.AppID, line)
+					return
+				}
+				if entry.Level == "output" {
+					if entry.Key != "" {
+						appOutputs[entry.Key] = entry.Value
 					}
-				} else if msg != "" {
-					ctx.log(level, "[%s] %s", app.AppID, msg)
+				} else if entry.Msg != "" {
+					ctx.log(entry.Level, "[%s] %s", app.AppID, entry.Msg)
 				}
 			} else {
 				ctx.info("[%s] %s", app.AppID, line)
@@ -2428,6 +2445,11 @@ func (e *Engine) GetStorageInfo(ctx context.Context, storageID string) (*Storage
 // ListStorages returns all available storages suitable for containers.
 func (e *Engine) ListStorages(ctx context.Context) ([]StorageInfo, error) {
 	return e.cm.ListStorages(ctx)
+}
+
+// ListBridges returns all available network bridges.
+func (e *Engine) ListBridges(ctx context.Context) ([]BridgeInfo, error) {
+	return e.cm.ListBridges(ctx)
 }
 
 // isNewerVersion returns true if catalog version is strictly greater than installed version.
