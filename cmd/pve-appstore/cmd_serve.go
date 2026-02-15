@@ -133,7 +133,10 @@ var serveCmd = &cobra.Command{
 			fmt.Println("  spa:     no frontend build found (API-only mode)")
 		}
 
-		// Start auto-refresh if configured
+		// Start server
+		srv := server.New(cfg, cat, eng, spaFS, server.WithConfigPath(serveConfigPath))
+
+		// Start auto-refresh if configured (after server creation so reconciliation has access to dev services)
 		if serveCatalogDir == "" && cfg.Catalog.Refresh != config.RefreshManual {
 			interval := 24 * time.Hour
 			if cfg.Catalog.Refresh == config.RefreshWeekly {
@@ -148,7 +151,7 @@ var serveCmd = &cobra.Command{
 					select {
 					case <-ticker.C:
 						fmt.Printf("  catalog: auto-refreshing (%s)...\n", cfg.Catalog.Refresh)
-						if err := cat.Refresh(); err != nil {
+						if err := srv.RefreshAndReconcile(); err != nil {
 							fmt.Fprintf(os.Stderr, "warning: auto-refresh failed: %v\n", err)
 						} else {
 							fmt.Printf("  catalog: refreshed, %d apps loaded\n", cat.AppCount())
@@ -160,9 +163,6 @@ var serveCmd = &cobra.Command{
 			}()
 			fmt.Printf("  refresh: %s (every %s)\n", cfg.Catalog.Refresh, interval)
 		}
-
-		// Start server
-		srv := server.New(cfg, cat, eng, spaFS, server.WithConfigPath(serveConfigPath))
 
 		// Graceful shutdown
 		sig := make(chan os.Signal, 1)

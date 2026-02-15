@@ -280,12 +280,14 @@ func (e *Engine) StartInstall(req InstallRequest) (*Job, error) {
 	}
 
 	// Prevent duplicate installs — unless replace_existing is set.
+	var preservedMountPoints []MountPoint
 	if inst, exists := e.store.HasActiveInstallForApp(req.AppID); exists {
 		if req.ReplaceExisting {
-			// Destroy the existing container completely (clean slate for test install)
-			if err := e.syncUninstall(inst); err != nil {
+			preserved, err := e.syncUninstall(inst, req.KeepVolumes)
+			if err != nil {
 				return nil, fmt.Errorf("replacing existing install: %w", err)
 			}
+			preservedMountPoints = preserved
 		} else {
 			return nil, &ErrDuplicate{
 				Message:   fmt.Sprintf("app %q is already installed (CTID %d, status: %s)", req.AppID, inst.CTID, inst.Status),
@@ -506,6 +508,22 @@ func (e *Engine) StartInstall(req InstallRequest) (*Job, error) {
 		mpIndex++
 	}
 
+	// If replacing with keep_data, carry forward preserved volume IDs so they get
+	// reattached rather than recreated. Match by volume name and mount path.
+	if len(preservedMountPoints) > 0 {
+		preserved := make(map[string]MountPoint)
+		for _, mp := range preservedMountPoints {
+			preserved[mp.Name] = mp
+		}
+		for i := range job.MountPoints {
+			if job.MountPoints[i].Type == "volume" {
+				if old, ok := preserved[job.MountPoints[i].Name]; ok && old.VolumeID != "" {
+					job.MountPoints[i].VolumeID = old.VolumeID
+				}
+			}
+		}
+	}
+
 	if err := e.store.CreateJob(job); err != nil {
 		return nil, fmt.Errorf("creating job: %w", err)
 	}
@@ -545,9 +563,10 @@ func (e *Engine) PurgeInstall(installID string) error {
 }
 
 // syncUninstall stops and destroys an existing install synchronously.
-// Used by replace_existing flow — creates a clean slate for test installs.
-// All volumes are destroyed; the dev install script provisions from scratch.
-func (e *Engine) syncUninstall(inst *Install) error {
+// Used by replace_existing flow for test installs.
+// keepVolumeNames lists specific volume names to detach and preserve for reattachment.
+// Returns the preserved mount points (with VolumeIDs) for the kept volumes.
+func (e *Engine) syncUninstall(inst *Install, keepVolumeNames []string) ([]MountPoint, error) {
 	bgCtx := context.Background()
 	ctGone := inst.CTID <= 0
 
@@ -562,28 +581,79 @@ func (e *Engine) syncUninstall(inst *Install) error {
 		}
 	}
 
-	// Destroy container and all volumes (clean slate for test install)
+	// Build set of volume names to keep
+	keepSet := make(map[string]bool, len(keepVolumeNames))
+	for _, name := range keepVolumeNames {
+		keepSet[name] = true
+	}
+
+	// Detach only the volumes we want to keep before destroy
+	hasDetachedVolumes := false
+	if !ctGone && len(keepSet) > 0 && len(inst.MountPoints) > 0 {
+		var detachIndexes []int
+		for _, mp := range inst.MountPoints {
+			if mp.Type == "volume" && keepSet[mp.Name] {
+				detachIndexes = append(detachIndexes, mp.Index)
+			}
+		}
+		if len(detachIndexes) > 0 {
+			// Capture volume IDs from container config before detaching
+			if config, err := e.cm.GetConfig(bgCtx, inst.CTID); err == nil {
+				for i := range inst.MountPoints {
+					if inst.MountPoints[i].Type != "volume" || !keepSet[inst.MountPoints[i].Name] {
+						continue
+					}
+					key := fmt.Sprintf("mp%d", inst.MountPoints[i].Index)
+					if val, ok := config[key]; ok {
+						if valStr, ok := val.(string); ok {
+							parts := strings.SplitN(valStr, ",", 2)
+							if len(parts) > 0 {
+								inst.MountPoints[i].VolumeID = parts[0]
+							}
+						}
+					}
+				}
+			}
+			if err := e.cm.DetachMountPoints(bgCtx, inst.CTID, detachIndexes); err != nil {
+				fmt.Fprintf(os.Stderr, "syncUninstall: detach volumes CTID %d: %v (volumes may be destroyed)\n", inst.CTID, err)
+			} else {
+				hasDetachedVolumes = true
+			}
+		}
+	}
+
+	// Destroy container (purge=true unless we detached volumes to keep)
 	if !ctGone {
 		var destroyErr error
 		for attempt := 0; attempt < 5; attempt++ {
 			if attempt > 0 {
 				time.Sleep(3 * time.Second)
 			}
-			destroyErr = e.cm.Destroy(bgCtx, inst.CTID, false)
+			destroyErr = e.cm.Destroy(bgCtx, inst.CTID, hasDetachedVolumes)
 			if destroyErr == nil || isContainerGone(destroyErr) {
 				destroyErr = nil
 				break
 			}
 		}
 		if destroyErr != nil {
-			return fmt.Errorf("destroy CTID %d: %w", inst.CTID, destroyErr)
+			return nil, fmt.Errorf("destroy CTID %d: %w", inst.CTID, destroyErr)
 		}
 	}
 
 	// Delete the old install record (the new install will create a fresh one)
 	e.store.db.Exec("DELETE FROM installs WHERE id=?", inst.ID)
 
-	return nil
+	// Return only the mount points that were kept (with VolumeIDs)
+	if hasDetachedVolumes {
+		var kept []MountPoint
+		for _, mp := range inst.MountPoints {
+			if mp.Type == "volume" && keepSet[mp.Name] && mp.VolumeID != "" {
+				kept = append(kept, mp)
+			}
+		}
+		return kept, nil
+	}
+	return nil, nil
 }
 
 // If keepVolumes is true, mount point volumes are detached before destroy and preserved.
@@ -817,8 +887,8 @@ func (e *Engine) GetInstallDetail(id string) (*InstallDetail, error) {
 		}
 	}
 
-	// Check catalog version
-	if app, ok := e.catalog.Get(inst.AppID); ok {
+	// Check catalog version — only flag updates from official sources, not dev overlays
+	if app, ok := e.catalog.Get(inst.AppID); ok && app.Source != "developer" {
 		detail.CatalogVersion = app.Version
 		if inst.AppVersion != "" && isNewerVersion(app.Version, inst.AppVersion) {
 			detail.UpdateAvailable = true
@@ -878,8 +948,8 @@ func (e *Engine) ListInstallsEnriched() ([]*InstallListItem, error) {
 	for i, inst := range installs {
 		items[i] = &InstallListItem{Install: *inst}
 
-		// Catalog version check is local — no I/O needed
-		if app, ok := e.catalog.Get(inst.AppID); ok {
+		// Catalog version check is local — only flag updates from official sources, not dev overlays
+		if app, ok := e.catalog.Get(inst.AppID); ok && app.Source != "developer" {
 			items[i].CatalogVersion = app.Version
 			if inst.AppVersion != "" && isNewerVersion(app.Version, inst.AppVersion) {
 				items[i].UpdateAvailable = true

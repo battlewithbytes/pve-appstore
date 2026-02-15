@@ -149,6 +149,7 @@ type InstallRequest struct {
 	ExtraTags      string               `json:"extra_tags,omitempty"`
 	GPUProfile     string               `json:"gpu_profile,omitempty"`      // GPU passthrough profile
 	ReplaceExisting bool                `json:"replace_existing,omitempty"` // uninstall existing before installing
+	KeepVolumes     []string            `json:"keep_volumes,omitempty"`      // volume names to preserve when replacing
 }
 
 // ExtraMountRequest is a user-defined bind mount added at install time.

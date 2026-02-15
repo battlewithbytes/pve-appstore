@@ -251,12 +251,12 @@ func New(cfg *config.Config, cat *catalog.Catalog, eng *engine.Engine, spaFS fs.
 	mux.HandleFunc("GET /api/stacks/{id}/terminal", s.withAuth(s.handleStackTerminal))
 	mux.HandleFunc("GET /api/stacks/{id}/logs", s.withAuth(s.handleStackJournalLogs))
 
-	// Auth
+	// Auth — check and terminal-token always registered; login/logout only in password mode
+	mux.HandleFunc("GET /api/auth/check", s.handleAuthCheck)
+	mux.HandleFunc("POST /api/auth/terminal-token", s.withAuth(s.handleTerminalToken))
 	if cfg.Auth.Mode == config.AuthModePassword {
 		mux.HandleFunc("POST /api/auth/login", s.handleLogin)
 		mux.HandleFunc("POST /api/auth/logout", s.handleLogout)
-		mux.HandleFunc("GET /api/auth/check", s.handleAuthCheck)
-		mux.HandleFunc("POST /api/auth/terminal-token", s.withAuth(s.handleTerminalToken))
 	}
 
 	// SPA fallback — serve index.html for all non-API routes

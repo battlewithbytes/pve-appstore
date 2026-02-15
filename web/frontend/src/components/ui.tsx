@@ -138,6 +138,8 @@ export function DevStatusBadge({ status }: { status: string }) {
     draft: 'border-text-muted text-text-muted',
     validated: 'border-blue-400 text-blue-400',
     deployed: 'border-primary text-primary',
+    published: 'border-yellow-400 text-yellow-400',
+    merged: 'border-purple-400 text-purple-400',
   }
   return <span className={`text-xs font-mono px-2 py-0.5 border rounded ${colors[status] || colors.draft}`}>{status}</span>
 }

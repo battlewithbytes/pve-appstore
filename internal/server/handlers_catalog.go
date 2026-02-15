@@ -172,9 +172,14 @@ func (s *Server) handleCatalogRefresh(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, fmt.Sprintf("refresh failed: %v", err))
 		return
 	}
+
+	// After refresh, reconcile dev apps whose PRs have been merged
+	merged := s.ReconcileDevApps()
+
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"status":    "refreshed",
 		"app_count": s.catalogSvc.AppCount(),
+		"merged":    merged,
 	})
 }
 

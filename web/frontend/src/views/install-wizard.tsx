@@ -4,7 +4,7 @@ import type { AppDetail, AppInput, ConfigDefaultsResponse, InstallRequest, Devic
 import { Badge, SectionTitle, FormRow, FormInput } from '../components/ui'
 import { DirectoryBrowser } from '../components/DirectoryBrowser'
 
-export function InstallWizard({ app, onClose, replaceExisting, existingInstall }: { app: AppDetail; onClose: () => void; replaceExisting?: boolean; existingInstall?: Install | null }) {
+export function InstallWizard({ app, onClose, replaceExisting, keepVolumes, existingInstall }: { app: AppDetail; onClose: () => void; replaceExisting?: boolean; keepVolumes?: string[]; existingInstall?: Install | null }) {
   const prev = existingInstall // shorthand for previous install values
   const [inputs, setInputs] = useState<Record<string, string>>(() => {
     if (prev?.inputs) return { ...prev.inputs }
@@ -100,6 +100,34 @@ export function InstallWizard({ app, onClose, replaceExisting, existingInstall }
   }, [inputs, app.inputs])
   const hasInputErrors = Object.keys(inputErrors).length > 0
 
+  const mountErrors = useMemo(() => {
+    const errors: Record<string, string> = {}
+    const pathMap: Record<string, string[]> = {}
+    for (const vol of bindVolumes) {
+      const hp = bindMounts[vol.name]
+      if (hp) {
+        if (!pathMap[hp]) pathMap[hp] = []
+        pathMap[hp].push(vol.name)
+      }
+    }
+    for (const vol of volumeVolumes) {
+      const hp = volumeBindOverrides[vol.name]
+      if (hp) {
+        if (!pathMap[hp]) pathMap[hp] = []
+        pathMap[hp].push(vol.name)
+      }
+    }
+    for (const [hp, names] of Object.entries(pathMap)) {
+      if (names.length > 1) {
+        for (const name of names) {
+          errors[name] = `Duplicate host path "${hp}" — each volume must use a unique directory`
+        }
+      }
+    }
+    return errors
+  }, [bindMounts, volumeBindOverrides, bindVolumes, volumeVolumes])
+  const hasMountErrors = Object.keys(mountErrors).length > 0
+
   const openBrowser = (target: string, currentPath?: string) => {
     setBrowseTarget(target)
     setBrowseInitPath(currentPath || '')
@@ -178,6 +206,7 @@ export function InstallWizard({ app, onClose, replaceExisting, existingInstall }
       }
       if (Object.keys(allEnv).length > 0) req.env_vars = allEnv
       if (replaceExisting) req.replace_existing = true
+      if (keepVolumes && keepVolumes.length > 0) req.keep_volumes = keepVolumes
       const job = await api.installApp(app.id, req as InstallRequest)
       window.location.hash = `#/job/${job.id}`
     } catch (e: unknown) {
@@ -249,7 +278,22 @@ export function InstallWizard({ app, onClose, replaceExisting, existingInstall }
 
             {/* Managed volumes with toggle: PVE Volume vs Host Path */}
             {volumeVolumes.map(vol => {
-              const isBind = volumeBindOverrides[vol.name] !== undefined
+              const isKept = keepVolumes && keepVolumes.includes(vol.name)
+              const isBind = !isKept && volumeBindOverrides[vol.name] !== undefined
+              if (isKept) {
+                return (
+                  <div key={vol.name} className="bg-bg-secondary rounded-lg p-3 mb-1.5 border border-primary/20">
+                    <div className="flex justify-between items-center">
+                      <div className="flex items-center gap-2">
+                        <span className="text-sm text-text-primary">{vol.label || vol.name}</span>
+                        <span className="text-xs text-text-muted font-mono">{vol.mount_path}</span>
+                      </div>
+                      <Badge className="bg-primary/10 text-primary">keeping data</Badge>
+                    </div>
+                    <div className="text-xs text-text-muted mt-1">Existing volume will be reattached to the new container.</div>
+                  </div>
+                )
+              }
               return (
                 <div key={vol.name} className="bg-bg-secondary rounded-lg p-3 mb-1.5">
                   <div className="flex justify-between items-center">
@@ -269,17 +313,6 @@ export function InstallWizard({ app, onClose, replaceExisting, existingInstall }
                     }} className="text-[11px] text-primary bg-transparent border-none cursor-pointer p-0 font-mono hover:underline whitespace-nowrap">
                       {isBind ? 'use pve volume' : 'use host path'}
                     </button>
-                    {/* LVM-thin note when switching to host path on non-browsable storage */}
-                    {isBind && defaults?.storage_details && (() => {
-                      const volStorage = volumeStorages[vol.name] || storage
-                      const sd = defaults.storage_details.find(s => s.id === volStorage)
-                      if (sd && !sd.browsable) return (
-                        <span className="text-[10px] text-status-warning font-mono">
-                          {volStorage} is block storage ({sd.type}) — no host filesystem to browse
-                        </span>
-                      )
-                      return null
-                    })()}
                     {isBind ? (
                       <>
                         <Badge className="bg-status-warning/10 text-status-warning">host path</Badge>
@@ -308,6 +341,7 @@ export function InstallWizard({ app, onClose, replaceExisting, existingInstall }
                       </button>
                     </div>
                   )}
+                  {mountErrors[vol.name] && <div className="text-status-stopped text-xs mt-1 font-mono">{mountErrors[vol.name]}</div>}
                 </div>
               )
             })}
@@ -330,6 +364,7 @@ export function InstallWizard({ app, onClose, replaceExisting, existingInstall }
                   </button>
                 </div>
                 <div className="text-[11px] text-text-muted font-mono">Container path: {vol.mount_path}</div>
+                {mountErrors[vol.name] && <div className="text-status-stopped text-xs mt-1 font-mono">{mountErrors[vol.name]}</div>}
               </div>
             ))}
 
@@ -580,7 +615,7 @@ export function InstallWizard({ app, onClose, replaceExisting, existingInstall }
 
         <div className="flex gap-3 mt-6 justify-end">
           <button onClick={onClose} className="px-5 py-2.5 text-sm font-semibold border border-border rounded-lg cursor-pointer text-text-secondary bg-transparent hover:border-text-secondary transition-colors font-mono">Cancel</button>
-          <button onClick={handleInstall} disabled={installing || hasInputErrors} className="px-5 py-2.5 text-sm font-semibold border-none rounded-lg cursor-pointer bg-primary text-bg-primary hover:shadow-[0_0_20px_rgba(0,255,157,0.3)] transition-all disabled:opacity-50 disabled:cursor-not-allowed font-mono">
+          <button onClick={handleInstall} disabled={installing || hasInputErrors || hasMountErrors} className="px-5 py-2.5 text-sm font-semibold border-none rounded-lg cursor-pointer bg-primary text-bg-primary hover:shadow-[0_0_20px_rgba(0,255,157,0.3)] transition-all disabled:opacity-50 disabled:cursor-not-allowed font-mono">
             {installing ? 'Installing...' : 'Install'}
           </button>
         </div>

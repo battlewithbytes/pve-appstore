@@ -5,6 +5,7 @@ import { Center, StatusDot, CtxMenuItem } from '../components/ui'
 import { formatUptime } from '../lib/format'
 import { TerminalModal, LogViewerModal, MiniBar, StackTerminalModal, StackLogViewerModal } from '../components/terminal'
 import { StackContextMenu } from './stacks'
+import { UninstallDialog } from './install-detail'
 
 export function InstallsList({ requireAuth }: { requireAuth: (cb: () => void) => void }) {
   const [installs, setInstalls] = useState<InstallListItem[]>([])
@@ -17,6 +18,7 @@ export function InstallsList({ requireAuth }: { requireAuth: (cb: () => void) =>
   const [showLogs, setShowLogs] = useState<string | null>(null)
   const [showStackLogs, setShowStackLogs] = useState<string | null>(null)
   const [actionLoading, setActionLoading] = useState<string | null>(null)
+  const [uninstallTarget, setUninstallTarget] = useState<InstallListItem | null>(null)
 
   const fetchInstalls = useCallback(async () => {
     try {
@@ -33,18 +35,31 @@ export function InstallsList({ requireAuth }: { requireAuth: (cb: () => void) =>
     return () => clearInterval(interval)
   }, [fetchInstalls])
 
+  const handleUninstallConfirm = async (keepVolumes: boolean) => {
+    if (!uninstallTarget) return
+    const id = uninstallTarget.id
+    setUninstallTarget(null)
+    setActionLoading(id)
+    try {
+      const job = await api.uninstall(id, keepVolumes)
+      window.location.hash = `#/job/${job.id}`
+    } catch (e) {
+      alert(e instanceof Error ? e.message : 'Uninstall failed')
+    }
+    setActionLoading(null)
+  }
+
   const handleAction = async (action: string, installId: string) => {
+    if (action === 'uninstall') {
+      const inst = installs.find(i => i.id === installId)
+      if (inst) { setUninstallTarget(inst); return }
+    }
     setActionLoading(installId)
     try {
       switch (action) {
         case 'start': await api.startContainer(installId); break
         case 'stop': await api.stopContainer(installId); break
         case 'restart': await api.restartContainer(installId); break
-        case 'uninstall': {
-          const job = await api.uninstall(installId)
-          window.location.hash = `#/job/${job.id}`
-          return
-        }
         case 'purge': {
           if (!confirm('Delete this install record? Any preserved volumes will NOT be removed from storage.')) break
           await api.purgeInstall(installId)
@@ -306,7 +321,7 @@ export function InstallsList({ requireAuth }: { requireAuth: (cb: () => void) =>
           requireAuth={requireAuth}
           onAction={(action, id) => { setContextMenu(null); requireAuth(() => handleAction(action, id)) }}
           onShell={id => { setContextMenu(null); requireAuth(() => setShowTerminal(id)) }}
-          onLogs={id => { setContextMenu(null); setShowLogs(id) }}
+          onLogs={id => { setContextMenu(null); requireAuth(() => setShowLogs(id)) }}
         />
       )}
 
@@ -319,7 +334,7 @@ export function InstallsList({ requireAuth }: { requireAuth: (cb: () => void) =>
           onClose={() => setStackMenu(null)}
           onAction={(action, id) => { setStackMenu(null); requireAuth(() => handleStackAction(action, id)) }}
           onShell={id => { setStackMenu(null); requireAuth(() => setShowStackTerminal(id)) }}
-          onLogs={id => { setStackMenu(null); setShowStackLogs(id) }}
+          onLogs={id => { setStackMenu(null); requireAuth(() => setShowStackLogs(id)) }}
         />
       )}
 
@@ -327,6 +342,16 @@ export function InstallsList({ requireAuth }: { requireAuth: (cb: () => void) =>
       {showStackTerminal && <StackTerminalModal stackId={showStackTerminal} onClose={() => setShowStackTerminal(null)} />}
       {showLogs && <LogViewerModal installId={showLogs} onClose={() => setShowLogs(null)} />}
       {showStackLogs && <StackLogViewerModal stackId={showStackLogs} onClose={() => setShowStackLogs(null)} />}
+
+      {uninstallTarget && (
+        <UninstallDialog
+          appName={uninstallTarget.app_name}
+          ctid={uninstallTarget.ctid}
+          mountPoints={(uninstallTarget.mount_points || []).filter(mp => mp.type === 'volume')}
+          onConfirm={handleUninstallConfirm}
+          onCancel={() => setUninstallTarget(null)}
+        />
+      )}
     </div>
   )
 }

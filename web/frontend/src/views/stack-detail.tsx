@@ -93,7 +93,7 @@ export function StackDetailView({ id, requireAuth }: { id: string; requireAuth: 
               <ActionButton label="Stop" onClick={() => requireAuth(() => handleAction('stop'))} />
               <ActionButton label="Restart" onClick={() => requireAuth(() => handleAction('restart'))} />
               <ActionButton label="Shell" onClick={() => requireAuth(() => setShowTerminal(true))} accent />
-              <ActionButton label="Logs" onClick={() => setShowLogs(true)} />
+              <ActionButton label="Logs" onClick={() => requireAuth(() => setShowLogs(true))} />
             </>
           )}
           <ActionButton label={editing ? 'Editing...' : 'Edit'} onClick={() => setShowEditDialog(true)} />

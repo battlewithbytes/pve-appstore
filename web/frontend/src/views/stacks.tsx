@@ -223,7 +223,7 @@ export function StacksList({ requireAuth }: { requireAuth: (cb: () => void) => v
           onClose={() => setContextMenu(null)}
           onAction={(action, id) => { setContextMenu(null); requireAuth(() => handleAction(action, id)) }}
           onShell={id => { setContextMenu(null); requireAuth(() => setShowTerminal(id)) }}
-          onLogs={id => { setContextMenu(null); setShowLogs(id) }}
+          onLogs={id => { setContextMenu(null); requireAuth(() => setShowLogs(id)) }}
         />
       )}
 

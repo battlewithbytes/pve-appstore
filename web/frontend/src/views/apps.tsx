@@ -121,7 +121,11 @@ export function BranchDialog({ sourceId, sourceName, onClose }: { sourceId: stri
   )
 }
 
-export function AppDetailView({ id, requireAuth, devMode }: { id: string; requireAuth: (cb: () => void) => void; devMode: boolean }) {
+export function AppDetailView({ id: rawId, requireAuth, devMode }: { id: string; requireAuth: (cb: () => void) => void; devMode: boolean }) {
+  const qIdx = rawId.indexOf('?')
+  const id = qIdx >= 0 ? rawId.substring(0, qIdx) : rawId
+  const autoTestInstall = qIdx >= 0 && rawId.substring(qIdx).includes('testInstall=1')
+
   const [app, setApp] = useState<AppDetail | null>(null)
   const [readme, setReadme] = useState('')
   const [error, setError] = useState('')
@@ -131,10 +135,12 @@ export function AppDetailView({ id, requireAuth, devMode }: { id: string; requir
   const [replaceExisting, setReplaceExisting] = useState(false)
   const [showTestConfirm, setShowTestConfirm] = useState(false)
   const [existingInstall, setExistingInstall] = useState<Install | null>(null)
+  const [keepVolumes, setKeepVolumes] = useState<string[]>([])
+  const [autoTriggered, setAutoTriggered] = useState(false)
   const [ghStatus, setGhStatus] = useState<GitHubStatus | null>(null)
 
   useEffect(() => {
-    setApp(null); setError(''); setAppStatus(null); setExistingInstall(null)
+    setApp(null); setError(''); setAppStatus(null); setExistingInstall(null); setAutoTriggered(false)
     api.app(id).then(setApp).catch(e => setError(e.message))
     api.appReadme(id).then(setReadme)
     api.appStatus(id).then(s => {
@@ -152,6 +158,18 @@ export function AppDetailView({ id, requireAuth, devMode }: { id: string; requir
     }
   }, [devMode])
 
+  useEffect(() => {
+    if (autoTestInstall && !autoTriggered && app && appStatus) {
+      setAutoTriggered(true)
+      if (appStatus.installed) {
+        setShowTestConfirm(true)
+      } else {
+        setShowInstall(true)
+      }
+      window.location.hash = `#/app/${id}`
+    }
+  }, [autoTestInstall, autoTriggered, app, appStatus, id])
+
   if (error) return <div><BackLink /><Center className="text-status-stopped">{error}</Center></div>
   if (!app) return <Center>Loading...</Center>
 
@@ -159,8 +177,7 @@ export function AppDetailView({ id, requireAuth, devMode }: { id: string; requir
 
   // Dev app viewing an official install — allow "Test Install" to replace
   const isDevApp = app.source === 'developer'
-  const hasOfficialInstall = appStatus?.installed && appStatus?.app_source !== 'developer'
-  const canTestInstall = isDevApp && hasOfficialInstall
+  const canTestInstall = isDevApp && appStatus?.installed
 
   return (
     <div>
@@ -203,7 +220,7 @@ export function AppDetailView({ id, requireAuth, devMode }: { id: string; requir
         <TestInstallModal
           app={app}
           ctid={appStatus?.ctid}
-          onConfirm={() => { setShowTestConfirm(false); setReplaceExisting(true); setShowInstall(true) }}
+          onConfirm={(vols) => { setShowTestConfirm(false); setReplaceExisting(true); setKeepVolumes(vols); setShowInstall(true) }}
           onClose={() => setShowTestConfirm(false)}
         />
       )}
@@ -217,7 +234,7 @@ export function AppDetailView({ id, requireAuth, devMode }: { id: string; requir
         </div>
       )}
 
-      {showInstall && <InstallWizard app={app} onClose={() => { setShowInstall(false); setReplaceExisting(false) }} replaceExisting={replaceExisting} existingInstall={replaceExisting ? existingInstall : undefined} />}
+      {showInstall && <InstallWizard app={app} onClose={() => { setShowInstall(false); setReplaceExisting(false); setKeepVolumes([]) }} replaceExisting={replaceExisting} existingInstall={replaceExisting ? existingInstall : undefined} keepVolumes={keepVolumes} />}
 
       <div className="grid grid-cols-[repeat(auto-fit,minmax(280px,1fr))] gap-4 mt-6">
         <InfoCard title="Default Resources">
