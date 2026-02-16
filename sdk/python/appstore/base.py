@@ -52,7 +52,7 @@ class BaseApp(ABC):
     # --- Built-in helpers ---
 
     def apt_install(self, *packages: str) -> None:
-        """Install apt packages. Each package must be in permissions.packages."""
+        """Install apt packages (deprecated — use pkg_install for OS-aware installs). Each package must be in permissions.packages."""
         for pkg in packages:
             self.permissions.check_package(pkg)
 
@@ -94,6 +94,10 @@ class BaseApp(ABC):
     def write_config(self, path: str, template_str: str, **kwargs) -> str:
         """Write a config file using template substitution.
 
+        Pass the template as an inline string (use render_template to read
+        from a file instead).  Supports $variable substitution and
+        {{#key}}...{{/key}} / {{^key}}...{{/key}} conditional blocks.
+
         Args:
             path: Destination path (must be under an allowed path prefix).
             template_str: Template string using $variable syntax and
@@ -116,9 +120,10 @@ class BaseApp(ABC):
         """Read a template file from the app's provision directory and write it to dest_path.
 
         Template files support:
-          - $$variable / $${variable} — value substitution
+          - $variable / ${variable} — value substitution (Python string.Template)
           - {{#key}} ... {{/key}} — conditional block (included when key is truthy)
           - {{^key}} ... {{/key}} — inverted block (included when key is falsy)
+          - $$ — literal dollar sign escape
 
         Args:
             template_name: Filename relative to the provision directory

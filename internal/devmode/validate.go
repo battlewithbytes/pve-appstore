@@ -394,7 +394,11 @@ func validatePermissionsFromAST(result *ValidationResult, analysis *astAnalysis,
 	svcSet := toSet(perms.Services)
 	cmdSet := toSet(perms.Commands)
 	userSet := toSet(perms.Users)
-	pipSet := toSet(perms.Pip)
+	pipBasePatterns := make([]string, len(perms.Pip))
+	for i, p := range perms.Pip {
+		pipBasePatterns[i] = pipBaseName(p)
+	}
+	pipSet := toSet(pipBasePatterns)
 
 	// Collect users created via create_user for service user cross-ref
 	createdUsers := make(map[string]bool)
@@ -419,10 +423,12 @@ func validatePermissionsFromAST(result *ValidationResult, analysis *astAnalysis,
 
 		case "pip_install":
 			// Positional args only (kwargs like venv= are not packages)
+			// Normalize: strip version specifiers so "josepy<2" matches "josepy"
 			for _, pkg := range allStringArgs(call) {
-				if !matchesAny(pkg, pipSet, perms.Pip) {
+				base := pipBaseName(pkg)
+				if !matchesAny(base, pipSet, pipBasePatterns) {
 					result.addWarning("provision/install.py", call.Line,
-						fmt.Sprintf("Pip package %q not in permissions.pip", pkg),
+						fmt.Sprintf("Pip package %q not in permissions.pip", base),
 						"PERM_MISSING_PIP")
 				}
 			}
@@ -547,8 +553,12 @@ func validatePermissionsFromAST(result *ValidationResult, analysis *astAnalysis,
 		case "add_apt_repo":
 			if repoLine, ok := stringArg(call, 0); ok {
 				if !aptRepoAllowed(repoLine, perms.AptRepos) {
+					repoURL := extractRepoURL(repoLine)
+					if repoURL == "" {
+						repoURL = repoLine
+					}
 					result.addWarning("provision/install.py", call.Line,
-						"APT repo not covered by permissions.apt_repos",
+						fmt.Sprintf("APT repo URL %q not covered by permissions.apt_repos", repoURL),
 						"PERM_MISSING_APT_REPO")
 				}
 			}
@@ -562,8 +572,12 @@ func validatePermissionsFromAST(result *ValidationResult, analysis *astAnalysis,
 						"PERM_MISSING_URL")
 				}
 				if !aptRepoAllowed(url, perms.AptRepos) {
+					repoURL := extractRepoURL(url)
+					if repoURL == "" {
+						repoURL = url
+					}
 					result.addWarning("provision/install.py", call.Line,
-						"APT repo not covered by permissions.apt_repos",
+						fmt.Sprintf("APT repo URL %q not covered by permissions.apt_repos", repoURL),
 						"PERM_MISSING_APT_REPO")
 				}
 			}
@@ -595,6 +609,17 @@ func toSet(items []string) map[string]bool {
 		m[item] = true
 	}
 	return m
+}
+
+// pipBaseName strips version specifiers and extras from a pip package string.
+// e.g. "josepy<2" → "josepy", "homeassistant[all]>=2024.1" → "homeassistant"
+func pipBaseName(pkg string) string {
+	for i, ch := range pkg {
+		if ch == '[' || ch == '<' || ch == '>' || ch == '=' || ch == '!' || ch == '~' || ch == ';' || ch == '@' {
+			return strings.TrimSpace(pkg[:i])
+		}
+	}
+	return pkg
 }
 
 // matchesAny checks exact set membership first, then falls back to fnmatch-style
@@ -645,28 +670,37 @@ func pathAllowed(path string, allowed []string) bool {
 
 // aptRepoAllowed checks if a repo line is covered by the allowed apt repos.
 // Extracts the URL from the deb line and matches against allowed entries.
-func aptRepoAllowed(repoLine string, allowed []string) bool {
-	// Extract URL from deb line (or use directly if already a URL)
-	var repoURL string
-	if strings.HasPrefix(repoLine, "http://") || strings.HasPrefix(repoLine, "https://") {
-		repoURL = strings.TrimRight(repoLine, "/")
-	} else {
-		for _, token := range strings.Fields(repoLine) {
-			if strings.HasPrefix(token, "http://") || strings.HasPrefix(token, "https://") {
-				repoURL = strings.TrimRight(token, "/")
-				break
-			}
+// extractRepoURL pulls the URL from a deb line or bare URL string.
+// "deb [signed-by=...] https://example.com/repo stable main" → "https://example.com/repo"
+// "https://example.com/repo" → "https://example.com/repo"
+func extractRepoURL(s string) string {
+	if strings.HasPrefix(s, "http://") || strings.HasPrefix(s, "https://") {
+		// Bare URL — take first token only (handles "https://x.com/repo public main" too)
+		return strings.TrimRight(strings.Fields(s)[0], "/")
+	}
+	for _, token := range strings.Fields(s) {
+		if strings.HasPrefix(token, "http://") || strings.HasPrefix(token, "https://") {
+			return strings.TrimRight(token, "/")
 		}
 	}
+	return ""
+}
+
+func aptRepoAllowed(repoLine string, allowed []string) bool {
+	repoURL := extractRepoURL(repoLine)
 	if repoURL == "" {
 		return false
 	}
 	for _, a := range allowed {
-		a = strings.TrimRight(a, "/")
-		if repoURL == a || strings.HasPrefix(repoURL, a+"/") {
+		// Extract URL from allowed entry too (may be a full deb line or bare URL)
+		allowedURL := extractRepoURL(a)
+		if allowedURL == "" {
+			continue
+		}
+		if repoURL == allowedURL || strings.HasPrefix(repoURL, allowedURL+"/") {
 			return true
 		}
-		if matched, _ := filepath.Match(a, repoURL); matched {
+		if matched, _ := filepath.Match(allowedURL, repoURL); matched {
 			return true
 		}
 	}

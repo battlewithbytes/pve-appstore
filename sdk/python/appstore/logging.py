@@ -16,15 +16,19 @@ class AppLogger:
         print(f"@@APPLOG@@{line}", flush=True)
 
     def info(self, msg: str) -> None:
+        """Log an informational message."""
         self._emit({"level": "info", "msg": msg})
 
     def warn(self, msg: str) -> None:
+        """Log a warning message."""
         self._emit({"level": "warn", "msg": msg})
 
     def error(self, msg: str) -> None:
+        """Log an error message."""
         self._emit({"level": "error", "msg": msg})
 
     def progress(self, step: int, total: int, msg: str) -> None:
+        """Log a progress update with step/total counts."""
         self._emit({"level": "info", "msg": msg, "progress": {"step": step, "total": total}})
 
     def output(self, key: str, value: str) -> None:

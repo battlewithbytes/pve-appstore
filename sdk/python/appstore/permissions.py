@@ -7,6 +7,7 @@ permissions before executing. Violations raise PermissionDeniedError.
 import fnmatch
 import json
 import os
+import re
 
 
 class PermissionDeniedError(Exception):
@@ -54,13 +55,27 @@ class AppPermissions:
             f"apt package '{package}' is not in the allowed packages list: {self.packages}"
         )
 
+    @staticmethod
+    def _pip_base_name(pkg: str) -> str:
+        """Strip extras and version specifiers from a pip package string.
+
+        e.g. "josepy<2" -> "josepy", "homeassistant[all]>=2024.1" -> "homeassistant"
+        """
+        return re.split(r"[\[<>=!~;@]", pkg)[0].strip()
+
     def check_pip_package(self, package: str) -> None:
-        """Verify a pip package is in the allowlist."""
+        """Verify a pip package is in the allowlist.
+
+        Version specifiers and extras are stripped before matching,
+        so "josepy<2" matches an allowlist entry of "josepy".
+        """
+        base = self._pip_base_name(package)
         for allowed in self.pip:
-            if fnmatch.fnmatch(package, allowed):
+            allowed_base = self._pip_base_name(allowed)
+            if fnmatch.fnmatch(base, allowed_base):
                 return
         raise PermissionDeniedError(
-            f"pip package '{package}' is not in the allowed pip list: {self.pip}"
+            f"pip package '{base}' (from '{package}') is not in the allowed pip list: {self.pip}"
         )
 
     def check_url(self, url: str) -> None:

@@ -2274,3 +2274,178 @@ func TestDevSaveFileMissingPath(t *testing.T) {
 		t.Fatalf("status = %d, want %d", w.Code, http.StatusBadRequest)
 	}
 }
+
+// --- Reconciliation tests ---
+
+func TestReconcileVersionMatch_AutoUndeploys(t *testing.T) {
+	cfg := testConfig()
+	cfg.Developer.Enabled = true
+	srv := New(cfg, nil, nil, nil)
+
+	removedApps := map[string]bool{}
+	statusUpdates := map[string]string{}
+
+	srv.catalogSvc = catalogSvcStub{
+		getShadowedFn: func(id string) (*catalog.AppManifest, bool) {
+			if id == "plex" {
+				return &catalog.AppManifest{ID: "plex", Version: "1.41.0"}, true
+			}
+			return nil, false
+		},
+		removeDevAppFn: func(id string) { removedApps[id] = true },
+	}
+	srv.devSvc = devSvcStub{
+		listFn: func() ([]devmode.DevAppMeta, error) {
+			return []devmode.DevAppMeta{
+				{ID: "plex", Version: "1.41.0", Status: "deployed"},
+			}, nil
+		},
+		setStatusFn: func(id, status string) error {
+			statusUpdates[id] = status
+			return nil
+		},
+	}
+
+	merged := srv.ReconcileDevApps()
+
+	if !removedApps["plex"] {
+		t.Error("expected plex dev overlay to be removed")
+	}
+	if statusUpdates["plex"] != "draft" {
+		t.Errorf("expected plex status reset to draft, got %q", statusUpdates["plex"])
+	}
+	if len(merged) != 1 || merged[0] != "plex" {
+		t.Errorf("expected merged=[plex], got %v", merged)
+	}
+}
+
+func TestReconcileNewerCatalog_AutoUndeploys(t *testing.T) {
+	cfg := testConfig()
+	cfg.Developer.Enabled = true
+	srv := New(cfg, nil, nil, nil)
+
+	removedApps := map[string]bool{}
+
+	srv.catalogSvc = catalogSvcStub{
+		getShadowedFn: func(id string) (*catalog.AppManifest, bool) {
+			if id == "plex" {
+				return &catalog.AppManifest{ID: "plex", Version: "2.0.0"}, true
+			}
+			return nil, false
+		},
+		removeDevAppFn: func(id string) { removedApps[id] = true },
+	}
+	srv.devSvc = devSvcStub{
+		listFn: func() ([]devmode.DevAppMeta, error) {
+			return []devmode.DevAppMeta{
+				{ID: "plex", Version: "1.41.0", Status: "deployed"},
+			}, nil
+		},
+		setStatusFn: func(id, status string) error { return nil },
+	}
+
+	merged := srv.ReconcileDevApps()
+
+	if !removedApps["plex"] {
+		t.Error("expected plex dev overlay to be removed when catalog has newer version")
+	}
+	if len(merged) != 1 {
+		t.Errorf("expected 1 merged, got %d", len(merged))
+	}
+}
+
+func TestReconcileOlderCatalog_NoUndeploy(t *testing.T) {
+	cfg := testConfig()
+	cfg.Developer.Enabled = true
+	srv := New(cfg, nil, nil, nil)
+
+	removedApps := map[string]bool{}
+
+	srv.catalogSvc = catalogSvcStub{
+		getShadowedFn: func(id string) (*catalog.AppManifest, bool) {
+			if id == "plex" {
+				return &catalog.AppManifest{ID: "plex", Version: "1.40.0"}, true
+			}
+			return nil, false
+		},
+		removeDevAppFn: func(id string) { removedApps[id] = true },
+	}
+	srv.devSvc = devSvcStub{
+		listFn: func() ([]devmode.DevAppMeta, error) {
+			return []devmode.DevAppMeta{
+				{ID: "plex", Version: "1.41.0", Status: "deployed"},
+			}, nil
+		},
+	}
+
+	merged := srv.ReconcileDevApps()
+
+	if removedApps["plex"] {
+		t.Error("should NOT undeploy when catalog has older version")
+	}
+	if len(merged) != 0 {
+		t.Errorf("expected 0 merged, got %d", len(merged))
+	}
+}
+
+func TestReconcileDraftApp_NoUndeploy(t *testing.T) {
+	cfg := testConfig()
+	cfg.Developer.Enabled = true
+	srv := New(cfg, nil, nil, nil)
+
+	removedApps := map[string]bool{}
+
+	srv.catalogSvc = catalogSvcStub{
+		getShadowedFn: func(id string) (*catalog.AppManifest, bool) {
+			return &catalog.AppManifest{ID: id, Version: "1.41.0"}, true
+		},
+		removeDevAppFn: func(id string) { removedApps[id] = true },
+	}
+	srv.devSvc = devSvcStub{
+		listFn: func() ([]devmode.DevAppMeta, error) {
+			return []devmode.DevAppMeta{
+				{ID: "plex", Version: "1.41.0", Status: "draft"},
+			}, nil
+		},
+	}
+
+	merged := srv.ReconcileDevApps()
+
+	if removedApps["plex"] {
+		t.Error("should NOT undeploy a draft app")
+	}
+	if len(merged) != 0 {
+		t.Errorf("expected 0 merged, got %d", len(merged))
+	}
+}
+
+func TestReconcileNoShadow_NoUndeploy(t *testing.T) {
+	cfg := testConfig()
+	cfg.Developer.Enabled = true
+	srv := New(cfg, nil, nil, nil)
+
+	removedApps := map[string]bool{}
+
+	srv.catalogSvc = catalogSvcStub{
+		getShadowedFn: func(id string) (*catalog.AppManifest, bool) {
+			return nil, false // no shadowed version — brand new dev app
+		},
+		removeDevAppFn: func(id string) { removedApps[id] = true },
+	}
+	srv.devSvc = devSvcStub{
+		listFn: func() ([]devmode.DevAppMeta, error) {
+			return []devmode.DevAppMeta{
+				{ID: "my-new-app", Version: "1.0.0", Status: "deployed"},
+			}, nil
+		},
+	}
+
+	merged := srv.ReconcileDevApps()
+
+	if removedApps["my-new-app"] {
+		t.Error("should NOT undeploy when no catalog version exists")
+	}
+	if len(merged) != 0 {
+		t.Errorf("expected 0 merged, got %d", len(merged))
+	}
+}

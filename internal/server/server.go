@@ -36,6 +36,8 @@ type Server struct {
 	storageMetas      []engine.StorageInfo
 	allowedPaths      []string // browsable filesystem roots from configured storages
 	refreshing        sync.Mutex
+	sdkDocsOnce  sync.Once
+	sdkDocsJSON  []byte
 }
 
 // Option configures the server.
@@ -184,6 +186,7 @@ func New(cfg *config.Config, cat *catalog.Catalog, eng *engine.Engine, spaFS fs.
 	mux.HandleFunc("POST /api/dev/import/dockerfile/stream", s.withDevMode(s.withAuth(s.handleDevImportDockerfileStream)))
 	mux.HandleFunc("POST /api/dev/import/zip", s.withDevMode(s.withAuth(s.handleDevImportZip)))
 	mux.HandleFunc("GET /api/dev/templates", s.withDevMode(s.handleDevListTemplates))
+	mux.HandleFunc("GET /api/dev/sdk-docs", s.withDevMode(s.handleDevSDKDocs))
 
 	// API routes — developer stacks
 	mux.HandleFunc("GET /api/dev/stacks", s.withDevMode(s.withAuth(s.handleDevListStacks)))

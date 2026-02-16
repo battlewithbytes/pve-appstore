@@ -17,6 +17,7 @@ type CatalogService interface {
 	LastRefresh() time.Time
 	MergeDevApp(app *catalog.AppManifest)
 	RemoveDevApp(id string)
+	GetShadowed(id string) (*catalog.AppManifest, bool)
 	ListStacks() []*catalog.StackManifest
 	GetStack(id string) (*catalog.StackManifest, bool)
 	MergeDevStack(s *catalog.StackManifest)
@@ -52,6 +53,9 @@ func (s *defaultCatalogService) MergeDevApp(app *catalog.AppManifest) {
 }
 func (s *defaultCatalogService) RemoveDevApp(id string) {
 	s.cat.RemoveDevApp(id)
+}
+func (s *defaultCatalogService) GetShadowed(id string) (*catalog.AppManifest, bool) {
+	return s.cat.GetShadowed(id)
 }
 func (s *defaultCatalogService) ListStacks() []*catalog.StackManifest {
 	return s.cat.ListStacks()

@@ -188,6 +188,7 @@ type catalogSvcStub struct {
 	refreshFn       func() error
 	mergeDevAppFn   func(app *catalog.AppManifest)
 	removeDevAppFn  func(id string)
+	getShadowedFn   func(id string) (*catalog.AppManifest, bool)
 	listStacksFn    func() []*catalog.StackManifest
 	getStackFn      func(id string) (*catalog.StackManifest, bool)
 	mergeDevStackFn func(s *catalog.StackManifest)
@@ -248,6 +249,13 @@ func (s catalogSvcStub) RemoveDevApp(id string) {
 	if s.removeDevAppFn != nil {
 		s.removeDevAppFn(id)
 	}
+}
+
+func (s catalogSvcStub) GetShadowed(id string) (*catalog.AppManifest, bool) {
+	if s.getShadowedFn != nil {
+		return s.getShadowedFn(id)
+	}
+	return nil, false
 }
 
 func (s catalogSvcStub) ListStacks() []*catalog.StackManifest {

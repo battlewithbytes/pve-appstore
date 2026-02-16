@@ -2,8 +2,11 @@ package server
 
 import "log"
 
-// ReconcileDevApps checks all published dev apps for merged PRs and
-// auto-undeploys them when their PR has been merged into the catalog.
+// ReconcileDevApps checks deployed dev apps and auto-undeploys them when:
+//  1. Their GitHub PR has been merged, OR
+//  2. The catalog now contains the same app at the same or newer version
+//     (e.g. changes were merged manually or pushed directly).
+//
 // Returns the list of app/stack IDs that were reconciled.
 func (s *Server) ReconcileDevApps() []string {
 	if s.devSvc == nil || s.catalogSvc == nil {
@@ -28,17 +31,38 @@ func (s *Server) ReconcileDevApps() []string {
 				merged = append(merged, app.ID)
 				continue
 			}
-			if (app.Status != "published" && app.Status != "deployed") || app.GitHubPRURL == "" {
+			if app.Status != "published" && app.Status != "deployed" {
 				continue
 			}
-			state := s.getPRState(app.GitHubPRURL)
-			if state == "pr_merged" {
-				log.Printf("[reconcile] dev app %s: PR merged, removing dev app", app.ID)
-				s.catalogSvc.RemoveDevApp(app.ID)
-				if err := s.devSvc.Delete(app.ID); err != nil {
-					log.Printf("[reconcile] failed to delete dev app %s: %v", app.ID, err)
+
+			// Check 1: PR-based reconciliation
+			if app.GitHubPRURL != "" {
+				state := s.getPRState(app.GitHubPRURL)
+				if state == "pr_merged" {
+					log.Printf("[reconcile] dev app %s: PR merged, removing dev overlay", app.ID)
+					s.catalogSvc.RemoveDevApp(app.ID)
+					if err := s.devSvc.Delete(app.ID); err != nil {
+						log.Printf("[reconcile] failed to delete dev app %s: %v", app.ID, err)
+					}
+					merged = append(merged, app.ID)
+					continue
 				}
-				merged = append(merged, app.ID)
+			}
+
+			// Check 2: catalog now has this app at same or newer version
+			if app.Status == "deployed" {
+				if catalogApp, ok := s.catalogSvc.GetShadowed(app.ID); ok {
+					if catalogApp.Version >= app.Version {
+						log.Printf("[reconcile] dev app %s: catalog has version %s (dev: %s), removing dev overlay",
+							app.ID, catalogApp.Version, app.Version)
+						s.catalogSvc.RemoveDevApp(app.ID)
+						if err := s.devSvc.SetStatus(app.ID, "draft"); err != nil {
+							log.Printf("[reconcile] failed to reset dev app %s status: %v", app.ID, err)
+						}
+						merged = append(merged, app.ID)
+						continue
+					}
+				}
 			}
 		}
 	}

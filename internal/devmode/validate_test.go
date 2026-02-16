@@ -678,6 +678,41 @@ run(TestApp)
 	}
 }
 
+func TestASTAnalyzer_PipVersionSpecifier(t *testing.T) {
+	manifest := []byte(`
+id: test-app
+name: Test
+description: test
+version: "1.0.0"
+categories: [utilities]
+lxc:
+  ostemplate: debian-12
+  defaults: {cores: 1, memory_mb: 512, disk_gb: 4}
+provisioning:
+  script: provision/install.py
+permissions:
+  pip: [josepy, homeassistant]
+`)
+	script := `#!/usr/bin/env python3
+from appstore import BaseApp, run
+
+class TestApp(BaseApp):
+    def install(self):
+        self.pip_install("josepy<2")
+        self.pip_install("homeassistant[all]>=2024.1.0")
+
+run(TestApp)
+`
+	result := runASTPermissions(t, script, manifest)
+
+	// Version specifiers and extras should be stripped before matching
+	for _, w := range result.Warnings {
+		if w.Code == "PERM_MISSING_PIP" {
+			t.Errorf("version-pinned pip package incorrectly flagged: %+v", w)
+		}
+	}
+}
+
 func TestASTAnalyzer_RunInstallerScript(t *testing.T) {
 	manifest := []byte(`
 id: test-app
@@ -875,6 +910,204 @@ run(TestApp)
 	for _, w := range result.Warnings {
 		if strings.HasPrefix(w.Code, "PERM_") {
 			t.Errorf("unexpected permission warning: %+v", w)
+		}
+	}
+}
+
+func TestASTAnalyzer_AptRepoDebLineMatchesBareURL(t *testing.T) {
+	// Manifest has a full deb line, script uses bare URL — should still match
+	manifest := []byte(`
+id: plex
+name: Plex
+description: Plex Media Server
+version: "1.0.0"
+categories: [media]
+lxc:
+  ostemplate: debian-12
+  defaults: {cores: 2, memory_mb: 2048, disk_gb: 8}
+provisioning:
+  script: provision/install.py
+permissions:
+  urls: ["https://downloads.plex.tv/*"]
+  apt_repos: ["deb [signed-by=/usr/share/keyrings/plex-archive-keyring.gpg] https://downloads.plex.tv/repo/deb public main"]
+`)
+	script := `#!/usr/bin/env python3
+from appstore import BaseApp, run
+
+class PlexApp(BaseApp):
+    def install(self):
+        self.add_apt_repository(
+            "https://downloads.plex.tv/repo/deb",
+            key_url="https://downloads.plex.tv/PlexSign.key",
+            name="plexmediaserver",
+        )
+
+run(PlexApp)
+`
+	result := runASTPermissions(t, script, manifest)
+
+	// Bare URL from script should match the URL in the full deb line
+	for _, w := range result.Warnings {
+		if w.Code == "PERM_MISSING_APT_REPO" {
+			t.Errorf("bare URL should match full deb line in apt_repos: %+v", w)
+		}
+	}
+}
+
+func TestASTAnalyzer_AptRepoWarningShowsURL(t *testing.T) {
+	// Verify that the warning message includes the actual URL
+	manifest := []byte(`
+id: test-app
+name: Test
+description: test
+version: "1.0.0"
+categories: [utilities]
+lxc:
+  ostemplate: debian-12
+  defaults: {cores: 1, memory_mb: 512, disk_gb: 4}
+provisioning:
+  script: provision/install.py
+permissions:
+  urls: ["https://allowed.example.com/*"]
+  apt_repos: ["https://allowed.example.com/repo"]
+`)
+	script := `#!/usr/bin/env python3
+from appstore import BaseApp, run
+
+class TestApp(BaseApp):
+    def install(self):
+        self.add_apt_repository(
+            "https://notallowed.example.com/repo",
+            key_url="https://allowed.example.com/key.gpg",
+            name="test",
+        )
+
+run(TestApp)
+`
+	result := runASTPermissions(t, script, manifest)
+
+	found := false
+	for _, w := range result.Warnings {
+		if w.Code == "PERM_MISSING_APT_REPO" {
+			if strings.Contains(w.Message, "https://notallowed.example.com/repo") {
+				found = true
+			} else {
+				t.Errorf("apt_repo warning should include the URL, got: %s", w.Message)
+			}
+		}
+	}
+	if !found {
+		t.Errorf("expected PERM_MISSING_APT_REPO warning with URL, got: %+v", result.Warnings)
+	}
+}
+
+// --- Direct unit tests for validation helpers ---
+
+func TestExtractRepoURL(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{"https://downloads.plex.tv/repo/deb", "https://downloads.plex.tv/repo/deb"},
+		{"https://downloads.plex.tv/repo/deb/", "https://downloads.plex.tv/repo/deb"},
+		{"deb [signed-by=/usr/share/keyrings/plex.gpg] https://downloads.plex.tv/repo/deb public main", "https://downloads.plex.tv/repo/deb"},
+		{"deb http://example.com/repo stable main", "http://example.com/repo"},
+		{"https://example.com/repo public main", "https://example.com/repo"},
+		{"no-url-here", ""},
+		{"", ""},
+	}
+	for _, tt := range tests {
+		got := extractRepoURL(tt.input)
+		if got != tt.want {
+			t.Errorf("extractRepoURL(%q) = %q, want %q", tt.input, got, tt.want)
+		}
+	}
+}
+
+func TestAptRepoAllowed(t *testing.T) {
+	tests := []struct {
+		name     string
+		repoLine string
+		allowed  []string
+		want     bool
+	}{
+		{
+			name:     "bare URL matches bare URL",
+			repoLine: "https://downloads.plex.tv/repo/deb",
+			allowed:  []string{"https://downloads.plex.tv/repo/deb"},
+			want:     true,
+		},
+		{
+			name:     "bare URL matches full deb line",
+			repoLine: "https://downloads.plex.tv/repo/deb",
+			allowed:  []string{"deb [signed-by=/usr/share/keyrings/plex.gpg] https://downloads.plex.tv/repo/deb public main"},
+			want:     true,
+		},
+		{
+			name:     "full deb line matches bare URL",
+			repoLine: "deb [signed-by=/usr/share/keyrings/plex.gpg] https://downloads.plex.tv/repo/deb public main",
+			allowed:  []string{"https://downloads.plex.tv/repo/deb"},
+			want:     true,
+		},
+		{
+			name:     "full deb line matches full deb line",
+			repoLine: "deb [signed-by=/usr/share/keyrings/plex.gpg] https://downloads.plex.tv/repo/deb public main",
+			allowed:  []string{"deb [signed-by=/usr/share/keyrings/plex.gpg] https://downloads.plex.tv/repo/deb public main"},
+			want:     true,
+		},
+		{
+			name:     "URL prefix match",
+			repoLine: "https://downloads.plex.tv/repo/deb/extra",
+			allowed:  []string{"https://downloads.plex.tv/repo/deb"},
+			want:     true,
+		},
+		{
+			name:     "no match",
+			repoLine: "https://evil.com/repo",
+			allowed:  []string{"https://downloads.plex.tv/repo/deb"},
+			want:     false,
+		},
+		{
+			name:     "empty allowed list",
+			repoLine: "https://example.com/repo",
+			allowed:  []string{},
+			want:     false,
+		},
+		{
+			name:     "no URL in input",
+			repoLine: "not-a-url",
+			allowed:  []string{"https://example.com"},
+			want:     false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := aptRepoAllowed(tt.repoLine, tt.allowed)
+			if got != tt.want {
+				t.Errorf("aptRepoAllowed(%q, %v) = %v, want %v", tt.repoLine, tt.allowed, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestPipBaseName(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{"josepy", "josepy"},
+		{"josepy<2", "josepy"},
+		{"homeassistant[all]>=2024.1.0", "homeassistant"},
+		{"flask==2.3.0", "flask"},
+		{"requests~=2.28", "requests"},
+		{"pkg!=1.0", "pkg"},
+		{"certbot;python_version>='3'", "certbot"},
+		{"  spaces  ", "  spaces  "},
+	}
+	for _, tt := range tests {
+		got := pipBaseName(tt.input)
+		if got != tt.want {
+			t.Errorf("pipBaseName(%q) = %q, want %q", tt.input, got, tt.want)
 		}
 	}
 }

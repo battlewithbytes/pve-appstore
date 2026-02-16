@@ -319,6 +319,15 @@ func (c *Catalog) MergeDevApp(app *AppManifest) {
 	c.apps[app.ID] = app
 }
 
+// GetShadowed returns the original catalog app that was displaced by a dev app.
+// Returns nil, false if no shadowed version exists.
+func (c *Catalog) GetShadowed(id string) (*AppManifest, bool) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	app, ok := c.shadowed[id]
+	return app, ok
+}
+
 // RemoveDevApp removes a developer app from the catalog (only if source is "developer").
 // If a shadowed original exists, it is restored.
 func (c *Catalog) RemoveDevApp(id string) {

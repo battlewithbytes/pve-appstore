@@ -1,5 +1,5 @@
 import { useEffect, useRef, useCallback } from 'react'
-import { EditorView, keymap, lineNumbers, highlightActiveLine, highlightActiveLineGutter, drawSelection } from '@codemirror/view'
+import { EditorView, keymap, lineNumbers, highlightActiveLine, highlightActiveLineGutter, drawSelection, hoverTooltip } from '@codemirror/view'
 import { EditorState, Compartment } from '@codemirror/state'
 import { yaml } from '@codemirror/lang-yaml'
 import { python } from '@codemirror/lang-python'
@@ -53,47 +53,103 @@ const bracketFold = foldService.of((state, lineStart) => {
   return null
 })
 
-// Python SDK completions
-const sdkMethods = [
-  { label: 'self.apt_install', type: 'method', detail: '(packages: list[str])', info: 'Install apt packages' },
-  { label: 'self.pip_install', type: 'method', detail: '(packages: list[str])', info: 'Install pip packages' },
-  { label: 'self.write_config', type: 'method', detail: '(path: str, content: str)', info: 'Write a configuration file' },
-  { label: 'self.enable_service', type: 'method', detail: '(name: str)', info: 'Enable a systemd service' },
-  { label: 'self.restart_service', type: 'method', detail: '(name: str)', info: 'Restart a systemd service' },
-  { label: 'self.run_command', type: 'method', detail: '(cmd: str)', info: 'Run a shell command' },
-  { label: 'self.create_user', type: 'method', detail: '(username: str, ...)', info: 'Create a system user' },
-  { label: 'self.create_dir', type: 'method', detail: '(path: str, ...)', info: 'Create a directory' },
-  { label: 'self.chown', type: 'method', detail: '(path: str, user: str, group: str)', info: 'Change file ownership' },
-  { label: 'self.download', type: 'method', detail: '(url: str, dest: str)', info: 'Download a file' },
-  { label: 'self.run_installer_script', type: 'method', detail: '(url: str)', info: 'Download and run an installer script' },
-  { label: 'self.add_apt_key', type: 'method', detail: '(url: str, keyring: str)', info: 'Add an APT GPG key' },
-  { label: 'self.add_apt_repo', type: 'method', detail: '(line: str, file: str)', info: 'Add an APT repository' },
-  { label: 'self.pkg_install', type: 'method', detail: '(*packages: str)', info: 'OS-aware package install (apt/apk)' },
-  { label: 'self.create_service', type: 'method', detail: '(name, exec_start, ...)', info: 'Create systemd/OpenRC service' },
-  { label: 'self.wait_for_http', type: 'method', detail: '(url, timeout=60, interval=3)', info: 'Poll HTTP endpoint until 200' },
-  { label: 'self.write_env_file', type: 'method', detail: '(path, env_dict, mode="0644")', info: 'Write KEY=VALUE env file' },
-  { label: 'self.status_page', type: 'method', detail: '(port, title, api_url, fields)', info: 'Deploy CCO-themed status page' },
-  { label: 'self.pull_oci_binary', type: 'method', detail: '(image, dest, tag="latest")', info: 'Pull binary from OCI/Docker image' },
-  { label: 'self.sysctl', type: 'method', detail: '(settings: dict)', info: 'Apply sysctl settings persistently' },
-  { label: 'self.disable_ipv6', type: 'method', detail: '()', info: 'Disable IPv6 via sysctl' },
-  { label: 'self.provision_file', type: 'method', detail: '(name: str)', info: 'Read file from provision directory' },
-  { label: 'self.deploy_provision_file', type: 'method', detail: '(name, dest, mode?)', info: 'Copy provision file to destination' },
-  { label: 'self.log', type: 'method', detail: '(message: str)', info: 'Log a message' },
-  { label: 'self.inputs.string', type: 'method', detail: '(key: str, default?: str)', info: 'Get a string input value' },
-  { label: 'self.inputs.integer', type: 'method', detail: '(key: str, default?: int)', info: 'Get an integer input value' },
-  { label: 'self.inputs.boolean', type: 'method', detail: '(key: str, default?: bool)', info: 'Get a boolean input value' },
-  { label: 'self.inputs.secret', type: 'method', detail: '(key: str)', info: 'Get a secret input value' },
-]
+// --- SDK docs fetched from /api/dev/sdk-docs (single source of truth: Python SDK) ---
+
+interface SDKDocEntry {
+  name: string        // lookup key: "apt_install", "inputs.string", "log.info"
+  signature: string   // full signature: "self.apt_install(*packages: str) -> None"
+  description: string // first paragraph of docstring
+}
+
+// Module-level state populated asynchronously from the API.
+// Completions and hover handlers read from these — they return empty
+// results until the fetch completes (typically <100ms on localhost).
+let sdkCompletionOptions: { label: string; type: string; detail: string; info: string }[] = []
+let sdkHoverDocs: Record<string, { signature: string; description: string }> = {}
+
+function extractDetail(sig: string): string {
+  const start = sig.indexOf('(')
+  if (start < 0) return ''
+  let depth = 0
+  for (let i = start; i < sig.length; i++) {
+    if (sig[i] === '(') depth++
+    if (sig[i] === ')') depth--
+    if (depth === 0) return sig.substring(start, i + 1)
+  }
+  return sig.substring(start)
+}
+
+// Fetch SDK docs once when module loads — populates completions + hover
+fetch('/api/dev/sdk-docs')
+  .then(r => r.ok ? r.json() as Promise<SDKDocEntry[]> : [])
+  .then(docs => {
+    sdkCompletionOptions = docs.map(d => ({
+      label: 'self.' + d.name,
+      type: 'method',
+      detail: extractDetail(d.signature),
+      info: d.description,
+    }))
+    sdkHoverDocs = {}
+    for (const d of docs) {
+      sdkHoverDocs[d.name] = { signature: d.signature, description: d.description }
+    }
+  })
+  .catch(() => {})
 
 function sdkCompletions(context: CompletionContext): CompletionResult | null {
-  const word = context.matchBefore(/self\.\w*/)
+  const word = context.matchBefore(/self\.[\w.]*/)
   if (!word || (word.from === word.to && !context.explicit)) return null
   return {
     from: word.from,
-    options: sdkMethods,
-    validFor: /^self\.\w*$/,
+    options: sdkCompletionOptions,
+    validFor: /^self\.[\w.]*$/,
   }
 }
+
+// Hover tooltip for SDK methods — matches self.method, self.inputs.method, self.log.method
+const sdkHoverTooltip = hoverTooltip((view, pos) => {
+  const line = view.state.doc.lineAt(pos)
+  const lineText = line.text
+  const col = pos - line.from
+
+  const pattern = /self\.((?:inputs|log)\.\w+|\w+)/g
+  let match
+  while ((match = pattern.exec(lineText)) !== null) {
+    const start = match.index
+    const end = start + match[0].length
+    if (col >= start && col < end) {
+      const lookupKey = match[1]
+      const doc = sdkHoverDocs[lookupKey]
+      if (!doc) return null
+      return {
+        pos: line.from + start,
+        end: line.from + end,
+        above: true,
+        create() {
+          const dom = document.createElement('div')
+          dom.className = 'cm-sdk-tooltip'
+
+          const sig = document.createElement('div')
+          sig.className = 'cm-sdk-tooltip-sig'
+          sig.textContent = doc.signature
+          dom.appendChild(sig)
+
+          const hr = document.createElement('div')
+          hr.className = 'cm-sdk-tooltip-hr'
+          dom.appendChild(hr)
+
+          const desc = document.createElement('div')
+          desc.className = 'cm-sdk-tooltip-desc'
+          desc.textContent = doc.description
+          dom.appendChild(desc)
+
+          return { dom }
+        },
+      }
+    }
+  }
+  return null
+})
 
 const langCompartment = new Compartment()
 
@@ -152,6 +208,34 @@ const appTheme = EditorView.theme({
     backgroundColor: '#00FF9D22',
     color: '#e0e0e0',
   },
+  '.cm-tooltip-hover': {
+    backgroundColor: '#1a1a1a',
+    border: '1px solid #333',
+    borderRadius: '6px',
+    maxWidth: '520px',
+    boxShadow: '0 4px 12px rgba(0,0,0,0.5)',
+  },
+  '.cm-sdk-tooltip': {
+    padding: '8px 12px',
+  },
+  '.cm-sdk-tooltip-sig': {
+    fontFamily: '"JetBrains Mono", "Fira Code", monospace',
+    fontSize: '12px',
+    color: '#00FF9D',
+    whiteSpace: 'pre-wrap',
+    lineHeight: '1.4',
+  },
+  '.cm-sdk-tooltip-hr': {
+    height: '1px',
+    backgroundColor: '#333',
+    margin: '6px 0',
+  },
+  '.cm-sdk-tooltip-desc': {
+    fontSize: '12px',
+    color: '#aaa',
+    lineHeight: '1.5',
+    whiteSpace: 'pre-wrap',
+  },
 }, { dark: true })
 
 interface CodeEditorProps {
@@ -208,7 +292,7 @@ export function CodeEditor({ value, onChange, filename, onSave, gotoLine }: Code
             },
           },
         ]),
-        ...(isPython ? [autocompletion({ override: [sdkCompletions] })] : []),
+        ...(isPython ? [autocompletion({ override: [sdkCompletions] }), sdkHoverTooltip] : []),
         EditorView.updateListener.of((update) => {
           if (update.docChanged) {
             onChangeRef.current(update.state.doc.toString())
