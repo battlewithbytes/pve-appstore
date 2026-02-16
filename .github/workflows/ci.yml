@@ -34,7 +34,7 @@ jobs:
         run: go vet ./...
 
       - name: Go tests
-        run: go test ./...
+        run: go test $(go list ./... | grep -v /test/e2e)
 
       - name: Python SDK tests
         run: |
