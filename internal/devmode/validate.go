@@ -1,11 +1,15 @@
 package devmode
 
 import (
+	"context"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/battlewithbytes/pve-appstore/internal/catalog"
 	"gopkg.in/yaml.v3"
@@ -170,6 +174,8 @@ func validatePermissions(result *ValidationResult, script string, manifestData [
 		reRunCmd = regexp.MustCompile(`self\.run_command\(\s*\[\s*"([^"]+)"`)
 		// self.create_user("user")
 		reCreateUser = regexp.MustCompile(`self\.create_user\(\s*"([^"]+)"`)
+		// user="xxx" keyword argument (used within multi-line create_service calls)
+		reUserKwarg = regexp.MustCompile(`\buser\s*=\s*"([^"]+)"`)
 		// self.write_config("path", ...), self.create_dir("path"), self.chown("path", ...)
 		rePath = regexp.MustCompile(`self\.(?:write_config|create_dir|chown|write_env_file|deploy_provision_file)\(\s*"([^"]+)"`)
 		// self.download("url", ...), self.add_apt_key("url", ...), self.wait_for_http("url")
@@ -180,12 +186,56 @@ func validatePermissions(result *ValidationResult, script string, manifestData [
 		reStringLit = regexp.MustCompile(`"([^"]+)"`)
 	)
 
+	// First pass: collect users created via self.create_user()
+	createdUsers := make(map[string]bool)
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+		if m := reCreateUser.FindStringSubmatch(line); m != nil {
+			createdUsers[m[1]] = true
+		}
+	}
+
+	// Track multi-line create_service calls to find user= kwarg
+	inCreateService := false
+	createServiceStartLine := 0
+	parenDepth := 0
 	for i, line := range lines {
 		trimmed := strings.TrimSpace(line)
 		if strings.HasPrefix(trimmed, "#") {
 			continue
 		}
 		lineNo := i + 1
+
+		// --- Track create_service call spans ---
+		if strings.Contains(line, "self.create_service(") {
+			inCreateService = true
+			createServiceStartLine = lineNo
+			parenDepth = strings.Count(line, "(") - strings.Count(line, ")")
+		} else if inCreateService {
+			parenDepth += strings.Count(line, "(") - strings.Count(line, ")")
+			if parenDepth <= 0 {
+				inCreateService = false
+			}
+		}
+
+		// --- Service user (user= kwarg inside create_service) ---
+		if inCreateService || strings.Contains(line, "self.create_service(") {
+			if m := reUserKwarg.FindStringSubmatch(line); m != nil {
+				user := m[1]
+				reportLine := lineNo
+				if createServiceStartLine > 0 {
+					reportLine = createServiceStartLine
+				}
+				if user != "root" && !createdUsers[user] && !userSet[user] {
+					result.addWarning("provision/install.py", reportLine,
+						fmt.Sprintf("Service user %q not created via create_user() and not in permissions.users", user),
+						"SCRIPT_SERVICE_USER_MISSING")
+				}
+			}
+		}
 
 		// --- Packages ---
 		if m := rePkgInstall.FindStringSubmatch(line); m != nil {
@@ -201,12 +251,20 @@ func validatePermissions(result *ValidationResult, script string, manifestData [
 
 		// --- Pip packages ---
 		if m := rePipInstall.FindStringSubmatch(line); m != nil {
-			for _, sm := range reStringLit.FindAllStringSubmatch(m[1], -1) {
-				pkg := sm[1]
-				if !matchesAny(pkg, pipSet, perms.Pip) {
-					result.addWarning("provision/install.py", lineNo,
-						fmt.Sprintf("Pip package %q not in permissions.pip", pkg),
-						"PERM_MISSING_PIP")
+			// Split args and skip keyword arguments (e.g. venv="/path")
+			args := strings.Split(m[1], ",")
+			for _, arg := range args {
+				arg = strings.TrimSpace(arg)
+				if strings.Contains(arg, "=") {
+					continue // keyword arg like venv="..."
+				}
+				if sm := reStringLit.FindStringSubmatch(arg); sm != nil {
+					pkg := sm[1]
+					if !matchesAny(pkg, pipSet, perms.Pip) {
+						result.addWarning("provision/install.py", lineNo,
+							fmt.Sprintf("Pip package %q not in permissions.pip", pkg),
+							"PERM_MISSING_PIP")
+					}
 				}
 			}
 		}
@@ -473,6 +531,9 @@ func validateScript(result *ValidationResult, script string, manifestData []byte
 
 	// Cross-reference SDK calls against manifest permissions
 	validatePermissions(result, script, manifestData)
+
+	// Run pyflakes for Python static analysis (undefined names, etc.)
+	validatePyflakes(result, script)
 }
 
 func buildChecklist(result *ValidationResult, appDir string, manifestData []byte) {
@@ -547,4 +608,67 @@ func (r *ValidationResult) addError(file string, line int, message, code string)
 
 func (r *ValidationResult) addWarning(file string, line int, message, code string) {
 	r.Warnings = append(r.Warnings, ValidationMsg{File: file, Line: line, Message: message, Code: code})
+}
+
+// validatePyflakes runs pyflakes on the script to catch Python errors like
+// undefined names, unused imports, and syntax errors.
+func validatePyflakes(result *ValidationResult, script string) {
+	// Write script to a temp file
+	tmpFile, err := os.CreateTemp("", "validate-*.py")
+	if err != nil {
+		return
+	}
+	defer os.Remove(tmpFile.Name())
+
+	if _, err := tmpFile.WriteString(script); err != nil {
+		tmpFile.Close()
+		return
+	}
+	tmpFile.Close()
+
+	// Run pyflakes with a timeout
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "python3", "-m", "pyflakes", tmpFile.Name())
+	output, _ := cmd.CombinedOutput()
+	// pyflakes exits 1 when issues found — that's expected
+
+	if len(output) == 0 {
+		return
+	}
+
+	// Parse output: /tmp/validate-123.py:10:5: undefined name 'broker'
+	for _, line := range strings.Split(strings.TrimSpace(string(output)), "\n") {
+		if line == "" {
+			continue
+		}
+
+		// Strip the temp filename prefix to find the line:col:message part
+		// Format: <filename>:<line>:<col>: <message>
+		prefix := tmpFile.Name() + ":"
+		if !strings.HasPrefix(line, prefix) {
+			continue
+		}
+		rest := line[len(prefix):]
+
+		// Parse line number
+		parts := strings.SplitN(rest, ":", 3)
+		if len(parts) < 3 {
+			continue
+		}
+		lineNo, err := strconv.Atoi(parts[0])
+		if err != nil {
+			continue
+		}
+		msg := strings.TrimSpace(parts[2])
+
+		// Classify: "undefined name" is an error, everything else a warning
+		if strings.HasPrefix(msg, "undefined name") {
+			result.addError("provision/install.py", lineNo, msg, "SCRIPT_UNDEFINED_NAME")
+			result.Valid = false
+		} else {
+			result.addWarning("provision/install.py", lineNo, msg, "SCRIPT_LINT")
+		}
+	}
 }

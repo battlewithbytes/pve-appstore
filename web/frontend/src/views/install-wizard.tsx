@@ -3,8 +3,10 @@ import { api } from '../api'
 import type { AppDetail, AppInput, ConfigDefaultsResponse, InstallRequest, DevicePassthrough, Install } from '../types'
 import { Badge, SectionTitle, FormRow, FormInput } from '../components/ui'
 import { DirectoryBrowser } from '../components/DirectoryBrowser'
+import { useEscapeKey } from '../hooks/useEscapeKey'
 
 export function InstallWizard({ app, onClose, replaceExisting, keepVolumes, existingInstall }: { app: AppDetail; onClose: () => void; replaceExisting?: boolean; keepVolumes?: string[]; existingInstall?: Install | null }) {
+  useEscapeKey(onClose)
   const prev = existingInstall // shorthand for previous install values
   const [inputs, setInputs] = useState<Record<string, string>>(() => {
     if (prev?.inputs) return { ...prev.inputs }

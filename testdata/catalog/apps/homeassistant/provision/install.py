@@ -29,6 +29,9 @@ class HomeAssistantApp(BaseApp):
 
         # Install Home Assistant in a venv
         self.create_venv("/opt/homeassistant/venv")
+        # Pin josepy<2.0 — josepy 2.x removed ComparableX509 which acme still references,
+        # causing hass-nabucasa (HA Cloud) to crash on every HTTP request
+        self.pip_install("josepy<2.0", venv="/opt/homeassistant/venv")
         self.pip_install("homeassistant", venv="/opt/homeassistant/venv")
 
         # Write Home Assistant configuration
@@ -46,6 +49,7 @@ class HomeAssistantApp(BaseApp):
             with open(f"{config_path}/configuration.yaml", "a") as f:
                 f.write(mqtt_snippet)
             self.log.info("MQTT broker installed and running on port 1883")
+            self.log.output("mqtt", "mqtt://{{ip}}:1883")
 
         # Set ownership
         self.chown("/opt/homeassistant", "homeassistant:homeassistant", recursive=True)

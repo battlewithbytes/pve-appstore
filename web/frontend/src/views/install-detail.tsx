@@ -4,6 +4,7 @@ import type { InstallDetail, AppDetail, MountPoint, EditRequest, ReconfigureRequ
 import { Center, BackLink, Badge, StatusDot, ResourceCard, InfoCard, InfoRow } from '../components/ui'
 import { formatUptime, formatBytes, formatBytesShort } from '../lib/format'
 import { TerminalModal } from '../components/terminal'
+import { useEscapeKey } from '../hooks/useEscapeKey'
 
 export function InstallDetailView({ id, requireAuth }: { id: string; requireAuth: (cb: () => void) => void }) {
   const [detail, setDetail] = useState<InstallDetail | null>(null)
@@ -351,6 +352,7 @@ export function UninstallDialog({ appName, ctid, mountPoints, onConfirm, onCance
   appName: string; ctid: number; mountPoints: MountPoint[];
   onConfirm: (keepVolumes: boolean) => void; onCancel: () => void;
 }) {
+  useEscapeKey(onCancel)
   const [keepVolumes, setKeepVolumes] = useState(true)
 
   return (
@@ -401,6 +403,7 @@ export function UpdateDialog({ appName, ctid, currentVersion, newVersion, isRunn
   appName: string; ctid: number; currentVersion: string; newVersion: string; isRunning: boolean;
   onConfirm: () => void; onCancel: () => void;
 }) {
+  useEscapeKey(onCancel)
   return (
     <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-[100]">
       <div className="bg-bg-card border border-border rounded-xl p-8 w-full max-w-[480px]">
@@ -436,6 +439,7 @@ export function EditDialog({ detail, appInfo, isRunning, onConfirm, onCancel }: 
   detail: InstallDetail; appInfo: AppDetail | null; bridges: string[];
   isRunning: boolean; onConfirm: (req: EditRequest) => void; onCancel: () => void;
 }) {
+  useEscapeKey(onCancel)
   const [cores, setCores] = useState(String(detail.cores))
   const [memoryMB, setMemoryMB] = useState(String(detail.memory_mb))
   const [diskGB, setDiskGB] = useState(String(detail.disk_gb))
@@ -575,6 +579,7 @@ export function ReconfigureDialog({ detail, appInfo, onConfirm, onCancel }: {
   detail: InstallDetail; appInfo: AppDetail | null;
   onConfirm: (req: ReconfigureRequest) => void; onCancel: () => void;
 }) {
+  useEscapeKey(onCancel)
   const [cores, setCores] = useState(String(detail.cores))
   const [memoryMB, setMemoryMB] = useState(String(detail.memory_mb))
   const [inputs, setInputs] = useState<Record<string, string>>({ ...(detail.inputs || {}) })

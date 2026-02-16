@@ -2,8 +2,10 @@ import { useState } from 'react'
 import { api } from '../api'
 import type { AppDetail } from '../types'
 import { FormInput } from './ui'
+import { useEscapeKey } from '../hooks/useEscapeKey'
 
 export function LoginModal({ onSuccess, onClose }: { onSuccess: () => void; onClose: () => void }) {
+  useEscapeKey(onClose)
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
@@ -39,6 +41,7 @@ export function LoginModal({ onSuccess, onClose }: { onSuccess: () => void; onCl
 }
 
 export function TestInstallModal({ app, ctid, onConfirm, onClose }: { app: AppDetail; ctid?: number; onConfirm: (keepVolumes: string[]) => void; onClose: () => void }) {
+  useEscapeKey(onClose)
   const bindVolumes = (app.volumes || []).filter(v => v.type === 'bind')
   const managedVolumes = (app.volumes || []).filter(v => (v.type || 'volume') === 'volume')
 

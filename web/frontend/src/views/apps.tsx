@@ -7,6 +7,7 @@ import { Center, BackLink, Badge, RibbonStack, InfoCard, InfoRow } from '../comp
 import { TestInstallModal } from '../components/LoginModal'
 import { InstallWizard } from './install-wizard'
 import { groupInputs } from '../lib/format'
+import { useEscapeKey } from '../hooks/useEscapeKey'
 
 export function AppList() {
   const [apps, setApps] = useState<AppSummary[]>([])
@@ -78,6 +79,7 @@ export function AppCard({ app }: { app: AppSummary }) {
 }
 
 export function BranchDialog({ sourceId, sourceName, onClose }: { sourceId: string; sourceName: string; onClose: () => void }) {
+  useEscapeKey(onClose)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
 

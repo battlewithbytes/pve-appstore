@@ -3,6 +3,112 @@ import { api } from './api'
 import { CodeEditor } from './CodeEditor'
 import type { DevApp, ValidationResult, ValidationMsg, PublishStatus } from './types'
 import { DevStatusBadge, Center, BackLink } from './components/ui'
+import { useEscapeKey } from './hooks/useEscapeKey'
+
+// --- Structure/Outline parsing ---
+
+interface StructureItem {
+  label: string
+  line: number
+  depth: number
+}
+
+function parsePythonStructure(content: string): StructureItem[] {
+  const items: StructureItem[] = []
+  const lines = content.split('\n')
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]
+    const classMatch = line.match(/^class\s+(\w+)/)
+    if (classMatch) {
+      items.push({ label: classMatch[1], line: i + 1, depth: 0 })
+      continue
+    }
+    const defMatch = line.match(/^(\s*)def\s+(\w+)/)
+    if (defMatch) {
+      const indent = defMatch[1].length
+      items.push({ label: defMatch[2], line: i + 1, depth: indent > 0 ? 1 : 0 })
+    }
+  }
+  return items
+}
+
+function parseYamlStructure(content: string): StructureItem[] {
+  const items: StructureItem[] = []
+  const lines = content.split('\n')
+  let inInputs = false
+  let inPermissions = false
+  let inLxcDefaults = false
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]
+    // Top-level key (no leading whitespace, not a comment)
+    const topMatch = line.match(/^([a-zA-Z_][\w_]*):\s*/)
+    if (topMatch) {
+      items.push({ label: topMatch[1], line: i + 1, depth: 0 })
+      inInputs = topMatch[1] === 'inputs'
+      inPermissions = topMatch[1] === 'permissions'
+      inLxcDefaults = false
+      continue
+    }
+    // lxc.defaults sub-keys
+    if (line.match(/^\s+defaults:\s*$/)) {
+      items.push({ label: 'defaults', line: i + 1, depth: 1 })
+      inLxcDefaults = true
+      inInputs = false
+      inPermissions = false
+      continue
+    }
+    if (inLxcDefaults) {
+      const subMatch = line.match(/^\s{4,}(\w+):/)
+      if (subMatch) {
+        items.push({ label: subMatch[1], line: i + 1, depth: 2 })
+        continue
+      }
+      // End of defaults if we hit a non-indented or less-indented line
+      if (line.match(/^\S/) || (line.trim() && !line.match(/^\s{4}/))) {
+        inLxcDefaults = false
+      }
+    }
+    // Input items: "  - key: xxx"
+    if (inInputs) {
+      const inputMatch = line.match(/^\s+-\s+key:\s*(.+)/)
+      if (inputMatch) {
+        items.push({ label: inputMatch[1].trim(), line: i + 1, depth: 1 })
+        continue
+      }
+      // End of inputs section on new top-level key
+      if (line.match(/^[a-zA-Z]/)) inInputs = false
+    }
+    // Permission sub-keys
+    if (inPermissions) {
+      const permMatch = line.match(/^\s{2}(\w+):/)
+      if (permMatch) {
+        items.push({ label: permMatch[1], line: i + 1, depth: 1 })
+        continue
+      }
+      if (line.match(/^[a-zA-Z]/)) inPermissions = false
+    }
+  }
+  return items
+}
+
+function parseMarkdownStructure(content: string): StructureItem[] {
+  const items: StructureItem[] = []
+  const lines = content.split('\n')
+  for (let i = 0; i < lines.length; i++) {
+    const match = lines[i].match(/^(#{1,6})\s+(.+)/)
+    if (match) {
+      items.push({ label: match[2].trim(), line: i + 1, depth: match[1].length - 1 })
+    }
+  }
+  return items
+}
+
+function parseStructure(content: string, filename: string): StructureItem[] {
+  if (filename.endsWith('.py')) return parsePythonStructure(content)
+  if (filename.endsWith('.yml') || filename.endsWith('.yaml')) return parseYamlStructure(content)
+  if (filename.endsWith('.md')) return parseMarkdownStructure(content)
+  return []
+}
 
 function DevAppEditor({ id, requireAuth }: { id: string; requireAuth: (cb: () => void) => void }) {
   const [app, setApp] = useState<DevApp | null>(null)
@@ -45,6 +151,12 @@ function DevAppEditor({ id, requireAuth }: { id: string; requireAuth: (cb: () =>
     }
   }, [manifest])
 
+  const handleGotoLine = useCallback((file: string, line: number) => {
+    setActiveFile(file)
+    // Add tiny random offset so repeated clicks to the same line still trigger
+    setGotoLine(line + Math.random() * 0.001)
+  }, [])
+
   const fetchApp = useCallback(async () => {
     try {
       const data = await api.devGetApp(id)
@@ -57,6 +169,38 @@ function DevAppEditor({ id, requireAuth }: { id: string; requireAuth: (cb: () =>
 
   useEffect(() => { fetchApp() }, [fetchApp])
 
+  // --- Unsaved changes guard ---
+  const isDirty = app != null && (
+    manifest !== app.manifest ||
+    script !== app.script ||
+    readme !== app.readme
+  )
+  const dirtyRef = useRef(false)
+  dirtyRef.current = isDirty
+
+  // Warn on browser refresh / tab close
+  useEffect(() => {
+    const handler = (e: BeforeUnloadEvent) => {
+      if (dirtyRef.current) e.preventDefault()
+    }
+    window.addEventListener('beforeunload', handler)
+    return () => window.removeEventListener('beforeunload', handler)
+  }, [])
+
+  // Warn on in-app navigation (back button, link clicks)
+  useEffect(() => {
+    const editorHash = `#/dev/${id}`
+    const handler = () => {
+      if (dirtyRef.current && !window.location.hash.startsWith(editorHash)) {
+        if (!confirm('You have unsaved changes. Leave anyway?')) {
+          window.location.hash = editorHash
+        }
+      }
+    }
+    window.addEventListener('hashchange', handler)
+    return () => window.removeEventListener('hashchange', handler)
+  }, [id])
+
   const saveFile = useCallback((file: string, content: string) => {
     requireAuth(async () => {
       setSaving(true)
@@ -65,6 +209,14 @@ function DevAppEditor({ id, requireAuth }: { id: string; requireAuth: (cb: () =>
         if (file === 'app.yml') await api.devSaveManifest(id, content)
         else if (file === 'provision/install.py') await api.devSaveScript(id, content)
         else await api.devSaveFile(id, file, content)
+        // Update saved baseline so dirty check reflects the save
+        setApp(prev => {
+          if (!prev) return prev
+          if (file === 'app.yml') return { ...prev, manifest: content }
+          if (file === 'provision/install.py') return { ...prev, script: content }
+          if (file === 'README.md') return { ...prev, readme: content }
+          return prev
+        })
         setSaveMsg('Saved')
         setTimeout(() => setSaveMsg(''), 1500)
       } catch (e: unknown) {
@@ -225,9 +377,11 @@ function DevAppEditor({ id, requireAuth }: { id: string; requireAuth: (cb: () =>
 
   const dismissContextMenu = useCallback(() => setContextMenu(null), [])
 
+  const currentContent = activeFile === 'app.yml' ? manifest : activeFile === 'provision/install.py' ? script : activeFile === 'README.md' ? readme : (extraFiles[activeFile] ?? '')
+  const structureItems = useMemo(() => parseStructure(currentContent, activeFile), [currentContent, activeFile])
+
   if (!app) return <Center className="py-16"><span className="text-text-muted font-mono">Loading...</span></Center>
 
-  const currentContent = activeFile === 'app.yml' ? manifest : activeFile === 'provision/install.py' ? script : activeFile === 'README.md' ? readme : (extraFiles[activeFile] ?? '')
   const setCurrentContent = activeFile === 'app.yml' ? setManifest : activeFile === 'provision/install.py' ? setScript : activeFile === 'README.md' ? setReadme : ((v: string) => setExtraFiles(prev => ({ ...prev, [activeFile]: v })))
 
   return (
@@ -314,7 +468,7 @@ function DevAppEditor({ id, requireAuth }: { id: string; requireAuth: (cb: () =>
 
       {/* Main editor area */}
       <div className="flex gap-4" style={{ height: 'calc(100vh - 280px)' }}>
-        {/* File tree */}
+        {/* File tree + Structure */}
         <div className="w-48 border border-border rounded-lg overflow-hidden shrink-0 flex flex-col">
           <div className="bg-bg-card px-3 py-2 border-b border-border flex items-center justify-between">
             <span className="text-xs text-text-muted font-mono uppercase">Files</span>
@@ -368,7 +522,7 @@ function DevAppEditor({ id, requireAuth }: { id: string; requireAuth: (cb: () =>
             />
           </div>
           <div
-            className="p-1 flex-1 overflow-y-auto"
+            className="p-1 flex-1 min-h-0 overflow-y-auto"
             onContextMenu={e => {
               // Right-click on empty space in file panel
               if (e.target === e.currentTarget) {
@@ -420,13 +574,39 @@ function DevAppEditor({ id, requireAuth }: { id: string; requireAuth: (cb: () =>
               </form>
             )}
           </div>
+          {/* Structure panel */}
+          <div className="border-t border-border flex flex-col flex-1 min-h-0">
+            <div className="bg-bg-card px-3 py-2 border-b border-border">
+              <span className="text-xs text-text-muted font-mono uppercase">Structure</span>
+            </div>
+            <div className="p-1 flex-1 min-h-0 overflow-y-auto">
+              {structureItems.length > 0 ? structureItems.map((item, i) => {
+                const depthColors = ['text-primary', 'text-blue-400', 'text-purple-400']
+                const color = depthColors[Math.min(item.depth, depthColors.length - 1)]
+                return (
+                  <button
+                    key={i}
+                    onClick={() => handleGotoLine(activeFile, item.line)}
+                    className={`w-full text-left px-2 py-0.5 text-[11px] font-mono rounded cursor-pointer transition-colors hover:bg-white/5 flex items-center justify-between gap-1 group ${color}`}
+                    style={{ paddingLeft: `${8 + item.depth * 12}px` }}
+                  >
+                    <span className="truncate">{item.label}</span>
+                    <span className="text-text-muted text-[10px] opacity-0 group-hover:opacity-100 shrink-0">{item.line}</span>
+                  </button>
+                )
+              }) : (
+                <span className="text-[11px] text-text-muted font-mono px-2 py-2 block">No structure available</span>
+              )}
+            </div>
+          </div>
         </div>
 
         {/* Editor / Icon Preview */}
         <div className="flex-1 flex flex-col border border-border rounded-lg overflow-hidden">
           <div className="bg-bg-card px-4 py-2 border-b border-border flex items-center justify-between">
-            <span className="text-xs font-mono text-text-muted">{activeFile}</span>
+            <span className="text-xs font-mono text-text-muted">{activeFile}{isDirty ? ' *' : ''}</span>
             <div className="flex items-center gap-2">
+              {isDirty && !saveMsg && <span className="text-xs font-mono text-yellow-400">unsaved</span>}
               {saveMsg && <span className={`text-xs font-mono ${saveMsg.startsWith('Error') ? 'text-red-400' : 'text-primary'}`}>{saveMsg}</span>}
               {activeFile !== 'icon.png' && (
                 <button
@@ -476,13 +656,13 @@ function DevAppEditor({ id, requireAuth }: { id: string; requireAuth: (cb: () =>
               {validation.errors.length > 0 && (
                 <div className="mb-3">
                   <span className="text-xs font-mono text-red-400 font-bold px-1">Errors ({validation.errors.length})</span>
-                  {validation.errors.map((e, i) => <DevValidationMsg key={i} msg={e} type="error" onNavigate={navigateToFile} />)}
+                  {validation.errors.map((e, i) => <DevValidationMsg key={i} msg={e} type="error" onNavigate={navigateToFile} onGotoLine={handleGotoLine} />)}
                 </div>
               )}
               {validation.warnings.length > 0 && (
                 <div className="mb-3">
                   <span className="text-xs font-mono text-yellow-400 font-bold px-1">Warnings ({validation.warnings.length})</span>
-                  {validation.warnings.map((e, i) => <DevValidationMsg key={i} msg={e} type="warning" onNavigate={navigateToFile} />)}
+                  {validation.warnings.map((e, i) => <DevValidationMsg key={i} msg={e} type="warning" onNavigate={navigateToFile} onGotoLine={handleGotoLine} />)}
                 </div>
               )}
               <div>
@@ -692,6 +872,7 @@ function YamlReferencePanel() {
 }
 
 function DevSubmitDialog({ id, appName, onClose, requireAuth, isStack }: { id: string; appName: string; onClose: () => void; requireAuth: (cb: () => void) => void; isStack?: boolean }) {
+  useEscapeKey(onClose)
   const [publishStatus, setPublishStatus] = useState<PublishStatus | null>(null)
   const [loading, setLoading] = useState(true)
   const [publishing, setPublishing] = useState(false)
@@ -816,10 +997,17 @@ function DevSubmitDialog({ id, appName, onClose, requireAuth, isStack }: { id: s
   )
 }
 
-function DevValidationMsg({ msg, type, onNavigate }: { msg: ValidationMsg; type: 'error' | 'warning'; onNavigate?: (file: string, search?: string) => void }) {
+function DevValidationMsg({ msg, type, onNavigate, onGotoLine }: { msg: ValidationMsg; type: 'error' | 'warning'; onNavigate?: (file: string, search?: string) => void; onGotoLine?: (file: string, line: number) => void }) {
   const color = type === 'error' ? 'border-red-400/30' : 'border-yellow-400/30'
   const permLink = msg.code?.startsWith('PERM_MISSING_')
-  const permSection = permLink ? msg.code!.replace('PERM_MISSING_', '').toLowerCase() + 's' : ''
+  const scriptLink = msg.code?.startsWith('SCRIPT_') && !permLink
+  const permSectionMap: Record<string, string> = {
+    PERM_MISSING_PACKAGE: 'packages', PERM_MISSING_PIP: 'pip',
+    PERM_MISSING_SERVICE: 'services', PERM_MISSING_COMMAND: 'commands',
+    PERM_MISSING_USER: 'users', PERM_MISSING_PATH: 'paths',
+    PERM_MISSING_URL: 'urls', PERM_MISSING_APT_REPO: 'apt_repos',
+  }
+  const permSection = (permLink && msg.code) ? (permSectionMap[msg.code] || '') : ''
   return (
     <div className={`border-l-2 ${color} px-2 py-1.5 my-1 text-xs font-mono`}>
       <div className="text-text-muted">{msg.file}{msg.line ? `:${msg.line}` : ''}</div>
@@ -829,6 +1017,12 @@ function DevValidationMsg({ msg, type, onNavigate }: { msg: ValidationMsg; type:
           onClick={() => onNavigate('app.yml', permSection)}
           className="mt-1 text-primary hover:underline bg-transparent border-0 p-0 cursor-pointer text-xs font-mono"
         >→ Edit permissions.{permSection} in app.yml</button>
+      )}
+      {scriptLink && msg.line && onGotoLine && (
+        <button
+          onClick={() => onGotoLine('provision/install.py', msg.line!)}
+          className="mt-1 text-primary hover:underline bg-transparent border-0 p-0 cursor-pointer text-xs font-mono"
+        >→ Go to line {msg.line} in install.py</button>
       )}
     </div>
   )

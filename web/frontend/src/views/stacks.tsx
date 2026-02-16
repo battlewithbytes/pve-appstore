@@ -4,11 +4,13 @@ import type { StackListItem, StackDetail, EditRequest, ConfigDefaultsResponse } 
 import { Center, StatusDot, CtxMenuItem } from '../components/ui'
 import { formatUptime } from '../lib/format'
 import { StackTerminalModal, StackLogViewerModal } from '../components/terminal'
+import { useEscapeKey } from '../hooks/useEscapeKey'
 
 export function StackEditDialog({ detail, isRunning, onConfirm, onCancel }: {
   detail: StackDetail;
   isRunning: boolean; onConfirm: (req: EditRequest) => void; onCancel: () => void;
 }) {
+  useEscapeKey(onCancel)
   const [cores, setCores] = useState(String(detail.cores))
   const [memoryMB, setMemoryMB] = useState(String(detail.memory_mb))
   const [diskGB, setDiskGB] = useState(String(detail.disk_gb))

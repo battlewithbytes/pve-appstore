@@ -239,11 +239,10 @@ export function CodeEditor({ value, onChange, filename, onSave, gotoLine }: Code
     }
   }, [])
 
-  // Only sync when file changes (not on every keystroke)
+  // Sync external value/filename changes into the editor
   const prevFilename = useRef(filename)
   useEffect(() => {
     if (prevFilename.current !== filename) {
-      syncValue(value)
       prevFilename.current = filename
       // Update language
       const view = viewRef.current
@@ -253,6 +252,8 @@ export function CodeEditor({ value, onChange, filename, onSave, gotoLine }: Code
         })
       }
     }
+    // Always attempt sync — syncValue internally skips if editor already matches
+    syncValue(value)
   }, [filename, value, syncValue])
 
   // Scroll to a specific line when gotoLine changes
@@ -263,7 +264,7 @@ export function CodeEditor({ value, onChange, filename, onSave, gotoLine }: Code
     const lineInfo = view.state.doc.line(line)
     view.dispatch({
       selection: { anchor: lineInfo.from },
-      scrollIntoView: true,
+      effects: EditorView.scrollIntoView(lineInfo.from, { y: 'center' }),
     })
     view.focus()
   }, [gotoLine])

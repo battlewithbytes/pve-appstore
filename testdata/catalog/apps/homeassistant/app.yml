@@ -85,7 +85,7 @@ permissions:
     - libtiff6
     - mosquitto
     - mosquitto-clients
-  pip: [homeassistant]
+  pip: [homeassistant, "josepy<2.0"]
   paths: ["/opt/homeassistant/", "/etc/systemd/", "/etc/localtime", "/etc/timezone"]
   services: [homeassistant, mosquitto]
   users: [homeassistant]

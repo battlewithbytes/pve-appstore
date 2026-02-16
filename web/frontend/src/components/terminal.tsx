@@ -6,6 +6,7 @@ import '@xterm/xterm/css/xterm.css'
 import { api } from '../api'
 import type { ContainerLiveStatus } from '../types'
 import { formatBytesShort } from '../lib/format'
+import { useEscapeKey } from '../hooks/useEscapeKey'
 
 export function TerminalModal({ installId, onClose }: { installId: string; onClose: () => void }) {
   const termRef = useRef<HTMLDivElement>(null)
@@ -170,6 +171,7 @@ export function MiniBar({ label, pct }: { label: string; pct: number }) {
 }
 
 export function LogViewerModal({ installId, onClose }: { installId: string; onClose: () => void }) {
+  useEscapeKey(onClose)
   const termRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -320,6 +322,7 @@ export function StackTerminalModal({ stackId, onClose }: { stackId: string; onCl
 }
 
 export function StackLogViewerModal({ stackId, onClose }: { stackId: string; onClose: () => void }) {
+  useEscapeKey(onClose)
   const termRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {

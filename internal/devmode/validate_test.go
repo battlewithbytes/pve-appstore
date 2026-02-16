@@ -249,6 +249,208 @@ run(TestApp)
 	}
 }
 
+func TestValidatePyflakes_UndefinedName(t *testing.T) {
+	script := `from appstore import BaseApp, run
+
+class TestApp(BaseApp):
+    def install(self):
+        x = undefined_var
+
+run(TestApp)
+`
+	result := &ValidationResult{Valid: true, Errors: []ValidationMsg{}, Warnings: []ValidationMsg{}}
+	validatePyflakes(result, script)
+
+	if result.Valid {
+		t.Error("expected Valid=false due to undefined name")
+	}
+
+	found := false
+	for _, e := range result.Errors {
+		if e.Code == "SCRIPT_UNDEFINED_NAME" && e.Line == 5 {
+			found = true
+			if !strings.Contains(e.Message, "undefined_var") {
+				t.Errorf("expected message about undefined_var, got: %s", e.Message)
+			}
+		}
+	}
+	if !found {
+		t.Errorf("expected SCRIPT_UNDEFINED_NAME error on line 5, got errors: %+v", result.Errors)
+	}
+}
+
+func TestValidatePyflakes_CleanScript(t *testing.T) {
+	script := `from appstore import BaseApp, run
+
+class TestApp(BaseApp):
+    def install(self):
+        tz = self.inputs.string("timezone", "UTC")
+        self.apt_install("nginx")
+        self.write_config("/etc/nginx/conf.d/default.conf", tz)
+
+run(TestApp)
+`
+	result := &ValidationResult{Valid: true, Errors: []ValidationMsg{}, Warnings: []ValidationMsg{}}
+	validatePyflakes(result, script)
+
+	for _, e := range result.Errors {
+		if e.Code == "SCRIPT_UNDEFINED_NAME" {
+			t.Errorf("unexpected undefined name error: %+v", e)
+		}
+	}
+	if !result.Valid {
+		t.Errorf("expected Valid=true for clean script, got errors: %+v", result.Errors)
+	}
+}
+
+func TestValidatePyflakes_UnusedImportWarning(t *testing.T) {
+	script := `from appstore import BaseApp, run
+import os
+
+class TestApp(BaseApp):
+    def install(self):
+        self.apt_install("nginx")
+
+run(TestApp)
+`
+	result := &ValidationResult{Valid: true, Errors: []ValidationMsg{}, Warnings: []ValidationMsg{}}
+	validatePyflakes(result, script)
+
+	// 'import os' unused should be a warning, not an error
+	if !result.Valid {
+		t.Error("unused import should be a warning, not make Valid=false")
+	}
+
+	found := false
+	for _, w := range result.Warnings {
+		if w.Code == "SCRIPT_LINT" && strings.Contains(w.Message, "os") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected SCRIPT_LINT warning about unused 'os' import, got warnings: %+v", result.Warnings)
+	}
+}
+
+func TestValidatePermissions_ServiceUserNotCreated(t *testing.T) {
+	manifest := `
+id: test-app
+name: Test
+description: test
+version: "1.0.0"
+categories: [utilities]
+lxc:
+  ostemplate: debian-12
+  defaults: {cores: 1, memory_mb: 512, disk_gb: 4}
+provisioning:
+  script: provision/install.py
+permissions:
+  services: [myapp]
+  users: [appuser]
+`
+	script := `#!/usr/bin/env python3
+from appstore import BaseApp, run
+
+class TestApp(BaseApp):
+    def install(self):
+        self.create_user("appuser")
+        self.create_service("myapp",
+            exec_start="/usr/bin/myapp",
+            user="unknownuser",
+        )
+
+run(TestApp)
+`
+	result := &ValidationResult{Valid: true, Errors: []ValidationMsg{}, Warnings: []ValidationMsg{}}
+	validatePermissions(result, script, []byte(manifest))
+
+	found := false
+	for _, w := range result.Warnings {
+		if w.Code == "SCRIPT_SERVICE_USER_MISSING" && strings.Contains(w.Message, "unknownuser") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected warning about unknownuser not created, got: %+v", result.Warnings)
+	}
+}
+
+func TestValidatePermissions_ServiceUserCreated(t *testing.T) {
+	manifest := `
+id: test-app
+name: Test
+description: test
+version: "1.0.0"
+categories: [utilities]
+lxc:
+  ostemplate: debian-12
+  defaults: {cores: 1, memory_mb: 512, disk_gb: 4}
+provisioning:
+  script: provision/install.py
+permissions:
+  services: [myapp]
+  users: [hauser]
+`
+	script := `#!/usr/bin/env python3
+from appstore import BaseApp, run
+
+class TestApp(BaseApp):
+    def install(self):
+        self.create_user("hauser")
+        self.create_service("myapp",
+            exec_start="/usr/bin/myapp",
+            user="hauser",
+        )
+
+run(TestApp)
+`
+	result := &ValidationResult{Valid: true, Errors: []ValidationMsg{}, Warnings: []ValidationMsg{}}
+	validatePermissions(result, script, []byte(manifest))
+
+	for _, w := range result.Warnings {
+		if w.Code == "SCRIPT_SERVICE_USER_MISSING" {
+			t.Errorf("unexpected service user warning: %+v", w)
+		}
+	}
+}
+
+func TestValidatePermissions_ServiceUserRoot(t *testing.T) {
+	manifest := `
+id: test-app
+name: Test
+description: test
+version: "1.0.0"
+categories: [utilities]
+lxc:
+  ostemplate: debian-12
+  defaults: {cores: 1, memory_mb: 512, disk_gb: 4}
+provisioning:
+  script: provision/install.py
+permissions:
+  services: [myapp]
+`
+	script := `#!/usr/bin/env python3
+from appstore import BaseApp, run
+
+class TestApp(BaseApp):
+    def install(self):
+        self.create_service("myapp",
+            exec_start="/usr/bin/myapp",
+            user="root",
+        )
+
+run(TestApp)
+`
+	result := &ValidationResult{Valid: true, Errors: []ValidationMsg{}, Warnings: []ValidationMsg{}}
+	validatePermissions(result, script, []byte(manifest))
+
+	for _, w := range result.Warnings {
+		if w.Code == "SCRIPT_SERVICE_USER_MISSING" {
+			t.Errorf("root should not trigger service user warning: %+v", w)
+		}
+	}
+}
+
 func TestValidatePermissions_AllAllowed(t *testing.T) {
 	manifest := `
 id: test-app

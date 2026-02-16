@@ -1,8 +1,10 @@
 import { useState, useEffect } from 'react'
 import { api } from '../api'
 import type { BrowseEntry, MountInfo } from '../types'
+import { useEscapeKey } from '../hooks/useEscapeKey'
 
 export function DirectoryBrowser({ initialPath, onSelect, onClose }: { initialPath: string; onSelect: (path: string) => void; onClose: () => void }) {
+  useEscapeKey(onClose)
   const [path, setPath] = useState(initialPath || '')
   const [entries, setEntries] = useState<BrowseEntry[]>([])
   const [loading, setLoading] = useState(true)
