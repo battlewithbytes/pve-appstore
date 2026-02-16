@@ -5,8 +5,24 @@ import (
 	"testing"
 )
 
+// runASTPermissions is a test helper: runs the AST analyzer on a script,
+// then calls validatePermissionsFromAST with the given manifest.
+func runASTPermissions(t *testing.T, script string, manifest []byte) *ValidationResult {
+	t.Helper()
+	result := &ValidationResult{Valid: true, Errors: []ValidationMsg{}, Warnings: []ValidationMsg{}}
+	analysis, err := runASTAnalyzer(script)
+	if err != nil {
+		t.Fatalf("runASTAnalyzer failed: %v", err)
+	}
+	if analysis.Error != "" {
+		t.Fatalf("AST analysis error: %s", analysis.Error)
+	}
+	validatePermissionsFromAST(result, analysis, manifest)
+	return result
+}
+
 func TestValidatePermissions_MissingCommand(t *testing.T) {
-	manifest := `
+	manifest := []byte(`
 id: test-app
 name: Test App
 description: A test app
@@ -25,7 +41,7 @@ permissions:
   commands: [curl]
   services: [myapp]
   paths: [/etc/myapp/]
-`
+`)
 	script := `#!/usr/bin/env python3
 from appstore import BaseApp, run
 
@@ -38,8 +54,7 @@ class TestApp(BaseApp):
 
 run(TestApp)
 `
-	result := &ValidationResult{Valid: true, Errors: []ValidationMsg{}, Warnings: []ValidationMsg{}}
-	validatePermissions(result, script, []byte(manifest))
+	result := runASTPermissions(t, script, manifest)
 
 	// Should warn about gitlab-ctl not being in permissions.commands
 	found := false
@@ -55,14 +70,14 @@ run(TestApp)
 
 	// Should NOT warn about curl (it's allowed)
 	for _, w := range result.Warnings {
-		if w.Code == "PERM_MISSING_COMMAND" && strings.Contains(w.Message, "curl") {
+		if w.Code == "PERM_MISSING_COMMAND" && strings.Contains(w.Message, `"curl"`) {
 			t.Errorf("unexpected warning about curl: %+v", w)
 		}
 	}
 }
 
 func TestValidatePermissions_MissingPackage(t *testing.T) {
-	manifest := `
+	manifest := []byte(`
 id: test-app
 name: Test
 description: test
@@ -75,7 +90,7 @@ provisioning:
   script: provision/install.py
 permissions:
   packages: [curl]
-`
+`)
 	script := `#!/usr/bin/env python3
 from appstore import BaseApp, run
 
@@ -85,8 +100,7 @@ class TestApp(BaseApp):
 
 run(TestApp)
 `
-	result := &ValidationResult{Valid: true, Errors: []ValidationMsg{}, Warnings: []ValidationMsg{}}
-	validatePermissions(result, script, []byte(manifest))
+	result := runASTPermissions(t, script, manifest)
 
 	// Should warn about wget and git but not curl
 	warnPkgs := map[string]bool{}
@@ -111,7 +125,7 @@ run(TestApp)
 }
 
 func TestValidatePermissions_MissingService(t *testing.T) {
-	manifest := `
+	manifest := []byte(`
 id: test-app
 name: Test
 description: test
@@ -124,7 +138,7 @@ provisioning:
   script: provision/install.py
 permissions:
   services: [nginx]
-`
+`)
 	script := `#!/usr/bin/env python3
 from appstore import BaseApp, run
 
@@ -135,8 +149,7 @@ class TestApp(BaseApp):
 
 run(TestApp)
 `
-	result := &ValidationResult{Valid: true, Errors: []ValidationMsg{}, Warnings: []ValidationMsg{}}
-	validatePermissions(result, script, []byte(manifest))
+	result := runASTPermissions(t, script, manifest)
 
 	found := false
 	for _, w := range result.Warnings {
@@ -153,7 +166,7 @@ run(TestApp)
 }
 
 func TestValidatePermissions_MissingPath(t *testing.T) {
-	manifest := `
+	manifest := []byte(`
 id: test-app
 name: Test
 description: test
@@ -166,7 +179,7 @@ provisioning:
   script: provision/install.py
 permissions:
   paths: [/etc/myapp/, /var/lib/myapp/]
-`
+`)
 	script := `#!/usr/bin/env python3
 from appstore import BaseApp, run
 
@@ -179,8 +192,7 @@ class TestApp(BaseApp):
 
 run(TestApp)
 `
-	result := &ValidationResult{Valid: true, Errors: []ValidationMsg{}, Warnings: []ValidationMsg{}}
-	validatePermissions(result, script, []byte(manifest))
+	result := runASTPermissions(t, script, manifest)
 
 	// /opt/secret should warn, /tmp/build should not (implicit), /etc/myapp/ and /var/lib/myapp/ should not
 	warnPaths := map[string]bool{}
@@ -208,7 +220,7 @@ run(TestApp)
 }
 
 func TestValidatePermissions_MissingUser(t *testing.T) {
-	manifest := `
+	manifest := []byte(`
 id: test-app
 name: Test
 description: test
@@ -221,7 +233,7 @@ provisioning:
   script: provision/install.py
 permissions:
   users: [appuser]
-`
+`)
 	script := `#!/usr/bin/env python3
 from appstore import BaseApp, run
 
@@ -232,8 +244,7 @@ class TestApp(BaseApp):
 
 run(TestApp)
 `
-	result := &ValidationResult{Valid: true, Errors: []ValidationMsg{}, Warnings: []ValidationMsg{}}
-	validatePermissions(result, script, []byte(manifest))
+	result := runASTPermissions(t, script, manifest)
 
 	found := false
 	for _, w := range result.Warnings {
@@ -333,7 +344,7 @@ run(TestApp)
 }
 
 func TestValidatePermissions_ServiceUserNotCreated(t *testing.T) {
-	manifest := `
+	manifest := []byte(`
 id: test-app
 name: Test
 description: test
@@ -347,7 +358,7 @@ provisioning:
 permissions:
   services: [myapp]
   users: [appuser]
-`
+`)
 	script := `#!/usr/bin/env python3
 from appstore import BaseApp, run
 
@@ -361,8 +372,7 @@ class TestApp(BaseApp):
 
 run(TestApp)
 `
-	result := &ValidationResult{Valid: true, Errors: []ValidationMsg{}, Warnings: []ValidationMsg{}}
-	validatePermissions(result, script, []byte(manifest))
+	result := runASTPermissions(t, script, manifest)
 
 	found := false
 	for _, w := range result.Warnings {
@@ -376,7 +386,7 @@ run(TestApp)
 }
 
 func TestValidatePermissions_ServiceUserCreated(t *testing.T) {
-	manifest := `
+	manifest := []byte(`
 id: test-app
 name: Test
 description: test
@@ -390,7 +400,7 @@ provisioning:
 permissions:
   services: [myapp]
   users: [hauser]
-`
+`)
 	script := `#!/usr/bin/env python3
 from appstore import BaseApp, run
 
@@ -404,8 +414,7 @@ class TestApp(BaseApp):
 
 run(TestApp)
 `
-	result := &ValidationResult{Valid: true, Errors: []ValidationMsg{}, Warnings: []ValidationMsg{}}
-	validatePermissions(result, script, []byte(manifest))
+	result := runASTPermissions(t, script, manifest)
 
 	for _, w := range result.Warnings {
 		if w.Code == "SCRIPT_SERVICE_USER_MISSING" {
@@ -415,7 +424,7 @@ run(TestApp)
 }
 
 func TestValidatePermissions_ServiceUserRoot(t *testing.T) {
-	manifest := `
+	manifest := []byte(`
 id: test-app
 name: Test
 description: test
@@ -428,7 +437,7 @@ provisioning:
   script: provision/install.py
 permissions:
   services: [myapp]
-`
+`)
 	script := `#!/usr/bin/env python3
 from appstore import BaseApp, run
 
@@ -441,8 +450,7 @@ class TestApp(BaseApp):
 
 run(TestApp)
 `
-	result := &ValidationResult{Valid: true, Errors: []ValidationMsg{}, Warnings: []ValidationMsg{}}
-	validatePermissions(result, script, []byte(manifest))
+	result := runASTPermissions(t, script, manifest)
 
 	for _, w := range result.Warnings {
 		if w.Code == "SCRIPT_SERVICE_USER_MISSING" {
@@ -452,7 +460,7 @@ run(TestApp)
 }
 
 func TestValidatePermissions_AllAllowed(t *testing.T) {
-	manifest := `
+	manifest := []byte(`
 id: test-app
 name: Test
 description: test
@@ -470,7 +478,7 @@ permissions:
   paths: [/etc/nginx/]
   urls: ["https://example.com/*"]
   users: [www-data]
-`
+`)
 	script := `#!/usr/bin/env python3
 from appstore import BaseApp, run
 
@@ -485,10 +493,385 @@ class TestApp(BaseApp):
 
 run(TestApp)
 `
-	result := &ValidationResult{Valid: true, Errors: []ValidationMsg{}, Warnings: []ValidationMsg{}}
-	validatePermissions(result, script, []byte(manifest))
+	result := runASTPermissions(t, script, manifest)
 
 	// No permission warnings expected
+	for _, w := range result.Warnings {
+		if strings.HasPrefix(w.Code, "PERM_") {
+			t.Errorf("unexpected permission warning: %+v", w)
+		}
+	}
+}
+
+// --- New AST-specific tests ---
+
+func TestASTAnalyzer_MultiLineCall(t *testing.T) {
+	script := `from appstore import BaseApp, run
+
+class TestApp(BaseApp):
+    def install(self):
+        self.pkg_install(
+            "python3",
+            "python3-venv",
+            "libffi-dev",
+        )
+
+run(TestApp)
+`
+	analysis, err := runASTAnalyzer(script)
+	if err != nil {
+		t.Fatalf("runASTAnalyzer failed: %v", err)
+	}
+
+	// All three packages should be found despite multi-line call
+	found := 0
+	for _, call := range analysis.MethodCalls {
+		if call.Method == "pkg_install" {
+			args := allStringArgs(call)
+			for _, a := range args {
+				if a == "python3" || a == "python3-venv" || a == "libffi-dev" {
+					found++
+				}
+			}
+		}
+	}
+	if found != 3 {
+		t.Errorf("expected 3 package args from multi-line call, got %d", found)
+	}
+}
+
+func TestASTAnalyzer_FStringSkipped(t *testing.T) {
+	manifest := []byte(`
+id: test-app
+name: Test
+description: test
+version: "1.0.0"
+categories: [utilities]
+lxc:
+  ostemplate: debian-12
+  defaults: {cores: 1, memory_mb: 512, disk_gb: 4}
+provisioning:
+  script: provision/install.py
+permissions:
+  paths: [/etc/myapp/]
+`)
+	script := `#!/usr/bin/env python3
+from appstore import BaseApp, run
+
+class TestApp(BaseApp):
+    def install(self):
+        name = "myapp"
+        self.create_dir(f"/etc/{name}/config")
+
+run(TestApp)
+`
+	result := runASTPermissions(t, script, manifest)
+
+	// f-string path should be <dynamic> and thus skipped — no path warning
+	for _, w := range result.Warnings {
+		if w.Code == "PERM_MISSING_PATH" {
+			t.Errorf("unexpected path warning for f-string path: %+v", w)
+		}
+	}
+}
+
+func TestASTAnalyzer_VariableSkipped(t *testing.T) {
+	manifest := []byte(`
+id: test-app
+name: Test
+description: test
+version: "1.0.0"
+categories: [utilities]
+lxc:
+  ostemplate: debian-12
+  defaults: {cores: 1, memory_mb: 512, disk_gb: 4}
+provisioning:
+  script: provision/install.py
+permissions:
+  paths: [/opt/app/]
+`)
+	script := `#!/usr/bin/env python3
+from appstore import BaseApp, run
+
+class TestApp(BaseApp):
+    def install(self):
+        config_path = self.inputs.string("config_path", "/opt/app/config")
+        self.create_dir(config_path)
+
+run(TestApp)
+`
+	result := runASTPermissions(t, script, manifest)
+
+	// Variable path should be <dynamic> and thus skipped — no path warning
+	for _, w := range result.Warnings {
+		if w.Code == "PERM_MISSING_PATH" {
+			t.Errorf("unexpected path warning for variable path: %+v", w)
+		}
+	}
+}
+
+func TestASTAnalyzer_CommentIgnored(t *testing.T) {
+	manifest := []byte(`
+id: test-app
+name: Test
+description: test
+version: "1.0.0"
+categories: [utilities]
+lxc:
+  ostemplate: debian-12
+  defaults: {cores: 1, memory_mb: 512, disk_gb: 4}
+provisioning:
+  script: provision/install.py
+permissions: {}
+`)
+	script := `#!/usr/bin/env python3
+from appstore import BaseApp, run
+
+class TestApp(BaseApp):
+    def install(self):
+        # self.pkg_install("secret-package")
+        pass
+
+run(TestApp)
+`
+	result := runASTPermissions(t, script, manifest)
+
+	// Commented-out code should not trigger warnings
+	for _, w := range result.Warnings {
+		if w.Code == "PERM_MISSING_PACKAGE" {
+			t.Errorf("unexpected package warning from commented code: %+v", w)
+		}
+	}
+}
+
+func TestASTAnalyzer_PipInstallVenvKwarg(t *testing.T) {
+	manifest := []byte(`
+id: test-app
+name: Test
+description: test
+version: "1.0.0"
+categories: [utilities]
+lxc:
+  ostemplate: debian-12
+  defaults: {cores: 1, memory_mb: 512, disk_gb: 4}
+provisioning:
+  script: provision/install.py
+permissions:
+  pip: [flask]
+`)
+	script := `#!/usr/bin/env python3
+from appstore import BaseApp, run
+
+class TestApp(BaseApp):
+    def install(self):
+        self.pip_install("flask", venv="/opt/app/venv")
+
+run(TestApp)
+`
+	result := runASTPermissions(t, script, manifest)
+
+	// venv kwarg should not be treated as a pip package
+	for _, w := range result.Warnings {
+		if w.Code == "PERM_MISSING_PIP" && strings.Contains(w.Message, "/opt/app/venv") {
+			t.Errorf("venv kwarg incorrectly treated as pip package: %+v", w)
+		}
+	}
+}
+
+func TestASTAnalyzer_RunInstallerScript(t *testing.T) {
+	manifest := []byte(`
+id: test-app
+name: Test
+description: test
+version: "1.0.0"
+categories: [utilities]
+lxc:
+  ostemplate: debian-12
+  defaults: {cores: 1, memory_mb: 512, disk_gb: 4}
+provisioning:
+  script: provision/install.py
+permissions:
+  urls: ["https://allowed.com/*"]
+`)
+	script := `#!/usr/bin/env python3
+from appstore import BaseApp, run
+
+class TestApp(BaseApp):
+    def install(self):
+        self.run_installer_script("https://notallowed.com/install.sh")
+
+run(TestApp)
+`
+	result := runASTPermissions(t, script, manifest)
+
+	found := false
+	for _, w := range result.Warnings {
+		if w.Code == "PERM_MISSING_URL" && strings.Contains(w.Message, "notallowed.com") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected URL warning for run_installer_script, got: %+v", result.Warnings)
+	}
+}
+
+func TestASTAnalyzer_StructuralChecks(t *testing.T) {
+	script := `from appstore import BaseApp, run
+
+class MyApp(BaseApp):
+    def install(self):
+        self.apt_install("nginx")
+
+run(MyApp)
+`
+	analysis, err := runASTAnalyzer(script)
+	if err != nil {
+		t.Fatalf("runASTAnalyzer failed: %v", err)
+	}
+
+	if analysis.ClassName != "MyApp" {
+		t.Errorf("expected ClassName=MyApp, got %s", analysis.ClassName)
+	}
+	if !analysis.HasInstallMethod {
+		t.Error("expected HasInstallMethod=true")
+	}
+	if !analysis.HasRunCall {
+		t.Error("expected HasRunCall=true")
+	}
+
+	hasBaseApp := false
+	hasRun := false
+	for _, imp := range analysis.Imports {
+		if imp == "BaseApp" {
+			hasBaseApp = true
+		}
+		if imp == "run" {
+			hasRun = true
+		}
+	}
+	if !hasBaseApp {
+		t.Error("expected BaseApp in imports")
+	}
+	if !hasRun {
+		t.Error("expected run in imports")
+	}
+}
+
+func TestASTAnalyzer_SyntaxError(t *testing.T) {
+	script := `from appstore import BaseApp, run
+
+class MyApp(BaseApp)
+    def install(self):
+        pass
+`
+	analysis, err := runASTAnalyzer(script)
+	if err != nil {
+		t.Fatalf("runASTAnalyzer failed: %v", err)
+	}
+
+	if analysis.Error == "" {
+		t.Error("expected syntax error from analyzer")
+	}
+}
+
+func TestASTAnalyzer_UnsafePatterns(t *testing.T) {
+	script := `import os
+import subprocess
+from appstore import BaseApp, run
+
+class TestApp(BaseApp):
+    def install(self):
+        os.system("rm -rf /")
+        subprocess.call(["ls"])
+
+run(TestApp)
+`
+	analysis, err := runASTAnalyzer(script)
+	if err != nil {
+		t.Fatalf("runASTAnalyzer failed: %v", err)
+	}
+
+	foundOsSystem := false
+	foundSubprocess := false
+	for _, p := range analysis.UnsafePatterns {
+		if p.Pattern == "os.system" {
+			foundOsSystem = true
+		}
+		if p.Pattern == "subprocess.call" {
+			foundSubprocess = true
+		}
+	}
+	if !foundOsSystem {
+		t.Error("expected os.system in unsafe patterns")
+	}
+	if !foundSubprocess {
+		t.Error("expected subprocess.call in unsafe patterns")
+	}
+}
+
+func TestASTAnalyzer_InputKeys(t *testing.T) {
+	script := `from appstore import BaseApp, run
+
+class TestApp(BaseApp):
+    def install(self):
+        tz = self.inputs.string("timezone", "UTC")
+        port = self.inputs.integer("port", 8080)
+        debug = self.inputs.boolean("debug", False)
+
+run(TestApp)
+`
+	analysis, err := runASTAnalyzer(script)
+	if err != nil {
+		t.Fatalf("runASTAnalyzer failed: %v", err)
+	}
+
+	keys := map[string]string{}
+	for _, ik := range analysis.InputKeys {
+		keys[ik.Key] = ik.Type
+	}
+	if keys["timezone"] != "string" {
+		t.Error("expected input key 'timezone' with type 'string'")
+	}
+	if keys["port"] != "integer" {
+		t.Error("expected input key 'port' with type 'integer'")
+	}
+	if keys["debug"] != "boolean" {
+		t.Error("expected input key 'debug' with type 'boolean'")
+	}
+}
+
+func TestASTAnalyzer_AddAptRepository(t *testing.T) {
+	manifest := []byte(`
+id: test-app
+name: Test
+description: test
+version: "1.0.0"
+categories: [utilities]
+lxc:
+  ostemplate: debian-12
+  defaults: {cores: 1, memory_mb: 512, disk_gb: 4}
+provisioning:
+  script: provision/install.py
+permissions:
+  urls: ["https://packages.example.com/*"]
+  apt_repos: ["https://packages.example.com/repo"]
+`)
+	script := `#!/usr/bin/env python3
+from appstore import BaseApp, run
+
+class TestApp(BaseApp):
+    def install(self):
+        self.add_apt_repository(
+            "https://packages.example.com/repo",
+            key_url="https://packages.example.com/gpgkey",
+            name="example",
+        )
+
+run(TestApp)
+`
+	result := runASTPermissions(t, script, manifest)
+
+	// All URLs and apt_repos are covered — no warnings expected
 	for _, w := range result.Warnings {
 		if strings.HasPrefix(w.Code, "PERM_") {
 			t.Errorf("unexpected permission warning: %+v", w)

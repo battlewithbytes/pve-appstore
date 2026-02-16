@@ -469,7 +469,7 @@ function DevAppEditor({ id, requireAuth }: { id: string; requireAuth: (cb: () =>
       {/* Main editor area */}
       <div className="flex gap-4" style={{ height: 'calc(100vh - 280px)' }}>
         {/* File tree + Structure */}
-        <div className="w-48 border border-border rounded-lg overflow-hidden shrink-0 flex flex-col">
+        <div className="w-[20%] min-w-48 border border-border rounded-lg overflow-hidden shrink-0 flex flex-col">
           <div className="bg-bg-card px-3 py-2 border-b border-border flex items-center justify-between">
             <span className="text-xs text-text-muted font-mono uppercase">Files</span>
             <div className="relative">

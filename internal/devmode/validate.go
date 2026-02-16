@@ -2,7 +2,9 @@ package devmode
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -12,6 +14,7 @@ import (
 	"time"
 
 	"github.com/battlewithbytes/pve-appstore/internal/catalog"
+	sdk "github.com/battlewithbytes/pve-appstore/sdk"
 	"gopkg.in/yaml.v3"
 )
 
@@ -35,6 +38,91 @@ type ValidationMsg struct {
 type ChecklistItem struct {
 	Label  string `json:"label"`
 	Passed bool   `json:"passed"`
+}
+
+// --- AST analysis types ---
+
+type astAnalysis struct {
+	Imports          []string        `json:"imports"`
+	ClassName        string          `json:"class_name"`
+	HasInstallMethod bool            `json:"has_install_method"`
+	HasRunCall       bool            `json:"has_run_call"`
+	InputKeys        []inputKeyRef   `json:"input_keys"`
+	MethodCalls      []methodCall    `json:"method_calls"`
+	UnsafePatterns   []unsafePattern `json:"unsafe_patterns"`
+	Error            string          `json:"error"`
+}
+
+type inputKeyRef struct {
+	Key  string `json:"key"`
+	Line int    `json:"line"`
+	Type string `json:"type"`
+}
+
+type methodCall struct {
+	Method string         `json:"method"`
+	Line   int            `json:"line"`
+	Args   []any          `json:"args"`
+	Kwargs map[string]any `json:"kwargs"`
+}
+
+type unsafePattern struct {
+	Line    int    `json:"line"`
+	Pattern string `json:"pattern"`
+}
+
+// stringArg returns the string value at position pos in call.Args.
+// Returns "", false for missing, non-string, or "<dynamic>" values.
+func stringArg(call methodCall, pos int) (string, bool) {
+	if pos >= len(call.Args) {
+		return "", false
+	}
+	s, ok := call.Args[pos].(string)
+	if !ok || s == "<dynamic>" {
+		return "", false
+	}
+	return s, true
+}
+
+// stringKwarg returns the string value for key in call.Kwargs.
+func stringKwarg(call methodCall, key string) (string, bool) {
+	v, ok := call.Kwargs[key]
+	if !ok {
+		return "", false
+	}
+	s, ok := v.(string)
+	if !ok || s == "<dynamic>" {
+		return "", false
+	}
+	return s, true
+}
+
+// allStringArgs returns all string positional args, skipping <dynamic> values.
+func allStringArgs(call methodCall) []string {
+	var result []string
+	for _, a := range call.Args {
+		s, ok := a.(string)
+		if ok && s != "<dynamic>" {
+			result = append(result, s)
+		}
+	}
+	return result
+}
+
+// firstListElement returns the first string element if arg at pos is a list.
+func firstListElement(call methodCall, pos int) (string, bool) {
+	if pos >= len(call.Args) {
+		return "", false
+	}
+	list, ok := call.Args[pos].([]any)
+	if !ok || len(list) == 0 {
+		return "", false
+	}
+	s, ok := list[0].(string)
+	if !ok || s == "<dynamic>" {
+		return "", false
+	}
+	return s, true
 }
 
 // Validate runs all checks on a dev app directory.
@@ -140,10 +228,158 @@ func validateManifest(result *ValidationResult, data []byte, appDir string) {
 	}
 }
 
-// validatePermissions cross-references SDK method calls in the script against
-// the permissions declared in the manifest. Warns when the script uses a command,
-// package, service, path, or URL that isn't allowed by the manifest.
-func validatePermissions(result *ValidationResult, script string, manifestData []byte) {
+// runASTAnalyzer runs the Python AST analyzer on the given script and returns
+// structured analysis data.
+func runASTAnalyzer(script string) (*astAnalysis, error) {
+	// Write script to temp file
+	scriptFile, err := os.CreateTemp("", "validate-script-*.py")
+	if err != nil {
+		return nil, fmt.Errorf("creating temp script: %w", err)
+	}
+	defer os.Remove(scriptFile.Name())
+
+	if _, err := scriptFile.WriteString(script); err != nil {
+		scriptFile.Close()
+		return nil, fmt.Errorf("writing temp script: %w", err)
+	}
+	scriptFile.Close()
+
+	// Extract analyze_script.py from embedded FS
+	analyzerSrc, err := fs.ReadFile(sdk.PythonFS, "python/appstore/analyze_script.py")
+	if err != nil {
+		return nil, fmt.Errorf("reading embedded analyzer: %w", err)
+	}
+
+	analyzerFile, err := os.CreateTemp("", "analyze-script-*.py")
+	if err != nil {
+		return nil, fmt.Errorf("creating temp analyzer: %w", err)
+	}
+	defer os.Remove(analyzerFile.Name())
+
+	if _, err := analyzerFile.Write(analyzerSrc); err != nil {
+		analyzerFile.Close()
+		return nil, fmt.Errorf("writing temp analyzer: %w", err)
+	}
+	analyzerFile.Close()
+
+	// Run analyzer with timeout
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "python3", analyzerFile.Name(), scriptFile.Name())
+	output, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("running analyzer: %w", err)
+	}
+
+	var analysis astAnalysis
+	if err := json.Unmarshal(output, &analysis); err != nil {
+		return nil, fmt.Errorf("parsing analyzer output: %w", err)
+	}
+	return &analysis, nil
+}
+
+func validateScript(result *ValidationResult, script string, manifestData []byte) {
+	// Run AST analysis
+	analysis, err := runASTAnalyzer(script)
+	if err != nil {
+		// Fall back: add a warning but don't block validation
+		result.addWarning("provision/install.py", 0,
+			fmt.Sprintf("AST analysis failed: %v", err), "SCRIPT_ANALYSIS_FAILED")
+		// Still run pyflakes
+		validatePyflakes(result, script)
+		return
+	}
+
+	// If the analyzer reported a syntax error, that's a hard error
+	if analysis.Error != "" {
+		result.addError("provision/install.py", 0, analysis.Error, "SCRIPT_SYNTAX_ERROR")
+		result.Valid = false
+		return
+	}
+
+	// --- Structural checks from AST ---
+
+	// Check imports
+	hasBaseApp := false
+	hasRun := false
+	for _, imp := range analysis.Imports {
+		if imp == "BaseApp" {
+			hasBaseApp = true
+		}
+		if imp == "run" {
+			hasRun = true
+		}
+	}
+	if !hasBaseApp {
+		result.addError("provision/install.py", 0, "Script must import BaseApp from appstore", "SCRIPT_NO_BASEAPP")
+		result.Valid = false
+	}
+	if !hasRun {
+		result.addError("provision/install.py", 0, "Script must import run from appstore", "SCRIPT_NO_RUN")
+		result.Valid = false
+	}
+
+	// Check class
+	if analysis.ClassName == "" {
+		result.addError("provision/install.py", 0, "Script must define a class extending BaseApp", "SCRIPT_NO_CLASS")
+		result.Valid = false
+	}
+
+	// Check install method
+	if !analysis.HasInstallMethod {
+		result.addError("provision/install.py", 0, "Script must define an install() method", "SCRIPT_NO_INSTALL")
+		result.Valid = false
+	}
+
+	// Check run() call
+	if analysis.ClassName != "" && !analysis.HasRunCall {
+		result.addError("provision/install.py", 0,
+			fmt.Sprintf("Script must call run(%s) at module level", analysis.ClassName),
+			"SCRIPT_NO_RUN_CALL")
+		result.Valid = false
+	}
+
+	// --- Unsafe patterns ---
+	for _, p := range analysis.UnsafePatterns {
+		if p.Pattern == "os.system" {
+			result.addWarning("provision/install.py", p.Line,
+				"Use self.run_command() instead of os.system()", "SCRIPT_OS_SYSTEM")
+		} else {
+			result.addWarning("provision/install.py", p.Line,
+				"Use self.run_command() instead of subprocess directly", "SCRIPT_SUBPROCESS")
+		}
+	}
+
+	// --- Input key cross-reference ---
+	if manifestData != nil {
+		var manifest struct {
+			Inputs []struct{ Key string `yaml:"key"` } `yaml:"inputs"`
+		}
+		yaml.Unmarshal(manifestData, &manifest)
+		manifestKeys := make(map[string]bool)
+		for _, inp := range manifest.Inputs {
+			manifestKeys[inp.Key] = true
+		}
+		for _, ik := range analysis.InputKeys {
+			if !manifestKeys[ik.Key] {
+				result.addWarning("provision/install.py", ik.Line,
+					fmt.Sprintf("Script reads input %q which is not defined in manifest", ik.Key),
+					"SCRIPT_UNKNOWN_INPUT")
+			}
+		}
+	}
+
+	// Cross-reference SDK calls against manifest permissions
+	validatePermissionsFromAST(result, analysis, manifestData)
+
+	// Run pyflakes for Python static analysis (undefined names, etc.)
+	validatePyflakes(result, script)
+}
+
+// validatePermissionsFromAST cross-references AST-extracted method calls against
+// the permissions declared in the manifest.
+func validatePermissionsFromAST(result *ValidationResult, analysis *astAnalysis, manifestData []byte) {
 	if manifestData == nil {
 		return
 	}
@@ -153,8 +389,6 @@ func validatePermissions(result *ValidationResult, script string, manifestData [
 	}
 	perms := manifest.Permissions
 
-	lines := strings.Split(script, "\n")
-
 	// Build lookup sets
 	pkgSet := toSet(perms.Packages)
 	svcSet := toSet(perms.Services)
@@ -162,171 +396,193 @@ func validatePermissions(result *ValidationResult, script string, manifestData [
 	userSet := toSet(perms.Users)
 	pipSet := toSet(perms.Pip)
 
-	// Compiled regexes for SDK method calls
-	var (
-		// self.pkg_install("pkg1", "pkg2") or self.apt_install("pkg")
-		rePkgInstall = regexp.MustCompile(`self\.(?:pkg_install|apt_install)\(([^)]+)\)`)
-		// self.pip_install("pkg1", "pkg2")
-		rePipInstall = regexp.MustCompile(`self\.pip_install\(([^)]+)\)`)
-		// self.enable_service("svc"), self.restart_service("svc"), self.create_service("svc", ...)
-		reService = regexp.MustCompile(`self\.(?:enable_service|restart_service|create_service)\(\s*"([^"]+)"`)
-		// self.run_command(["cmd", "arg1", ...]) — extract first element
-		reRunCmd = regexp.MustCompile(`self\.run_command\(\s*\[\s*"([^"]+)"`)
-		// self.create_user("user")
-		reCreateUser = regexp.MustCompile(`self\.create_user\(\s*"([^"]+)"`)
-		// user="xxx" keyword argument (used within multi-line create_service calls)
-		reUserKwarg = regexp.MustCompile(`\buser\s*=\s*"([^"]+)"`)
-		// self.write_config("path", ...), self.create_dir("path"), self.chown("path", ...)
-		rePath = regexp.MustCompile(`self\.(?:write_config|create_dir|chown|write_env_file|deploy_provision_file)\(\s*"([^"]+)"`)
-		// self.download("url", ...), self.add_apt_key("url", ...), self.wait_for_http("url")
-		reURL = regexp.MustCompile(`self\.(?:download|add_apt_key|wait_for_http)\(\s*"([^"]+)"`)
-		// self.add_apt_repo("deb ...", "filename")
-		reAptRepo = regexp.MustCompile(`self\.add_apt_repo\(\s*"([^"]+)"`)
-		// Extract string literals from arg list: "pkg1", "pkg2"
-		reStringLit = regexp.MustCompile(`"([^"]+)"`)
-	)
-
-	// First pass: collect users created via self.create_user()
+	// Collect users created via create_user for service user cross-ref
 	createdUsers := make(map[string]bool)
-	for _, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		if strings.HasPrefix(trimmed, "#") {
-			continue
-		}
-		if m := reCreateUser.FindStringSubmatch(line); m != nil {
-			createdUsers[m[1]] = true
+	for _, call := range analysis.MethodCalls {
+		if call.Method == "create_user" {
+			if user, ok := stringArg(call, 0); ok {
+				createdUsers[user] = true
+			}
 		}
 	}
 
-	// Track multi-line create_service calls to find user= kwarg
-	inCreateService := false
-	createServiceStartLine := 0
-	parenDepth := 0
-	for i, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		if strings.HasPrefix(trimmed, "#") {
-			continue
-		}
-		lineNo := i + 1
-
-		// --- Track create_service call spans ---
-		if strings.Contains(line, "self.create_service(") {
-			inCreateService = true
-			createServiceStartLine = lineNo
-			parenDepth = strings.Count(line, "(") - strings.Count(line, ")")
-		} else if inCreateService {
-			parenDepth += strings.Count(line, "(") - strings.Count(line, ")")
-			if parenDepth <= 0 {
-				inCreateService = false
-			}
-		}
-
-		// --- Service user (user= kwarg inside create_service) ---
-		if inCreateService || strings.Contains(line, "self.create_service(") {
-			if m := reUserKwarg.FindStringSubmatch(line); m != nil {
-				user := m[1]
-				reportLine := lineNo
-				if createServiceStartLine > 0 {
-					reportLine = createServiceStartLine
-				}
-				if user != "root" && !createdUsers[user] && !userSet[user] {
-					result.addWarning("provision/install.py", reportLine,
-						fmt.Sprintf("Service user %q not created via create_user() and not in permissions.users", user),
-						"SCRIPT_SERVICE_USER_MISSING")
-				}
-			}
-		}
-
-		// --- Packages ---
-		if m := rePkgInstall.FindStringSubmatch(line); m != nil {
-			for _, sm := range reStringLit.FindAllStringSubmatch(m[1], -1) {
-				pkg := sm[1]
+	for _, call := range analysis.MethodCalls {
+		switch call.Method {
+		case "pkg_install", "apt_install":
+			for _, pkg := range allStringArgs(call) {
 				if !matchesAny(pkg, pkgSet, perms.Packages) {
-					result.addWarning("provision/install.py", lineNo,
+					result.addWarning("provision/install.py", call.Line,
 						fmt.Sprintf("Package %q not in permissions.packages", pkg),
 						"PERM_MISSING_PACKAGE")
 				}
 			}
-		}
 
-		// --- Pip packages ---
-		if m := rePipInstall.FindStringSubmatch(line); m != nil {
-			// Split args and skip keyword arguments (e.g. venv="/path")
-			args := strings.Split(m[1], ",")
-			for _, arg := range args {
-				arg = strings.TrimSpace(arg)
-				if strings.Contains(arg, "=") {
-					continue // keyword arg like venv="..."
-				}
-				if sm := reStringLit.FindStringSubmatch(arg); sm != nil {
-					pkg := sm[1]
-					if !matchesAny(pkg, pipSet, perms.Pip) {
-						result.addWarning("provision/install.py", lineNo,
-							fmt.Sprintf("Pip package %q not in permissions.pip", pkg),
-							"PERM_MISSING_PIP")
-					}
+		case "pip_install":
+			// Positional args only (kwargs like venv= are not packages)
+			for _, pkg := range allStringArgs(call) {
+				if !matchesAny(pkg, pipSet, perms.Pip) {
+					result.addWarning("provision/install.py", call.Line,
+						fmt.Sprintf("Pip package %q not in permissions.pip", pkg),
+						"PERM_MISSING_PIP")
 				}
 			}
-		}
 
-		// --- Services ---
-		if m := reService.FindStringSubmatch(line); m != nil {
-			svc := m[1]
-			if !svcSet[svc] {
-				result.addWarning("provision/install.py", lineNo,
-					fmt.Sprintf("Service %q not in permissions.services", svc),
-					"PERM_MISSING_SERVICE")
+		case "create_service":
+			// arg[0] → service name
+			if svc, ok := stringArg(call, 0); ok {
+				if !svcSet[svc] {
+					result.addWarning("provision/install.py", call.Line,
+						fmt.Sprintf("Service %q not in permissions.services", svc),
+						"PERM_MISSING_SERVICE")
+				}
 			}
-		}
-
-		// --- Commands (run_command first arg) ---
-		if m := reRunCmd.FindStringSubmatch(line); m != nil {
-			cmd := m[1]
-			// Skip common shell builtins that don't need explicit permission
-			if cmd != "sh" && cmd != "bash" && !matchesAny(cmd, cmdSet, perms.Commands) {
-				result.addWarning("provision/install.py", lineNo,
-					fmt.Sprintf("Command %q not in permissions.commands", cmd),
-					"PERM_MISSING_COMMAND")
+			// kwarg user → check created or in perms
+			if user, ok := stringKwarg(call, "user"); ok {
+				if user != "root" && !createdUsers[user] && !userSet[user] {
+					result.addWarning("provision/install.py", call.Line,
+						fmt.Sprintf("Service user %q not created via create_user() and not in permissions.users", user),
+						"SCRIPT_SERVICE_USER_MISSING")
+				}
 			}
-		}
 
-		// --- Users ---
-		if m := reCreateUser.FindStringSubmatch(line); m != nil {
-			user := m[1]
-			if !userSet[user] {
-				result.addWarning("provision/install.py", lineNo,
-					fmt.Sprintf("User %q not in permissions.users", user),
-					"PERM_MISSING_USER")
+		case "enable_service", "restart_service":
+			if svc, ok := stringArg(call, 0); ok {
+				if !svcSet[svc] {
+					result.addWarning("provision/install.py", call.Line,
+						fmt.Sprintf("Service %q not in permissions.services", svc),
+						"PERM_MISSING_SERVICE")
+				}
 			}
-		}
 
-		// --- Paths ---
-		if m := rePath.FindStringSubmatch(line); m != nil {
-			path := m[1]
-			if !pathAllowed(path, perms.Paths) {
-				result.addWarning("provision/install.py", lineNo,
-					fmt.Sprintf("Path %q not covered by permissions.paths", path),
-					"PERM_MISSING_PATH")
+		case "create_user":
+			if user, ok := stringArg(call, 0); ok {
+				if !userSet[user] {
+					result.addWarning("provision/install.py", call.Line,
+						fmt.Sprintf("User %q not in permissions.users", user),
+						"PERM_MISSING_USER")
+				}
 			}
-		}
 
-		// --- URLs ---
-		if m := reURL.FindStringSubmatch(line); m != nil {
-			url := m[1]
-			if !matchesAnyGlob(url, perms.URLs) {
-				result.addWarning("provision/install.py", lineNo,
-					fmt.Sprintf("URL %q not covered by permissions.urls", url),
-					"PERM_MISSING_URL")
+		case "run_command":
+			// arg[0] should be a list; first element is the command
+			if cmd, ok := firstListElement(call, 0); ok {
+				if cmd != "sh" && cmd != "bash" && !matchesAny(cmd, cmdSet, perms.Commands) {
+					result.addWarning("provision/install.py", call.Line,
+						fmt.Sprintf("Command %q not in permissions.commands", cmd),
+						"PERM_MISSING_COMMAND")
+				}
 			}
-		}
 
-		// --- APT repos ---
-		if m := reAptRepo.FindStringSubmatch(line); m != nil {
-			repoLine := m[1]
-			if !aptRepoAllowed(repoLine, perms.AptRepos) {
-				result.addWarning("provision/install.py", lineNo,
-					fmt.Sprintf("APT repo not covered by permissions.apt_repos"),
-					"PERM_MISSING_APT_REPO")
+		case "write_config", "create_dir", "chown", "write_env_file":
+			if path, ok := stringArg(call, 0); ok {
+				if !pathAllowed(path, perms.Paths) {
+					result.addWarning("provision/install.py", call.Line,
+						fmt.Sprintf("Path %q not covered by permissions.paths", path),
+						"PERM_MISSING_PATH")
+				}
+			}
+
+		case "deploy_provision_file":
+			// arg[1] is the destination path
+			if path, ok := stringArg(call, 1); ok {
+				if !pathAllowed(path, perms.Paths) {
+					result.addWarning("provision/install.py", call.Line,
+						fmt.Sprintf("Path %q not covered by permissions.paths", path),
+						"PERM_MISSING_PATH")
+				}
+			}
+
+		case "download":
+			// arg[0] → URL, arg[1] → path
+			if url, ok := stringArg(call, 0); ok {
+				if !matchesAnyGlob(url, perms.URLs) {
+					result.addWarning("provision/install.py", call.Line,
+						fmt.Sprintf("URL %q not covered by permissions.urls", url),
+						"PERM_MISSING_URL")
+				}
+			}
+			if path, ok := stringArg(call, 1); ok {
+				if !pathAllowed(path, perms.Paths) {
+					result.addWarning("provision/install.py", call.Line,
+						fmt.Sprintf("Path %q not covered by permissions.paths", path),
+						"PERM_MISSING_PATH")
+				}
+			}
+
+		case "add_apt_key":
+			// arg[0] → URL, arg[1] → path
+			if url, ok := stringArg(call, 0); ok {
+				if !matchesAnyGlob(url, perms.URLs) {
+					result.addWarning("provision/install.py", call.Line,
+						fmt.Sprintf("URL %q not covered by permissions.urls", url),
+						"PERM_MISSING_URL")
+				}
+			}
+			if path, ok := stringArg(call, 1); ok {
+				if !pathAllowed(path, perms.Paths) {
+					result.addWarning("provision/install.py", call.Line,
+						fmt.Sprintf("Path %q not covered by permissions.paths", path),
+						"PERM_MISSING_PATH")
+				}
+			}
+
+		case "wait_for_http":
+			if url, ok := stringArg(call, 0); ok {
+				if !matchesAnyGlob(url, perms.URLs) {
+					result.addWarning("provision/install.py", call.Line,
+						fmt.Sprintf("URL %q not covered by permissions.urls", url),
+						"PERM_MISSING_URL")
+				}
+			}
+
+		case "run_installer_script":
+			if url, ok := stringArg(call, 0); ok {
+				if !matchesAnyGlob(url, perms.URLs) {
+					result.addWarning("provision/install.py", call.Line,
+						fmt.Sprintf("URL %q not covered by permissions.urls", url),
+						"PERM_MISSING_URL")
+				}
+			}
+
+		case "add_apt_repo":
+			if repoLine, ok := stringArg(call, 0); ok {
+				if !aptRepoAllowed(repoLine, perms.AptRepos) {
+					result.addWarning("provision/install.py", call.Line,
+						"APT repo not covered by permissions.apt_repos",
+						"PERM_MISSING_APT_REPO")
+				}
+			}
+
+		case "add_apt_repository":
+			// arg[0] → URL (also apt_repos), kwarg key_url → URL
+			if url, ok := stringArg(call, 0); ok {
+				if !matchesAnyGlob(url, perms.URLs) {
+					result.addWarning("provision/install.py", call.Line,
+						fmt.Sprintf("URL %q not covered by permissions.urls", url),
+						"PERM_MISSING_URL")
+				}
+				if !aptRepoAllowed(url, perms.AptRepos) {
+					result.addWarning("provision/install.py", call.Line,
+						"APT repo not covered by permissions.apt_repos",
+						"PERM_MISSING_APT_REPO")
+				}
+			}
+			if keyURL, ok := stringKwarg(call, "key_url"); ok {
+				if !matchesAnyGlob(keyURL, perms.URLs) {
+					result.addWarning("provision/install.py", call.Line,
+						fmt.Sprintf("URL %q not covered by permissions.urls", keyURL),
+						"PERM_MISSING_URL")
+				}
+			}
+
+		case "pull_oci_binary":
+			// arg[1] → destination path
+			if path, ok := stringArg(call, 1); ok {
+				if !pathAllowed(path, perms.Paths) {
+					result.addWarning("provision/install.py", call.Line,
+						fmt.Sprintf("Path %q not covered by permissions.paths", path),
+						"PERM_MISSING_PATH")
+				}
 			}
 		}
 	}
@@ -390,12 +646,16 @@ func pathAllowed(path string, allowed []string) bool {
 // aptRepoAllowed checks if a repo line is covered by the allowed apt repos.
 // Extracts the URL from the deb line and matches against allowed entries.
 func aptRepoAllowed(repoLine string, allowed []string) bool {
-	// Extract URL from deb line
+	// Extract URL from deb line (or use directly if already a URL)
 	var repoURL string
-	for _, token := range strings.Fields(repoLine) {
-		if strings.HasPrefix(token, "http://") || strings.HasPrefix(token, "https://") {
-			repoURL = strings.TrimRight(token, "/")
-			break
+	if strings.HasPrefix(repoLine, "http://") || strings.HasPrefix(repoLine, "https://") {
+		repoURL = strings.TrimRight(repoLine, "/")
+	} else {
+		for _, token := range strings.Fields(repoLine) {
+			if strings.HasPrefix(token, "http://") || strings.HasPrefix(token, "https://") {
+				repoURL = strings.TrimRight(token, "/")
+				break
+			}
 		}
 	}
 	if repoURL == "" {
@@ -411,129 +671,6 @@ func aptRepoAllowed(repoLine string, allowed []string) bool {
 		}
 	}
 	return false
-}
-
-func validateScript(result *ValidationResult, script string, manifestData []byte) {
-	lines := strings.Split(script, "\n")
-
-	// Check imports
-	hasBaseAppImport := false
-	hasRunImport := false
-	for _, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		if strings.Contains(trimmed, "from appstore import") {
-			if strings.Contains(trimmed, "BaseApp") {
-				hasBaseAppImport = true
-			}
-			if strings.Contains(trimmed, "run") {
-				hasRunImport = true
-			}
-		}
-	}
-
-	if !hasBaseAppImport {
-		result.addError("provision/install.py", 0, "Script must import BaseApp from appstore", "SCRIPT_NO_BASEAPP")
-		result.Valid = false
-	}
-	if !hasRunImport {
-		result.addError("provision/install.py", 0, "Script must import run from appstore", "SCRIPT_NO_RUN")
-		result.Valid = false
-	}
-
-	// Check for class extending BaseApp
-	hasClass := false
-	className := ""
-	for i, line := range lines {
-		if match := regexp.MustCompile(`class\s+(\w+)\s*\(\s*BaseApp\s*\)`).FindStringSubmatch(line); match != nil {
-			hasClass = true
-			className = match[1]
-			_ = i
-			break
-		}
-	}
-
-	if !hasClass {
-		result.addError("provision/install.py", 0, "Script must define a class extending BaseApp", "SCRIPT_NO_CLASS")
-		result.Valid = false
-	}
-
-	// Check for install method
-	hasInstall := false
-	for _, line := range lines {
-		if strings.Contains(line, "def install(self") {
-			hasInstall = true
-			break
-		}
-	}
-
-	if !hasInstall {
-		result.addError("provision/install.py", 0, "Script must define an install() method", "SCRIPT_NO_INSTALL")
-		result.Valid = false
-	}
-
-	// Check for run() call
-	hasRun := false
-	if className != "" {
-		for _, line := range lines {
-			trimmed := strings.TrimSpace(line)
-			if trimmed == fmt.Sprintf("run(%s)", className) {
-				hasRun = true
-				break
-			}
-		}
-	}
-
-	if className != "" && !hasRun {
-		result.addError("provision/install.py", 0,
-			fmt.Sprintf("Script must call run(%s) at module level", className),
-			"SCRIPT_NO_RUN_CALL")
-		result.Valid = false
-	}
-
-	// Check for unsafe patterns
-	for i, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		if strings.HasPrefix(trimmed, "#") {
-			continue
-		}
-		if strings.Contains(trimmed, "os.system(") {
-			result.addWarning("provision/install.py", i+1,
-				"Use self.run_command() instead of os.system()", "SCRIPT_OS_SYSTEM")
-		}
-		if strings.Contains(trimmed, "subprocess.call(") || strings.Contains(trimmed, "subprocess.run(") {
-			result.addWarning("provision/install.py", i+1,
-				"Use self.run_command() instead of subprocess directly", "SCRIPT_SUBPROCESS")
-		}
-	}
-
-	// Check that input keys used in script match manifest inputs
-	if manifestData != nil {
-		var manifest struct {
-			Inputs []struct{ Key string `yaml:"key"` } `yaml:"inputs"`
-		}
-		yaml.Unmarshal(manifestData, &manifest)
-		manifestKeys := make(map[string]bool)
-		for _, inp := range manifest.Inputs {
-			manifestKeys[inp.Key] = true
-		}
-
-		for i, line := range lines {
-			for _, match := range regexp.MustCompile(`self\.inputs\.\w+\("(\w+)"`).FindAllStringSubmatch(line, -1) {
-				key := match[1]
-				if !manifestKeys[key] {
-					result.addWarning("provision/install.py", i+1,
-						fmt.Sprintf("Script reads input %q which is not defined in manifest", key),
-						"SCRIPT_UNKNOWN_INPUT")
-				}
-			}
-		}
-	}
-
-	// Cross-reference SDK calls against manifest permissions
-	validatePermissions(result, script, manifestData)
-
-	// Run pyflakes for Python static analysis (undefined names, etc.)
-	validatePyflakes(result, script)
 }
 
 func buildChecklist(result *ValidationResult, appDir string, manifestData []byte) {
