@@ -1,14 +1,32 @@
 package devmode
 
 import (
+	"os/exec"
 	"strings"
 	"testing"
 )
+
+func requirePython3(t *testing.T) {
+	t.Helper()
+	if _, err := exec.LookPath("python3"); err != nil {
+		t.Skip("python3 not available, skipping")
+	}
+}
+
+func requirePyflakes(t *testing.T) {
+	t.Helper()
+	requirePython3(t)
+	cmd := exec.Command("python3", "-m", "pyflakes", "--version")
+	if err := cmd.Run(); err != nil {
+		t.Skip("pyflakes not available, skipping")
+	}
+}
 
 // runASTPermissions is a test helper: runs the AST analyzer on a script,
 // then calls validatePermissionsFromAST with the given manifest.
 func runASTPermissions(t *testing.T, script string, manifest []byte) *ValidationResult {
 	t.Helper()
+	requirePython3(t)
 	result := &ValidationResult{Valid: true, Errors: []ValidationMsg{}, Warnings: []ValidationMsg{}}
 	analysis, err := runASTAnalyzer(script)
 	if err != nil {
@@ -261,6 +279,7 @@ run(TestApp)
 }
 
 func TestValidatePyflakes_UndefinedName(t *testing.T) {
+	requirePyflakes(t)
 	script := `from appstore import BaseApp, run
 
 class TestApp(BaseApp):
@@ -291,6 +310,7 @@ run(TestApp)
 }
 
 func TestValidatePyflakes_CleanScript(t *testing.T) {
+	requirePyflakes(t)
 	script := `from appstore import BaseApp, run
 
 class TestApp(BaseApp):
@@ -315,6 +335,7 @@ run(TestApp)
 }
 
 func TestValidatePyflakes_UnusedImportWarning(t *testing.T) {
+	requirePyflakes(t)
 	script := `from appstore import BaseApp, run
 import os
 
@@ -506,6 +527,7 @@ run(TestApp)
 // --- New AST-specific tests ---
 
 func TestASTAnalyzer_MultiLineCall(t *testing.T) {
+	requirePython3(t)
 	script := `from appstore import BaseApp, run
 
 class TestApp(BaseApp):
@@ -751,6 +773,7 @@ run(TestApp)
 }
 
 func TestASTAnalyzer_StructuralChecks(t *testing.T) {
+	requirePython3(t)
 	script := `from appstore import BaseApp, run
 
 class MyApp(BaseApp):
@@ -793,6 +816,7 @@ run(MyApp)
 }
 
 func TestASTAnalyzer_SyntaxError(t *testing.T) {
+	requirePython3(t)
 	script := `from appstore import BaseApp, run
 
 class MyApp(BaseApp)
@@ -810,6 +834,7 @@ class MyApp(BaseApp)
 }
 
 func TestASTAnalyzer_UnsafePatterns(t *testing.T) {
+	requirePython3(t)
 	script := `import os
 import subprocess
 from appstore import BaseApp, run
@@ -845,6 +870,7 @@ run(TestApp)
 }
 
 func TestASTAnalyzer_InputKeys(t *testing.T) {
+	requirePython3(t)
 	script := `from appstore import BaseApp, run
 
 class TestApp(BaseApp):
