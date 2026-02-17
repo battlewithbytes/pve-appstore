@@ -270,6 +270,51 @@ func (d *DevStore) DeleteFile(id, relPath string) error {
 	return os.Remove(fullPath)
 }
 
+// RenameFile renames (or moves) a file within a dev app directory.
+// Core files (app.yml, provision/install.py) cannot be renamed.
+func (d *DevStore) RenameFile(id, oldPath, newPath string) error {
+	if !isValidID(id) {
+		return fmt.Errorf("invalid app id")
+	}
+	oldClean := filepath.Clean(oldPath)
+	newClean := filepath.Clean(newPath)
+	if strings.Contains(oldClean, "..") || strings.Contains(newClean, "..") {
+		return fmt.Errorf("invalid path")
+	}
+	if oldClean == "app.yml" || oldClean == filepath.Join("provision", "install.py") {
+		return fmt.Errorf("cannot rename core file %q", oldClean)
+	}
+	oldFull := filepath.Join(d.baseDir, id, oldClean)
+	if _, err := os.Stat(oldFull); os.IsNotExist(err) {
+		return fmt.Errorf("file %q not found", oldClean)
+	}
+	newFull := filepath.Join(d.baseDir, id, newClean)
+	if _, err := os.Stat(newFull); err == nil {
+		return fmt.Errorf("file %q already exists", newClean)
+	}
+	os.MkdirAll(filepath.Dir(newFull), 0755)
+	return os.Rename(oldFull, newFull)
+}
+
+// RenameApp renames a dev app directory (changes its ID).
+func (d *DevStore) RenameApp(oldID, newID string) error {
+	if !isValidID(oldID) || !isValidID(newID) {
+		return fmt.Errorf("invalid app id")
+	}
+	if oldID == newID {
+		return nil
+	}
+	oldDir := filepath.Join(d.baseDir, oldID)
+	if _, err := os.Stat(oldDir); os.IsNotExist(err) {
+		return fmt.Errorf("dev app %q not found", oldID)
+	}
+	newDir := filepath.Join(d.baseDir, newID)
+	if _, err := os.Stat(newDir); err == nil {
+		return fmt.Errorf("dev app %q already exists", newID)
+	}
+	return os.Rename(oldDir, newDir)
+}
+
 // Delete removes a dev app directory.
 func (d *DevStore) Delete(id string) error {
 	if !isValidID(id) {

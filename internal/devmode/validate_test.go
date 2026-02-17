@@ -94,6 +94,122 @@ run(TestApp)
 	}
 }
 
+func TestValidatePermissions_MissingCommandStringForm(t *testing.T) {
+	manifest := []byte(`
+id: test-app
+name: Test App
+description: A test app
+version: "1.0.0"
+categories: [utilities]
+lxc:
+  ostemplate: debian-12
+  defaults:
+    cores: 1
+    memory_mb: 512
+    disk_gb: 4
+provisioning:
+  script: provision/install.py
+permissions:
+  packages: [git]
+  commands: [curl]
+  paths: [/etc/pihole]
+`)
+	script := `#!/usr/bin/env python3
+from appstore import BaseApp, run
+
+class TestApp(BaseApp):
+    def install(self):
+        self.pkg_install("git")
+        self.run_command("curl -fsSL https://example.com")
+        self.run_command("git clone --depth 1 https://example.com/repo.git")
+
+run(TestApp)
+`
+	result := runASTPermissions(t, script, manifest)
+
+	// Should warn about "git" not in permissions.commands
+	found := false
+	for _, w := range result.Warnings {
+		if w.Code == "PERM_MISSING_COMMAND" && strings.Contains(w.Message, "git") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected warning about git not in permissions.commands (string form), got: %+v", result.Warnings)
+	}
+
+	// Should NOT warn about curl (it's allowed)
+	for _, w := range result.Warnings {
+		if w.Code == "PERM_MISSING_COMMAND" && strings.Contains(w.Message, `"curl"`) {
+			t.Errorf("unexpected warning about curl: %+v", w)
+		}
+	}
+}
+
+func TestValidatePermissions_RunShell(t *testing.T) {
+	manifest := []byte(`
+id: test-app
+name: Test App
+description: A test app
+version: "1.0.0"
+categories: [utilities]
+lxc:
+  ostemplate: debian-12
+  defaults:
+    cores: 1
+    memory_mb: 512
+    disk_gb: 4
+provisioning:
+  script: provision/install.py
+permissions:
+  commands: [make]
+`)
+	script := `#!/usr/bin/env python3
+from appstore import BaseApp, run
+
+class TestApp(BaseApp):
+    def install(self):
+        self.run_shell("make -C /opt/app install")
+        self.run_shell("curl -sSL https://example.com | tar xz -C /opt")
+        self.run_shell("cd /opt/app && ./configure && make install")
+
+run(TestApp)
+`
+	result := runASTPermissions(t, script, manifest)
+
+	// "make" is allowed — should NOT warn
+	for _, w := range result.Warnings {
+		if w.Code == "PERM_MISSING_COMMAND" && strings.Contains(w.Message, `"make"`) {
+			t.Errorf("unexpected warning about make: %+v", w)
+		}
+	}
+
+	// "curl" is NOT allowed — should warn
+	foundCurl := false
+	for _, w := range result.Warnings {
+		if w.Code == "PERM_MISSING_COMMAND" && strings.Contains(w.Message, `"curl"`) {
+			foundCurl = true
+			break
+		}
+	}
+	if !foundCurl {
+		t.Errorf("expected warning about curl not in permissions.commands, got: %+v", result.Warnings)
+	}
+
+	// "cd" — should warn (it's a shell builtin but validator checks permissions.commands)
+	foundCd := false
+	for _, w := range result.Warnings {
+		if w.Code == "PERM_MISSING_COMMAND" && strings.Contains(w.Message, `"cd"`) {
+			foundCd = true
+			break
+		}
+	}
+	if !foundCd {
+		t.Errorf("expected warning about cd not in permissions.commands, got: %+v", result.Warnings)
+	}
+}
+
 func TestValidatePermissions_MissingPackage(t *testing.T) {
 	manifest := []byte(`
 id: test-app

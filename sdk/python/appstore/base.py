@@ -424,15 +424,41 @@ class BaseApp(ABC):
             pass
         return "stable"  # safe fallback for Debian-based
 
-    def run_command(self, cmd: list, check: bool = True, input_text: str = None) -> subprocess.CompletedProcess:
+    def run_command(self, cmd, check: bool = True, input_text: str = None,
+                    cwd: str = None, env: dict = None) -> subprocess.CompletedProcess:
         """Run a command. The binary (cmd[0]) must be in permissions.commands.
 
+        cmd can be a list like ["git", "clone", "..."] or a string like "git clone ...".
+        Strings are automatically split with shlex.split().
+
         If input_text is provided, it is written to the process's stdin.
+        If cwd is provided, the command runs in that directory.
+        If env is provided, the key-value pairs are merged into the environment.
         """
+        if isinstance(cmd, str):
+            import shlex
+            cmd = shlex.split(cmd)
         if not cmd:
             raise ValueError("empty command")
         self.permissions.check_command(cmd[0])
-        return self._run(cmd, check=check, input_text=input_text)
+        return self._run(cmd, check=check, input_text=input_text, cwd=cwd, env=env)
+
+    def run_shell(self, cmd: str, check: bool = True, cwd: str = None,
+                  env: dict = None) -> subprocess.CompletedProcess:
+        """Run a shell command through bash. Use for pipes, redirects, and compound commands.
+
+        The first command word must be in permissions.commands.
+        Supports shell features: pipes (|), redirects (>), compound (&&), subshells.
+
+        If cwd is provided, the command runs in that directory.
+        If env is provided, the key-value pairs are merged into the environment.
+        """
+        if not cmd or not cmd.strip():
+            raise ValueError("empty shell command")
+        import shlex
+        first_word = shlex.split(cmd)[0] if cmd.strip() else ""
+        self.permissions.check_command(first_word)
+        return self._run(["bash", "-c", cmd], check=check, cwd=cwd, env=env)
 
     def run_installer_script(self, url: str) -> None:
         """Download and run a remote installer script."""
@@ -692,18 +718,21 @@ class BaseApp(ABC):
             return True
         return False
 
-    def _run(self, cmd: list, check: bool = True, input_text: str = None) -> subprocess.CompletedProcess:
+    def _run(self, cmd: list, check: bool = True, input_text: str = None,
+             cwd: str = None, env: dict = None) -> subprocess.CompletedProcess:
         """Run a subprocess, streaming output line-by-line for real-time logging."""
         # Force line-buffered stdout on child processes via _STDBUF_O.
         # Without this, C programs like dpkg/apt use full 4KB buffering when
         # not on a TTY, causing long silent gaps in the provision log.
-        env = os.environ.copy()
+        run_env = os.environ.copy()
         stdbuf_lib = "/usr/lib/x86_64-linux-gnu/libstdbuf.so"
         if not os.path.exists(stdbuf_lib):
             stdbuf_lib = "/usr/lib/aarch64-linux-gnu/libstdbuf.so"
         if os.path.exists(stdbuf_lib):
-            env.setdefault("LD_PRELOAD", stdbuf_lib)
-            env["_STDBUF_O"] = "L"  # line-buffered stdout
+            run_env.setdefault("LD_PRELOAD", stdbuf_lib)
+            run_env["_STDBUF_O"] = "L"  # line-buffered stdout
+        if env:
+            run_env.update(env)
         proc = subprocess.Popen(
             cmd,
             stdin=subprocess.PIPE if input_text else None,
@@ -711,7 +740,8 @@ class BaseApp(ABC):
             stderr=subprocess.STDOUT,
             text=True,
             bufsize=1,  # line-buffered
-            env=env,
+            env=run_env,
+            cwd=cwd,
         )
         if input_text:
             proc.stdin.write(input_text)

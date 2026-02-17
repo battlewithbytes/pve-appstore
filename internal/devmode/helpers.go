@@ -89,6 +89,78 @@ func envKeyToLabel(key string) string {
 	return strings.Join(parts, " ")
 }
 
+// mapUnraidCategory maps an Unraid category string to app store categories.
+// Unraid uses "Network:Other Media:Other" etc. We extract the primary prefix.
+func mapUnraidCategory(cat string) []string {
+	mapping := map[string]string{
+		"network":      "networking",
+		"mediaapp":     "media",
+		"mediavideo":   "media",
+		"mediaaudio":   "media",
+		"mediaserver":  "media",
+		"media":        "media",
+		"productivity": "productivity",
+		"tools":        "tools",
+		"utilities":    "utilities",
+		"security":     "security",
+		"backup":       "backup",
+		"cloud":        "cloud",
+		"gameservers":  "gaming",
+		"homeauto":     "automation",
+		"voip":         "communication",
+		"webservers":   "web",
+		"dns":          "networking",
+		"status":       "monitoring",
+	}
+
+	seen := map[string]bool{}
+	var result []string
+
+	// Unraid categories are space-separated, e.g. "Network:Other Other:"
+	for _, part := range strings.Fields(cat) {
+		key := strings.ToLower(strings.TrimRight(strings.Split(part, ":")[0], " "))
+		if mapped, ok := mapping[key]; ok && !seen[mapped] {
+			seen[mapped] = true
+			result = append(result, mapped)
+		}
+	}
+	if len(result) == 0 {
+		return []string{"utilities"}
+	}
+	return result
+}
+
+// parseWebUIPath extracts the path suffix from an Unraid WebUI template.
+// e.g. "http://[IP]:[PORT:8155]/admin" → "/admin"
+func parseWebUIPath(webUI string) string {
+	if webUI == "" {
+		return ""
+	}
+	// Find the last ] which closes [PORT:NNNN]
+	idx := strings.LastIndex(webUI, "]")
+	if idx < 0 {
+		return ""
+	}
+	path := webUI[idx+1:]
+	if path == "" || path == "/" {
+		return ""
+	}
+	return path
+}
+
+// parseCapAdds extracts --cap-add values from an ExtraParams string.
+// e.g. "--cap-add NET_ADMIN --cap-add SYS_ADMIN" → ["NET_ADMIN", "SYS_ADMIN"]
+func parseCapAdds(extraParams string) []string {
+	var caps []string
+	parts := strings.Fields(extraParams)
+	for i := 0; i < len(parts)-1; i++ {
+		if strings.ToLower(parts[i]) == "--cap-add" {
+			caps = append(caps, parts[i+1])
+		}
+	}
+	return caps
+}
+
 // extractURLFromRepoLine extracts the base URL from a deb repo line.
 func extractURLFromRepoLine(line string) string {
 	for _, tok := range strings.Fields(line) {

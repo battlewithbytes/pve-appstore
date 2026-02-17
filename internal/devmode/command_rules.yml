@@ -75,7 +75,7 @@ sdk_handled:
   - skip       # noise-filtered
 
 # Commands containing shell operators (>>, >, |, $()) cannot be converted
-# to subprocess calls. They must be wrapped: self.run_command(["sh", "-c", "..."])
+# to subprocess calls. They are emitted as self.run_shell("...")
 shell_operators:
   - ">>"
   - "> /"

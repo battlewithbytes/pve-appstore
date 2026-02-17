@@ -3,7 +3,8 @@ import { api } from '../api'
 import type { DevStack, ValidationResult } from '../types'
 import { Center, DevStatusBadge } from '../components/ui'
 import { CodeEditor } from '../CodeEditor'
-import { DevSubmitDialog, DevValidationMsg } from '../DevAppEditor'
+import { DevSubmitDialog } from '../components/DevSubmitDialog'
+import { DevValidationMsg } from '../components/DevValidationMsg'
 
 function DevStackEditor({ id, requireAuth }: { id: string; requireAuth: (cb: () => void) => void }) {
   const [stack, setStack] = useState<DevStack | null>(null)

@@ -236,6 +236,58 @@ func (s *Server) handleDevDeleteFile(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted", "path": path})
 }
 
+func (s *Server) handleDevRenameFile(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	var req struct {
+		From string `json:"from"`
+		To   string `json:"to"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if req.From == "" || req.To == "" {
+		writeError(w, http.StatusBadRequest, "from and to are required")
+		return
+	}
+	if err := s.devSvc.RenameFile(id, req.From, req.To); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	// Auto-refresh catalog if deployed
+	s.refreshDeployedDevApp(id)
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "renamed"})
+}
+
+func (s *Server) handleDevRenameApp(w http.ResponseWriter, r *http.Request) {
+	oldID := r.PathValue("id")
+
+	var req struct {
+		NewID string `json:"new_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if req.NewID == "" {
+		writeError(w, http.StatusBadRequest, "new_id is required")
+		return
+	}
+
+	// Undeploy from catalog under old ID first
+	if s.catalogSvc != nil {
+		s.catalogSvc.RemoveDevApp(oldID)
+	}
+
+	if err := s.devSvc.RenameApp(oldID, req.NewID); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "renamed", "new_id": req.NewID})
+}
+
 func (s *Server) handleDevDeleteApp(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 

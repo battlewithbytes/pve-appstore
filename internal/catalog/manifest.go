@@ -56,8 +56,9 @@ type LXCDefaults struct {
 	DiskGB       int      `yaml:"disk_gb" json:"disk_gb"`
 	Bridge       string   `yaml:"bridge,omitempty" json:"bridge,omitempty"`
 	Storage      string   `yaml:"storage,omitempty" json:"storage,omitempty"`
-	Features     []string `yaml:"features,omitempty" json:"features,omitempty"`
-	OnBoot       bool     `yaml:"onboot,omitempty" json:"onboot,omitempty"`
+	Features        []string `yaml:"features,omitempty" json:"features,omitempty"`
+	OnBoot          bool     `yaml:"onboot,omitempty" json:"onboot,omitempty"`
+	RequireStaticIP bool     `yaml:"require_static_ip,omitempty" json:"require_static_ip,omitempty"`
 }
 
 type InputSpec struct {
@@ -83,6 +84,7 @@ type ShowWhenSpec struct {
 
 type InputValidation struct {
 	Regex     string   `yaml:"regex,omitempty" json:"regex,omitempty"`
+	Format    string   `yaml:"format,omitempty" json:"format,omitempty"`
 	Min       *float64 `yaml:"min,omitempty" json:"min,omitempty"`
 	Max       *float64 `yaml:"max,omitempty" json:"max,omitempty"`
 	MinLength *int     `yaml:"min_length,omitempty" json:"min_length,omitempty"`
@@ -252,6 +254,10 @@ func (m *AppManifest) Validate() error {
 		}
 		if !validTypes[inp.Type] {
 			return fmt.Errorf("manifest %s: input %s type %q is invalid", m.ID, inp.Key, inp.Type)
+		}
+		validFormats := map[string]bool{"ipv4": true, "cidr": true, "url": true, "email": true, "hostname": true}
+		if inp.Validation != nil && inp.Validation.Format != "" && !validFormats[inp.Validation.Format] {
+			return fmt.Errorf("manifest %s: input %s has unknown validation format %q", m.ID, inp.Key, inp.Validation.Format)
 		}
 	}
 

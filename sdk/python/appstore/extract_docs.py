@@ -7,6 +7,7 @@ Output: JSON array to stdout.  Each entry has:
   - name:        lookup key (e.g. "apt_install", "inputs.string", "log.info")
   - signature:   full signature with self prefix
   - description: first paragraph of docstring
+  - group:       category for SDK reference panel display
 """
 
 import ast
@@ -137,9 +138,11 @@ def extract_docstring(node):
 
 
 def extract_class_methods(source, class_name, skip=None,
-                          name_prefix="", sig_prefix="self"):
+                          name_prefix="", sig_prefix="self",
+                          groups=None, default_group="Other"):
     """Extract public method docs from a class."""
     skip = skip or set()
+    groups = groups or {}
     tree = ast.parse(source)
     results = []
     for node in ast.walk(tree):
@@ -150,10 +153,12 @@ def extract_class_methods(source, class_name, skip=None,
                 continue
             if item.name.startswith("_") or item.name in skip:
                 continue
+            full_name = f"{name_prefix}{item.name}"
             results.append({
-                "name": f"{name_prefix}{item.name}",
+                "name": full_name,
                 "signature": extract_signature(item, sig_prefix),
                 "description": extract_docstring(item),
+                "group": groups.get(item.name, default_group),
             })
     return results
 
@@ -162,10 +167,42 @@ def main():
     sdk_dir = os.path.dirname(os.path.abspath(__file__))
     methods = []
 
+    # Group mapping for BaseApp methods
+    base_groups = {
+        "apt_install": "Package Management",
+        "pkg_install": "Package Management",
+        "pip_install": "Package Management",
+        "create_venv": "Package Management",
+        "add_apt_key": "Package Management",
+        "add_apt_repo": "Package Management",
+        "add_apt_repository": "Package Management",
+        "pull_oci_binary": "Package Management",
+        "write_config": "File Operations",
+        "render_template": "File Operations",
+        "provision_file": "File Operations",
+        "deploy_provision_file": "File Operations",
+        "write_env_file": "File Operations",
+        "create_dir": "File Operations",
+        "chown": "File Operations",
+        "download": "File Operations",
+        "create_service": "Service Management",
+        "enable_service": "Service Management",
+        "restart_service": "Service Management",
+        "run_command": "Commands & System",
+        "run_shell": "Commands & System",
+        "run_installer_script": "Commands & System",
+        "sysctl": "Commands & System",
+        "disable_ipv6": "Commands & System",
+        "wait_for_http": "Commands & System",
+        "create_user": "User Management",
+        "status_page": "Advanced",
+    }
+
     with open(os.path.join(sdk_dir, "base.py")) as f:
         methods.extend(extract_class_methods(
             f.read(), "BaseApp",
             skip={"install", "configure", "healthcheck", "uninstall"},
+            groups=base_groups,
         ))
 
     with open(os.path.join(sdk_dir, "inputs.py")) as f:
@@ -173,12 +210,14 @@ def main():
             f.read(), "AppInputs",
             skip={"from_file"},
             name_prefix="inputs.", sig_prefix="self.inputs",
+            default_group="Inputs",
         ))
 
     with open(os.path.join(sdk_dir, "logging.py")) as f:
         methods.extend(extract_class_methods(
             f.read(), "AppLogger",
             name_prefix="log.", sig_prefix="self.log",
+            default_group="Logging & Outputs",
         ))
 
     print(json.dumps(methods))

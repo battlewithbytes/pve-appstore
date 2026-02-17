@@ -115,3 +115,31 @@ func (s *Server) handleDevListTemplates(w http.ResponseWriter, r *http.Request) 
 		"templates": devmode.ListTemplates(),
 	})
 }
+
+func (s *Server) handleDevListOSTemplates(w http.ResponseWriter, r *http.Request) {
+	// Return cached result if available
+	s.osTemplatesMu.Lock()
+	cached := s.osTemplatesJSON
+	s.osTemplatesMu.Unlock()
+	if cached != nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Cache-Control", "public, max-age=3600")
+		w.Write(cached)
+		return
+	}
+
+	templates, err := s.engine.ListOSTemplates(r.Context())
+	if err != nil {
+		writeJSON(w, http.StatusOK, map[string]interface{}{"templates": []string{}})
+		return
+	}
+	data, _ := json.Marshal(map[string]interface{}{"templates": templates})
+
+	s.osTemplatesMu.Lock()
+	s.osTemplatesJSON = data
+	s.osTemplatesMu.Unlock()
+
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "public, max-age=3600")
+	w.Write(data)
+}

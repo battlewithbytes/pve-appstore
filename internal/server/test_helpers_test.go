@@ -75,6 +75,13 @@ func (m *mockCM) ListStorages(ctx context.Context) ([]engine.StorageInfo, error)
 		{ID: "local", Type: "dir", Content: "iso,vztmpl,rootdir", Path: "/var/lib/vz", Browsable: true, TotalBytes: 500 * 1024 * 1024 * 1024, UsedBytes: 200 * 1024 * 1024 * 1024, AvailBytes: 300 * 1024 * 1024 * 1024},
 	}, nil
 }
+func (m *mockCM) ListOSTemplates(ctx context.Context) ([]engine.OSTemplate, error) {
+	return []engine.OSTemplate{
+		{ShortName: "debian-12", Template: "debian-12-standard_12.12-1_amd64.tar.zst", Section: "system"},
+		{ShortName: "ubuntu-24.04", Template: "ubuntu-24.04-standard_24.04-2_amd64.tar.zst", Section: "system"},
+		{ShortName: "alpine-3.22", Template: "alpine-3.22-default_20250617_amd64.tar.xz", Section: "system"},
+	}, nil
+}
 func (m *mockCM) GetStorageInfo(ctx context.Context, storageID string) (*engine.StorageInfo, error) {
 	path := m.storagePath
 	if path == "" {
@@ -298,6 +305,8 @@ type devSvcStub struct {
 	saveFileFn      func(id, relPath string, data []byte) error
 	readFileFn      func(id, relPath string) ([]byte, error)
 	deleteFileFn    func(id, relPath string) error
+	renameFileFn    func(id, oldPath, newPath string) error
+	renameAppFn     func(oldID, newID string) error
 	deleteFn        func(id string) error
 	setStatusFn     func(id, status string) error
 	ensureIconFn    func(id string)
@@ -383,6 +392,20 @@ func (s devSvcStub) ReadFile(id, relPath string) ([]byte, error) {
 func (s devSvcStub) DeleteFile(id, relPath string) error {
 	if s.deleteFileFn != nil {
 		return s.deleteFileFn(id, relPath)
+	}
+	return nil
+}
+
+func (s devSvcStub) RenameFile(id, oldPath, newPath string) error {
+	if s.renameFileFn != nil {
+		return s.renameFileFn(id, oldPath, newPath)
+	}
+	return nil
+}
+
+func (s devSvcStub) RenameApp(oldID, newID string) error {
+	if s.renameAppFn != nil {
+		return s.renameAppFn(oldID, newID)
 	}
 	return nil
 }

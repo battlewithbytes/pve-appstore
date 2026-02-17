@@ -579,8 +579,8 @@ func containsShellOperator(cmd string) bool {
 
 
 // collectScriptCommands returns the deduplicated list of command names that the
-// generated install.py will call via self.run_command(). Extracts the first word
-// of every RunCommand that isn't handled by a dedicated SDK method.
+// generated install.py will call via self.run_command() or self.run_shell().
+// Extracts the first word of every RunCommand that isn't handled by a dedicated SDK method.
 func collectScriptCommands(df *DockerfileInfo) []string {
 	seen := map[string]bool{}
 	var cmds []string
@@ -1066,7 +1066,7 @@ func buildInstallScript(p buildScriptParams) string {
 	if len(actionableCmds) > 0 {
 		for _, rc := range actionableCmds {
 			if containsShellOperator(rc.Original) {
-				sp.WriteString(fmt.Sprintf("        self.run_command([\"sh\", \"-c\", %q], check=False)\n", rc.Original))
+				sp.WriteString(fmt.Sprintf("        self.run_shell(%q, check=False)\n", rc.Original))
 			} else {
 				args := shellSplit(rc.Original)
 				sp.WriteString("        self.run_command(")

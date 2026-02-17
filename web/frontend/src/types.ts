@@ -36,6 +36,7 @@ export interface AppDetail {
       disk_gb: number;
       features?: string[];
       onboot?: boolean;
+      require_static_ip?: boolean;
     };
   };
   inputs?: AppInput[];
@@ -65,6 +66,7 @@ export interface AppInput {
   reconfigurable?: boolean;
   validation?: {
     regex?: string;
+    format?: string;
     min?: number;
     max?: number;
     min_length?: number;

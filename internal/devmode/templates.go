@@ -91,7 +91,7 @@ maintainers:
   - "Your Name"
 
 lxc:
-  ostemplate: "local:vztmpl/debian-12-standard_12.7-1_amd64.tar.zst"
+  ostemplate: debian-12
   defaults:
     unprivileged: true
     cores: 1
@@ -140,7 +140,7 @@ maintainers:
   - "Your Name"
 
 lxc:
-  ostemplate: "local:vztmpl/debian-12-standard_12.7-1_amd64.tar.zst"
+  ostemplate: debian-12
   defaults:
     unprivileged: true
     cores: 1
@@ -231,7 +231,7 @@ maintainers:
   - "Your Name"
 
 lxc:
-  ostemplate: "local:vztmpl/debian-12-standard_12.7-1_amd64.tar.zst"
+  ostemplate: debian-12
   defaults:
     unprivileged: true
     cores: 2
@@ -309,12 +309,12 @@ class %s(BaseApp):
         self.apt_install(["postgresql", "postgresql-client"])
 
         # Configure port
-        self.run_command(
+        self.run_shell(
             f"sed -i 's/^port = .*/port = {db_port}/' /etc/postgresql/*/main/postgresql.conf"
         )
 
         # Allow connections from any address
-        self.run_command(
+        self.run_shell(
             "sed -i \"s/^#listen_addresses = .*/listen_addresses = '*'/\" /etc/postgresql/*/main/postgresql.conf"
         )
 
@@ -322,10 +322,10 @@ class %s(BaseApp):
         self.restart_service("postgresql")
 
         # Create user and database
-        self.run_command(
+        self.run_shell(
             f"su - postgres -c \"psql -c \\\"CREATE USER {db_user} WITH PASSWORD '{db_password}';\\\"\"",
         )
-        self.run_command(
+        self.run_shell(
             f"su - postgres -c \"psql -c \\\"CREATE DATABASE {db_name} OWNER {db_user};\\\"\"",
         )
 
@@ -349,7 +349,7 @@ maintainers:
   - "Your Name"
 
 lxc:
-  ostemplate: "local:vztmpl/debian-12-standard_12.7-1_amd64.tar.zst"
+  ostemplate: debian-12
   defaults:
     unprivileged: true
     cores: 2
@@ -437,7 +437,7 @@ maintainers:
 # You'll need to adapt the Dockerfile logic into native package installs and service configs.
 
 lxc:
-  ostemplate: "local:vztmpl/debian-12-standard_12.7-1_amd64.tar.zst"
+  ostemplate: debian-12
   defaults:
     unprivileged: true
     cores: 2
@@ -466,7 +466,7 @@ func dockerImportScript(className string) string {
 Docker-to-LXC import scaffold for %s.
 
 Porting from Docker to LXC means replacing the Docker runtime with native services:
-- Dockerfile RUN commands → apt_install() and run_command()
+- Dockerfile RUN commands → apt_install(), run_command(), or run_shell()
 - Dockerfile COPY/ADD → write_config() or push files via assets
 - Dockerfile ENV → self.inputs.string() / self.inputs.integer()
 - Dockerfile EXPOSE → informational, add to outputs in app.yml

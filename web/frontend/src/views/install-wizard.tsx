@@ -152,13 +152,26 @@ export function InstallWizard({ app, onClose, replaceExisting, keepVolumes, exis
       if (inp.type === 'string' || inp.type === 'secret') {
         if (v.min_length !== undefined && val.length < v.min_length) { errors[inp.key] = `At least ${v.min_length} characters`; continue }
         if (v.max_length !== undefined && val.length > v.max_length) { errors[inp.key] = `At most ${v.max_length} characters`; continue }
-        if (v.regex) { try { if (!new RegExp(v.regex).test(val)) errors[inp.key] = `Does not match required pattern` } catch {} }
+        if (v.regex) { try { if (!new RegExp(v.regex).test(val)) { errors[inp.key] = `Does not match required pattern`; continue } } catch {} }
+        if (v.format) {
+          const fmts: Record<string, { re: RegExp; msg: string }> = {
+            ipv4: { re: /^(\d{1,3}\.){3}\d{1,3}$/, msg: 'Must be a valid IPv4 address' },
+            cidr: { re: /^(\d{1,3}\.){3}\d{1,3}\/\d{1,2}$/, msg: 'Must be a valid CIDR (e.g. 192.168.1.0/24)' },
+            url: { re: /^https?:\/\/\S+$/, msg: 'Must be a valid URL (http:// or https://)' },
+            email: { re: /^[^\s@]+@[^\s@]+\.[^\s@]+$/, msg: 'Must be a valid email address' },
+            hostname: { re: /^[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?)*$/, msg: 'Must be a valid hostname' },
+          }
+          const fp = fmts[v.format]
+          if (fp && !fp.re.test(val)) { errors[inp.key] = fp.msg; continue }
+        }
       }
       if (v.enum && v.enum.length > 0 && !v.enum.includes(val)) { errors[inp.key] = 'Invalid selection' }
     }
     return errors
   }, [inputs, app.inputs])
-  const hasInputErrors = Object.keys(inputErrors).length > 0
+  const ipRequired = app.lxc.defaults.require_static_ip === true
+  const ipError = ipRequired && !ipAddress.trim() ? 'This app requires a static IP address' : ''
+  const hasInputErrors = Object.keys(inputErrors).length > 0 || !!ipError
 
   const mountErrors = useMemo(() => {
     const errors: Record<string, string> = {}
@@ -327,6 +340,13 @@ export function InstallWizard({ app, onClose, replaceExisting, keepVolumes, exis
             <span className="block px-3 py-2 bg-bg-primary border border-border rounded-md text-text-secondary text-sm font-mono">{bridgeLabel(bridge)}</span>
           )}
         </FormRow>
+
+        {ipRequired && (
+          <FormRow label="Static IP" description="This app requires a static IP address (e.g. DNS servers)" help="Include subnet mask, e.g. /24">
+            <FormInput value={ipAddress} onChange={setIpAddress} placeholder="e.g. 192.168.1.100/24" />
+            {ipError && <div className="text-status-stopped text-xs mt-0.5 font-mono">{ipError}</div>}
+          </FormRow>
+        )}
 
         {/* Unified Mounts section */}
         {(hasMounts || true) && (
@@ -646,9 +666,11 @@ export function InstallWizard({ app, onClose, replaceExisting, keepVolumes, exis
               <FormRow label="Hostname" description="Container hostname on the network" help={`Defaults to: ${app.id}`}>
                 <FormInput value={hostname} onChange={setHostname} placeholder={app.id} />
               </FormRow>
-              <FormRow label="Static IP" description="Fixed IP address for this container" help="Leave blank for DHCP">
-                <FormInput value={ipAddress} onChange={setIpAddress} placeholder="e.g. 192.168.1.100" />
-              </FormRow>
+              {!ipRequired && (
+                <FormRow label="Static IP" description="Fixed IP address for this container" help="Leave blank for DHCP">
+                  <FormInput value={ipAddress} onChange={setIpAddress} placeholder="e.g. 192.168.1.100" />
+                </FormRow>
+              )}
               <FormRow label="MAC Address" description="Fixed MAC for DHCP reservations" help="Leave blank for auto-assign">
                 <FormInput value={macAddress} onChange={setMacAddress} placeholder="e.g. BC:24:11:AB:CD:EF" />
               </FormRow>

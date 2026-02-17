@@ -23,6 +23,7 @@ type UnraidContainer struct {
 	GitHub      string         `xml:"GitHub"`
 	ReadMe      string         `xml:"ReadMe"`
 	Shell       string         `xml:"Shell"`
+	ExtraParams string         `xml:"ExtraParams"`
 	Configs     []UnraidConfig `xml:"Config"`
 }
 
@@ -160,18 +161,45 @@ func ConvertUnraidToScaffold(c *UnraidContainer, df *DockerfileInfo) (id, manife
 		}
 	}
 
+	// Map Unraid categories
+	categories := mapUnraidCategory(c.Category)
+
+	// Check privileged flag
+	unprivileged := true
+	if strings.ToLower(c.Privileged) == "true" {
+		unprivileged = false
+	}
+
+	// Parse capabilities from ExtraParams
+	capAdds := parseCapAdds(c.ExtraParams)
+	// NET_ADMIN, SYS_ADMIN etc. typically require privileged or special LXC config
+	if !unprivileged {
+		// already privileged, no extra action needed
+	} else if len(capAdds) > 0 {
+		// Capabilities like NET_ADMIN need unprivileged=false or LXC features
+		unprivileged = false
+	}
+
+	// Parse WebUI path suffix
+	webUIPath := parseWebUIPath(c.WebUI)
+
 	// Build manifest
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf(`id: %s
 name: "%s"
 description: "%s"
 version: "0.1.0"
-categories:
-  - utilities
-tags:
-  - unraid-import`, id, c.Name, description))
-	sb.WriteString("\nmaintainers:\n  - \"Your Name\"\n")
-	sb.WriteString("icon: \"\"  # Paste icon URL or use icon editor in header\n")
+categories:`, id, c.Name, description))
+	for _, cat := range categories {
+		sb.WriteString(fmt.Sprintf("\n  - %s", cat))
+	}
+	sb.WriteString("\ntags:\n  - unraid-import\n")
+	sb.WriteString("maintainers:\n  - \"Your Name\"\n")
+	if c.Icon != "" {
+		sb.WriteString(fmt.Sprintf("icon: \"%s\"\n", c.Icon))
+	} else {
+		sb.WriteString("icon: \"\"  # Paste icon URL or use icon editor in header\n")
+	}
 
 	// Add source info as comments
 	sb.WriteString(fmt.Sprintf("\n# Imported from Unraid template for %s\n", c.Name))
@@ -179,18 +207,24 @@ tags:
 	if c.Project != "" {
 		sb.WriteString(fmt.Sprintf("# Project homepage: %s\n", c.Project))
 	}
+	if c.GitHub != "" {
+		sb.WriteString(fmt.Sprintf("# Source code: %s\n", c.GitHub))
+	}
+	if len(capAdds) > 0 {
+		sb.WriteString(fmt.Sprintf("# Docker capabilities: %s (container set to privileged)\n", strings.Join(capAdds, ", ")))
+	}
 	sb.WriteString("# This is a SCAFFOLD — you must implement the provisioning logic.\n")
 
-	sb.WriteString(`
+	sb.WriteString(fmt.Sprintf(`
 lxc:
-  ostemplate: "local:vztmpl/debian-12-standard_12.7-1_amd64.tar.zst"
+  ostemplate: debian-12
   defaults:
-    unprivileged: true
+    unprivileged: %v
     cores: 2
     memory_mb: 1024
     disk_gb: 8
     onboot: true
-`)
+`, unprivileged))
 
 	// Build port input keys for use in outputs
 	type portInput struct {
@@ -253,9 +287,27 @@ provisioning:
 
 `)
 
-	// Comments about Docker paths
+	// Infer service name for permissions and script
+	mainService := toKebabCase(id)
+
+	// Permissions section
+	sb.WriteString("permissions:\n")
+	sb.WriteString("  packages: []  # e.g. [curl, git, python3]\n")
+	sb.WriteString("  commands: []  # e.g. [git, curl, bash]\n")
+	sb.WriteString(fmt.Sprintf("  services:\n    - %s\n", mainService))
+	sb.WriteString("  urls: []      # e.g. [\"https://github.com/*\"]\n")
+	sb.WriteString("  paths:\n")
+	for _, p := range paths {
+		sb.WriteString(fmt.Sprintf("    - %s\n", p.target))
+	}
+	sb.WriteString("    - /etc/systemd/system/\n")
+	if len(portInputs) > 0 || len(vars) > 0 {
+		sb.WriteString("    - /etc/default/\n")
+	}
+	sb.WriteString("\n")
+
 	if len(paths) > 0 {
-		sb.WriteString("# Docker volume mappings (implement as directories in install.py):\n")
+		sb.WriteString("# Docker volume mappings for reference:\n")
 		for _, p := range paths {
 			sb.WriteString(fmt.Sprintf("#   %s → %s (%s, %s)\n", p.target, p.defaultPath, p.name, p.mode))
 		}
@@ -278,14 +330,15 @@ provisioning:
 	}
 
 	if webUIKey != "" {
+		urlValue := fmt.Sprintf("http://{{IP}}:{{%s}}%s", webUIKey, webUIPath)
 		sb.WriteString(fmt.Sprintf(`outputs:
   - key: url
     label: "Web UI"
-    value: "http://{{IP}}:{{%s}}"
+    value: "%s"
   - key: webui_port
     label: "Web UI Port"
     value: "{{%s}}"
-`, webUIKey, webUIKey))
+`, urlValue, webUIKey))
 		_ = webUIDefault // used for script comments
 	} else {
 		sb.WriteString(`outputs:
@@ -300,68 +353,93 @@ provisioning:
 	// Build script
 	className := toPascalCase(id)
 
-	var scriptParts []string
-	scriptParts = append(scriptParts, fmt.Sprintf(`#!/usr/bin/env python3
-"""
-Provisioning script for %s.
-Imported from Unraid template — original Docker image: %s
-%s
+	var sp strings.Builder
+	sp.WriteString(fmt.Sprintf("#!/usr/bin/env python3\n\"\"\"\nProvisioning script for %s.\nImported from Unraid template — original Docker image: %s\n%s\n\"\"\"\nfrom appstore import BaseApp, run\n\n\nclass %s(BaseApp):\n    def install(self):", c.Name, c.Repository, c.Project, className))
 
-This scaffold converts the Docker template to native LXC provisioning.
-Replace the TODOs below with actual package installs and configuration.
-"""
-from appstore import BaseApp, run
+	// install() body
+	sp.WriteString("\n        # Step 1: Install packages\n")
+	sp.WriteString("        # TODO: Replace with the actual packages needed\n")
+	sp.WriteString("        # self.pkg_install(\"package1\", \"package2\")\n")
 
+	if len(paths) > 0 {
+		sp.WriteString("\n        # Step 2: Create data directories\n")
+		for _, p := range paths {
+			sp.WriteString(fmt.Sprintf("        self.create_dir(\"%s\")  # %s\n", p.target, p.name))
+		}
+	}
 
-class %s(BaseApp):
-    def install(self):`, c.Name, c.Repository, c.Project, className))
+	sp.WriteString("\n        # Step 3: Install the application\n")
+	sp.WriteString("        # self.run_command(\"git clone --depth 1 https://example.com/repo.git /opt/app\")\n")
+	sp.WriteString("        # self.run_command([\"bash\", \"/opt/app/install.sh\"])\n")
 
-	// Add input reads
+	sp.WriteString(fmt.Sprintf("\n        # Step 4: Create systemd service\n"))
+	sp.WriteString(fmt.Sprintf("        # self.create_service(\"%s\", exec_start=\"/usr/bin/%s\")\n", mainService, mainService))
+
+	// Call configure() then enable service
 	if len(portInputs) > 0 || len(vars) > 0 {
-		scriptParts = append(scriptParts, "        # Read inputs")
+		sp.WriteString("\n        # Step 5: Apply config from inputs, then start\n")
+		sp.WriteString("        self.configure()\n")
+		sp.WriteString(fmt.Sprintf("        self.enable_service(\"%s\")\n", mainService))
+	} else {
+		sp.WriteString(fmt.Sprintf("\n        self.enable_service(\"%s\")\n", mainService))
+	}
+
+	sp.WriteString(fmt.Sprintf("        self.log.info(\"%s installation complete\")\n", c.Name))
+
+	// configure() method — reads inputs and writes config
+	if len(portInputs) > 0 || len(vars) > 0 {
+		sp.WriteString("\n    def configure(self):\n")
+		sp.WriteString("        \"\"\"Apply configuration from inputs. Called by install() and on reconfigure.\"\"\"\n")
+
+		// Re-read all inputs
 		for _, pi := range portInputs {
 			varName := toSnakeCase(pi.key)
-			scriptParts = append(scriptParts, fmt.Sprintf(`        %s = self.inputs.integer("%s", %s)`, varName, pi.key, pi.port.defaultVal))
+			sp.WriteString(fmt.Sprintf("        %s = self.inputs.integer(\"%s\", %s)\n", varName, pi.key, pi.port.defaultVal))
 		}
 		for _, v := range vars {
 			if v.mask {
-				scriptParts = append(scriptParts, fmt.Sprintf(`        %s = self.inputs.secret("%s")`, v.key, v.key))
+				sp.WriteString(fmt.Sprintf("        %s = self.inputs.secret(\"%s\")\n", v.key, v.key))
 			} else {
-				scriptParts = append(scriptParts, fmt.Sprintf(`        %s = self.inputs.string("%s", "%s")`, v.key, v.key, v.defaultVal))
+				sp.WriteString(fmt.Sprintf("        %s = self.inputs.string(\"%s\", \"%s\")\n", v.key, v.key, v.defaultVal))
 			}
 		}
-		scriptParts = append(scriptParts, "")
-	}
 
-	// Add install steps
-	scriptParts = append(scriptParts, `        # Step 1: Install packages
-        # TODO: Replace with the actual packages needed
-        # self.apt_install(["package1", "package2"])`)
+		// Build config string and write it
+		sp.WriteString("\n        # Write config — adapt format to match the service's native config.\n")
+		configPath := fmt.Sprintf("/etc/default/%s", mainService)
 
-	if len(paths) > 0 {
-		scriptParts = append(scriptParts, "\n        # Step 2: Create data directories")
-		for _, p := range paths {
-			scriptParts = append(scriptParts, fmt.Sprintf(`        self.create_dir("%s")  # %s`, p.target, p.name))
+		type inputVar struct {
+			varName string
+			envKey  string
 		}
+		var allVars []inputVar
+		for _, pi := range portInputs {
+			allVars = append(allVars, inputVar{toSnakeCase(pi.key), strings.ToUpper(pi.key)})
+		}
+		for _, v := range vars {
+			allVars = append(allVars, inputVar{v.key, strings.ToUpper(v.key)})
+		}
+
+		if len(allVars) == 1 {
+			sp.WriteString(fmt.Sprintf("        config = f\"%s={%s}\\n\"\n", allVars[0].envKey, allVars[0].varName))
+		} else {
+			sp.WriteString("        config = (\n")
+			for _, v := range allVars {
+				sp.WriteString(fmt.Sprintf("            f\"%s={%s}\\n\"\n", v.envKey, v.varName))
+			}
+			sp.WriteString("        )\n")
+		}
+		sp.WriteString(fmt.Sprintf("        self.write_config(\"%s\", config)\n", configPath))
+		sp.WriteString(fmt.Sprintf("        self.restart_service(\"%s\")\n", mainService))
+	} else {
+		sp.WriteString("\n    def configure(self):\n")
+		sp.WriteString("        \"\"\"Apply configuration. Called by install() and on reconfigure.\"\"\"\n")
+		sp.WriteString("        pass  # No configurable inputs\n")
 	}
 
-	scriptParts = append(scriptParts, `
-        # Step 3: Configure the application
-        # TODO: Write config files, set up users, etc.
-        # self.write_config("/etc/app/config.conf", config_content)
+	sp.WriteString(fmt.Sprintf("\n\nrun(%s)\n", className))
 
-        # Step 4: Create and enable systemd service
-        # TODO: Create a service unit for the application
-        # self.enable_service("app-name")
-
-        self.log.info("Installation complete — configure the application manually")`)
-
-	scriptParts = append(scriptParts, fmt.Sprintf(`
-
-run(%s)
-`, className))
-
-	script = strings.Join(scriptParts, "\n")
+	script = sp.String()
 
 	return id, manifest, script
 }
@@ -394,6 +472,16 @@ func convertWithDockerfile(c *UnraidContainer, df *DockerfileInfo, id string) (s
 	if strings.ToLower(c.Privileged) == "true" {
 		unprivileged = false
 	}
+
+	// Parse capabilities from ExtraParams
+	capAdds := parseCapAdds(c.ExtraParams)
+	if unprivileged && len(capAdds) > 0 {
+		unprivileged = false
+	}
+
+	// Map categories and parse WebUI path
+	categories := mapUnraidCategory(c.Category)
+	webUIPath := parseWebUIPath(c.WebUI)
 
 	// Collect ports, paths, variables from XML (same as scaffold path)
 	type portInfo struct {
@@ -486,15 +574,26 @@ func convertWithDockerfile(c *UnraidContainer, df *DockerfileInfo, id string) (s
 name: "%s"
 description: "%s"
 version: "0.1.0"
-categories:
-  - utilities
-tags:
-  - unraid-import`, id, c.Name, description))
-	sb.WriteString("\nmaintainers:\n  - \"Your Name\"\n")
-	sb.WriteString("icon: \"\"  # Paste icon URL or use icon editor in header\n")
+categories:`, id, c.Name, description))
+	for _, cat := range categories {
+		sb.WriteString(fmt.Sprintf("\n  - %s", cat))
+	}
+	sb.WriteString("\ntags:\n  - unraid-import\n")
+	sb.WriteString("maintainers:\n  - \"Your Name\"\n")
+	if c.Icon != "" {
+		sb.WriteString(fmt.Sprintf("icon: \"%s\"\n", c.Icon))
+	} else {
+		sb.WriteString("icon: \"\"  # Paste icon URL or use icon editor in header\n")
+	}
 
 	if c.Project != "" {
 		sb.WriteString(fmt.Sprintf("\n# Project homepage: %s\n", c.Project))
+	}
+	if c.GitHub != "" {
+		sb.WriteString(fmt.Sprintf("# Source code: %s\n", c.GitHub))
+	}
+	if len(capAdds) > 0 {
+		sb.WriteString(fmt.Sprintf("# Docker capabilities: %s (container set to privileged)\n", strings.Join(capAdds, ", ")))
 	}
 
 	sb.WriteString(fmt.Sprintf(`
@@ -686,14 +785,15 @@ provisioning:
 		webUIKey = portInputs[0].key
 	}
 	if webUIKey != "" {
+		urlValue := fmt.Sprintf("http://{{IP}}:{{%s}}%s", webUIKey, webUIPath)
 		sb.WriteString(fmt.Sprintf(`outputs:
   - key: url
     label: "Web UI"
-    value: "http://{{IP}}:{{%s}}"
+    value: "%s"
   - key: webui_port
     label: "Web UI Port"
     value: "{{%s}}"
-`, webUIKey, webUIKey))
+`, urlValue, webUIKey))
 	} else {
 		sb.WriteString(`outputs:
   - key: url

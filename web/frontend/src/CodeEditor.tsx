@@ -96,6 +96,61 @@ fetch('/api/dev/sdk-docs')
   })
   .catch(() => {})
 
+// --- OS template completions for YAML manifest files ---
+
+interface OSTemplateEntry {
+  short_name: string  // e.g. "debian-12"
+  template: string    // full filename
+  section: string     // e.g. "system"
+}
+
+let osTemplateOptions: { label: string; type: string; detail: string }[] = []
+
+// Fetch available OS templates once when module loads
+fetch('/api/dev/ostemplates')
+  .then(r => r.ok ? r.json() as Promise<{ templates: OSTemplateEntry[] }> : { templates: [] })
+  .then(data => {
+    osTemplateOptions = (data.templates || []).map(t => ({
+      label: t.short_name,
+      type: 'keyword',
+      detail: t.template,
+    }))
+  })
+  .catch(() => {})
+
+function yamlCompletions(context: CompletionContext): CompletionResult | null {
+  const line = context.state.doc.lineAt(context.pos)
+  const textBefore = line.text.slice(0, context.pos - line.from)
+
+  // Match after "format:" with optional spaces — offer built-in format names
+  const formatMatch = textBefore.match(/format:\s*(\S*)$/)
+  if (formatMatch) {
+    const typed = formatMatch[1]
+    return {
+      from: context.pos - typed.length,
+      options: [
+        { label: 'ipv4', type: 'keyword', detail: 'IPv4 address (e.g. 192.168.1.1)' },
+        { label: 'cidr', type: 'keyword', detail: 'IP with subnet (e.g. 192.168.1.0/24)' },
+        { label: 'url', type: 'keyword', detail: 'HTTP/HTTPS URL' },
+        { label: 'email', type: 'keyword', detail: 'Email address' },
+        { label: 'hostname', type: 'keyword', detail: 'Network hostname' },
+      ],
+      validFor: /^[\w]*$/,
+    }
+  }
+
+  // Match after "ostemplate:" with optional spaces
+  const match = textBefore.match(/ostemplate:\s*(\S*)$/)
+  if (!match) return null
+  const typed = match[1]
+  const from = context.pos - typed.length
+  return {
+    from,
+    options: osTemplateOptions,
+    validFor: /^[\w.-]*$/,
+  }
+}
+
 function sdkCompletions(context: CompletionContext): CompletionResult | null {
   const word = context.matchBefore(/self\.[\w.]*/)
   if (!word || (word.from === word.to && !context.explicit)) return null
@@ -260,6 +315,7 @@ export function CodeEditor({ value, onChange, filename, onSave, gotoLine }: Code
     if (!containerRef.current) return
 
     const isPython = filename.endsWith('.py')
+    const isYaml = filename.endsWith('.yml') || filename.endsWith('.yaml')
 
     const state = EditorState.create({
       doc: value,
@@ -293,6 +349,7 @@ export function CodeEditor({ value, onChange, filename, onSave, gotoLine }: Code
           },
         ]),
         ...(isPython ? [autocompletion({ override: [sdkCompletions] }), sdkHoverTooltip] : []),
+        ...(isYaml ? [autocompletion({ override: [yamlCompletions] })] : []),
         EditorView.updateListener.of((update) => {
           if (update.docChanged) {
             onChangeRef.current(update.state.doc.toString())

@@ -160,6 +160,74 @@ class TestRunCommand:
             app.run_command([])
 
 
+    @patch("appstore.base.subprocess.Popen")
+    def test_cwd_passed_to_popen(self, mock_popen):
+        mock_popen.side_effect = mock_popen_factory()
+        app = make_app(commands=["make"])
+        app.run_command("make install", cwd="/opt/app")
+        assert mock_popen.called
+        assert mock_popen.call_args[1]["cwd"] == "/opt/app"
+
+    @patch("appstore.base.subprocess.Popen")
+    def test_env_merged_into_popen(self, mock_popen):
+        mock_popen.side_effect = mock_popen_factory()
+        app = make_app(commands=["make"])
+        app.run_command("make install", env={"DESTDIR": "/opt"})
+        assert mock_popen.called
+        popen_env = mock_popen.call_args[1]["env"]
+        assert popen_env["DESTDIR"] == "/opt"
+        # Original env vars should still be present
+        assert "PATH" in popen_env
+
+    @patch("appstore.base.subprocess.Popen")
+    def test_string_command_with_cwd(self, mock_popen):
+        mock_popen.side_effect = mock_popen_factory()
+        app = make_app(commands=["git"])
+        app.run_command("git clone https://example.com/repo.git", cwd="/tmp")
+        assert mock_popen.call_args[0][0] == ["git", "clone", "https://example.com/repo.git"]
+        assert mock_popen.call_args[1]["cwd"] == "/tmp"
+
+
+class TestRunShell:
+    @patch("appstore.base.subprocess.Popen")
+    def test_runs_shell_command(self, mock_popen):
+        mock_popen.side_effect = mock_popen_factory()
+        app = make_app(commands=["make"])
+        app.run_shell("make -C /opt/app install")
+        assert mock_popen.called
+        assert mock_popen.call_args[0][0] == ["bash", "-c", "make -C /opt/app install"]
+
+    @patch("appstore.base.subprocess.Popen")
+    def test_shell_with_pipes(self, mock_popen):
+        mock_popen.side_effect = mock_popen_factory()
+        app = make_app(commands=["curl"])
+        app.run_shell("curl -sSL https://example.com | tar xz")
+        assert mock_popen.call_args[0][0] == ["bash", "-c", "curl -sSL https://example.com | tar xz"]
+
+    @patch("appstore.base.subprocess.Popen")
+    def test_shell_with_cwd_and_env(self, mock_popen):
+        mock_popen.side_effect = mock_popen_factory()
+        app = make_app(commands=["make"])
+        app.run_shell("make install", cwd="/opt/app", env={"CC": "gcc"})
+        assert mock_popen.call_args[1]["cwd"] == "/opt/app"
+        assert mock_popen.call_args[1]["env"]["CC"] == "gcc"
+
+    def test_rejects_disallowed_command(self):
+        app = make_app(commands=["make"])
+        with pytest.raises(PermissionDeniedError, match="command 'rm'"):
+            app.run_shell("rm -rf /")
+
+    def test_empty_shell_command(self):
+        app = make_app()
+        with pytest.raises(ValueError, match="empty shell command"):
+            app.run_shell("")
+
+    def test_whitespace_only_command(self):
+        app = make_app()
+        with pytest.raises(ValueError, match="empty shell command"):
+            app.run_shell("   ")
+
+
 class TestRunInstallerScript:
     @patch("appstore.base.subprocess.Popen")
     @patch("appstore.base.os.chmod")

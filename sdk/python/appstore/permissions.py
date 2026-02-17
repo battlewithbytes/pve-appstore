@@ -129,11 +129,21 @@ class AppPermissions:
         )
 
     def check_installer_script(self, url: str) -> None:
-        """Verify a remote installer script URL is in the allowlist."""
-        if url not in self.installer_scripts:
-            raise PermissionDeniedError(
-                f"installer script '{url}' is not in the allowed installer scripts: {self.installer_scripts}"
-            )
+        """Verify a remote installer script URL is in the allowlist.
+
+        Checks against permissions.urls (with glob matching).
+        The separate installer_scripts field is deprecated — use urls instead.
+        """
+        # Check urls first (glob-aware)
+        for pattern in self.urls:
+            if fnmatch.fnmatch(url, pattern):
+                return
+        # Fall back to legacy installer_scripts exact match
+        if url in self.installer_scripts:
+            return
+        raise PermissionDeniedError(
+            f"installer script '{url}' is not in the allowed URL patterns: {self.urls}"
+        )
 
     @staticmethod
     def _extract_repo_url(line: str) -> str:

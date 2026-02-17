@@ -83,6 +83,14 @@ type ContainerManager interface {
 	ConfigureDevices(ctid int, devices []DevicePassthrough) error
 	MountHostPath(ctid int, mpIndex int, hostPath, containerPath string, readOnly bool) error
 	AppendLXCConfig(ctid int, lines []string) error
+	ListOSTemplates(ctx context.Context) ([]OSTemplate, error)
+}
+
+// OSTemplate represents a downloadable container template from the Proxmox appliance list.
+type OSTemplate struct {
+	ShortName string `json:"short_name"` // e.g. "debian-12", "alpine-3.22"
+	Template  string `json:"template"`   // full filename e.g. "debian-12-standard_12.12-1_amd64.tar.zst"
+	Section   string `json:"section"`    // e.g. "system"
 }
 
 // MountPointOption defines a mount point for container creation.
@@ -328,6 +336,9 @@ func (e *Engine) StartInstall(req InstallRequest) (*Job, error) {
 	if err := ValidateIPAddress(req.IPAddress); err != nil {
 		return nil, err
 	}
+	if app.LXC.Defaults.RequireStaticIP && req.IPAddress == "" {
+		return nil, fmt.Errorf("app %q requires a static IP address", req.AppID)
+	}
 	if err := ValidateMACAddress(req.MACAddress); err != nil {
 		return nil, err
 	}
@@ -395,6 +406,18 @@ func (e *Engine) StartInstall(req InstallRequest) (*Job, error) {
 		unprivileged = *req.Unprivileged
 	}
 
+	// Merge manifest input defaults into request inputs so the script
+	// always receives every declared input key even if the frontend omitted it.
+	inputs := make(map[string]string)
+	for _, inp := range app.Inputs {
+		if inp.Default != nil {
+			inputs[inp.Key] = fmt.Sprintf("%v", inp.Default)
+		}
+	}
+	for k, v := range req.Inputs {
+		inputs[k] = v
+	}
+
 	now := time.Now()
 	job := &Job{
 		ID:           generateID(),
@@ -416,7 +439,7 @@ func (e *Engine) StartInstall(req InstallRequest) (*Job, error) {
 		Unprivileged: unprivileged,
 		ExtraTags:    req.ExtraTags,
 		AppSource:    app.Source,
-		Inputs:       req.Inputs,
+		Inputs:       inputs,
 		Outputs:      make(map[string]string),
 		Devices:      nil, // Devices are now determined from GPUProfile, not directly from request
 		EnvVars:      req.EnvVars,
@@ -2156,10 +2179,7 @@ func (e *Engine) runStackInstallWithHWAddr(bgCtx context.Context, job *Job, stac
 
 	// Step 3: Create container with preserved MAC (ctidMu released after Create)
 	ctx.transition(StateCreateContainer)
-	template := stack.OSTemplate
-	if !strings.Contains(template, ":") {
-		template = e.cm.ResolveTemplate(bgCtx, template, job.Storage)
-	}
+	template := e.cm.ResolveTemplate(bgCtx, stack.OSTemplate, job.Storage)
 
 	featureSet := make(map[string]bool)
 	for _, m := range manifests {
@@ -2450,6 +2470,11 @@ func (e *Engine) ListStorages(ctx context.Context) ([]StorageInfo, error) {
 // ListBridges returns all available network bridges.
 func (e *Engine) ListBridges(ctx context.Context) ([]BridgeInfo, error) {
 	return e.cm.ListBridges(ctx)
+}
+
+// ListOSTemplates returns available OS templates from the Proxmox appliance list.
+func (e *Engine) ListOSTemplates(ctx context.Context) ([]OSTemplate, error) {
+	return e.cm.ListOSTemplates(ctx)
 }
 
 // isNewerVersion returns true if catalog version is strictly greater than installed version.

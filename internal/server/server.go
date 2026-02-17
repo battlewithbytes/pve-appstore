@@ -38,6 +38,8 @@ type Server struct {
 	refreshing        sync.Mutex
 	sdkDocsOnce  sync.Once
 	sdkDocsJSON  []byte
+	osTemplatesMu   sync.Mutex
+	osTemplatesJSON []byte
 }
 
 // Option configures the server.
@@ -173,6 +175,8 @@ func New(cfg *config.Config, cat *catalog.Catalog, eng *engine.Engine, spaFS fs.
 	mux.HandleFunc("GET /api/dev/apps/{id}/file", s.withDevMode(s.withAuth(s.handleDevGetFile)))
 	mux.HandleFunc("PUT /api/dev/apps/{id}/file", s.withDevMode(s.withAuth(s.handleDevSaveFile)))
 	mux.HandleFunc("DELETE /api/dev/apps/{id}/file", s.withDevMode(s.withAuth(s.handleDevDeleteFile)))
+	mux.HandleFunc("POST /api/dev/apps/{id}/file/rename", s.withDevMode(s.withAuth(s.handleDevRenameFile)))
+	mux.HandleFunc("POST /api/dev/apps/{id}/rename", s.withDevMode(s.withAuth(s.handleDevRenameApp)))
 	mux.HandleFunc("DELETE /api/dev/apps/{id}", s.withDevMode(s.withAuth(s.handleDevDeleteApp)))
 	mux.HandleFunc("POST /api/dev/apps/{id}/validate", s.withDevMode(s.withAuth(s.handleDevValidate)))
 	mux.HandleFunc("POST /api/dev/apps/{id}/deploy", s.withDevMode(s.withAuth(s.handleDevDeploy)))
@@ -187,6 +191,7 @@ func New(cfg *config.Config, cat *catalog.Catalog, eng *engine.Engine, spaFS fs.
 	mux.HandleFunc("POST /api/dev/import/zip", s.withDevMode(s.withAuth(s.handleDevImportZip)))
 	mux.HandleFunc("GET /api/dev/templates", s.withDevMode(s.handleDevListTemplates))
 	mux.HandleFunc("GET /api/dev/sdk-docs", s.withDevMode(s.handleDevSDKDocs))
+	mux.HandleFunc("GET /api/dev/ostemplates", s.withDevMode(s.handleDevListOSTemplates))
 
 	// API routes — developer stacks
 	mux.HandleFunc("GET /api/dev/stacks", s.withDevMode(s.withAuth(s.handleDevListStacks)))

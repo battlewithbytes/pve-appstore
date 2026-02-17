@@ -48,6 +48,7 @@ class ScriptAnalyzer(ast.NodeVisitor):
         self.input_keys = []
         self.method_calls = []
         self.unsafe_patterns = []
+        self.defined_methods = []
         self._in_class = False
 
     def visit_ImportFrom(self, node):
@@ -67,8 +68,10 @@ class ScriptAnalyzer(ast.NodeVisitor):
                 self.class_name = node.name
                 self._in_class = True
                 for item in node.body:
-                    if isinstance(item, ast.FunctionDef) and item.name == "install":
-                        self.has_install_method = True
+                    if isinstance(item, ast.FunctionDef):
+                        if item.name == "install":
+                            self.has_install_method = True
+                        self.defined_methods.append(item.name)
                 self.generic_visit(node)
                 self._in_class = False
                 return
@@ -149,6 +152,7 @@ def analyze(source, filename="<script>"):
         "input_keys": [],
         "method_calls": [],
         "unsafe_patterns": [],
+        "defined_methods": [],
         "error": None,
     }
     try:
@@ -167,6 +171,7 @@ def analyze(source, filename="<script>"):
     result["input_keys"] = analyzer.input_keys
     result["method_calls"] = analyzer.method_calls
     result["unsafe_patterns"] = analyzer.unsafe_patterns
+    result["defined_methods"] = analyzer.defined_methods
     return result
 
 

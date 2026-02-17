@@ -19,6 +19,8 @@ type DevService interface {
 	SaveFile(id, relPath string, data []byte) error
 	ReadFile(id, relPath string) ([]byte, error)
 	DeleteFile(id, relPath string) error
+	RenameFile(id, oldPath, newPath string) error
+	RenameApp(oldID, newID string) error
 	Delete(id string) error
 	SetStatus(id, status string) error
 	SetGitHubMeta(id string, meta map[string]string) error
@@ -72,6 +74,12 @@ func (s *defaultDevService) ReadFile(id, relPath string) ([]byte, error) {
 	return s.store.ReadFile(id, relPath)
 }
 func (s *defaultDevService) DeleteFile(id, relPath string) error { return s.store.DeleteFile(id, relPath) }
+func (s *defaultDevService) RenameFile(id, oldPath, newPath string) error {
+	return s.store.RenameFile(id, oldPath, newPath)
+}
+func (s *defaultDevService) RenameApp(oldID, newID string) error {
+	return s.store.RenameApp(oldID, newID)
+}
 func (s *defaultDevService) Delete(id string) error              { return s.store.Delete(id) }
 func (s *defaultDevService) SetStatus(id, status string) error { return s.store.SetStatus(id, status) }
 func (s *defaultDevService) SetGitHubMeta(id string, meta map[string]string) error {

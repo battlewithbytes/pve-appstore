@@ -1,114 +1,14 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { api } from './api'
 import { CodeEditor } from './CodeEditor'
-import type { DevApp, ValidationResult, ValidationMsg, PublishStatus } from './types'
+import type { DevApp, ValidationResult } from './types'
 import { DevStatusBadge, Center, BackLink } from './components/ui'
-import { useEscapeKey } from './hooks/useEscapeKey'
-
-// --- Structure/Outline parsing ---
-
-interface StructureItem {
-  label: string
-  line: number
-  depth: number
-}
-
-function parsePythonStructure(content: string): StructureItem[] {
-  const items: StructureItem[] = []
-  const lines = content.split('\n')
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i]
-    const classMatch = line.match(/^class\s+(\w+)/)
-    if (classMatch) {
-      items.push({ label: classMatch[1], line: i + 1, depth: 0 })
-      continue
-    }
-    const defMatch = line.match(/^(\s*)def\s+(\w+)/)
-    if (defMatch) {
-      const indent = defMatch[1].length
-      items.push({ label: defMatch[2], line: i + 1, depth: indent > 0 ? 1 : 0 })
-    }
-  }
-  return items
-}
-
-function parseYamlStructure(content: string): StructureItem[] {
-  const items: StructureItem[] = []
-  const lines = content.split('\n')
-  let inInputs = false
-  let inPermissions = false
-  let inLxcDefaults = false
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i]
-    // Top-level key (no leading whitespace, not a comment)
-    const topMatch = line.match(/^([a-zA-Z_][\w_]*):\s*/)
-    if (topMatch) {
-      items.push({ label: topMatch[1], line: i + 1, depth: 0 })
-      inInputs = topMatch[1] === 'inputs'
-      inPermissions = topMatch[1] === 'permissions'
-      inLxcDefaults = false
-      continue
-    }
-    // lxc.defaults sub-keys
-    if (line.match(/^\s+defaults:\s*$/)) {
-      items.push({ label: 'defaults', line: i + 1, depth: 1 })
-      inLxcDefaults = true
-      inInputs = false
-      inPermissions = false
-      continue
-    }
-    if (inLxcDefaults) {
-      const subMatch = line.match(/^\s{4,}(\w+):/)
-      if (subMatch) {
-        items.push({ label: subMatch[1], line: i + 1, depth: 2 })
-        continue
-      }
-      // End of defaults if we hit a non-indented or less-indented line
-      if (line.match(/^\S/) || (line.trim() && !line.match(/^\s{4}/))) {
-        inLxcDefaults = false
-      }
-    }
-    // Input items: "  - key: xxx"
-    if (inInputs) {
-      const inputMatch = line.match(/^\s+-\s+key:\s*(.+)/)
-      if (inputMatch) {
-        items.push({ label: inputMatch[1].trim(), line: i + 1, depth: 1 })
-        continue
-      }
-      // End of inputs section on new top-level key
-      if (line.match(/^[a-zA-Z]/)) inInputs = false
-    }
-    // Permission sub-keys
-    if (inPermissions) {
-      const permMatch = line.match(/^\s{2}(\w+):/)
-      if (permMatch) {
-        items.push({ label: permMatch[1], line: i + 1, depth: 1 })
-        continue
-      }
-      if (line.match(/^[a-zA-Z]/)) inPermissions = false
-    }
-  }
-  return items
-}
-
-function parseMarkdownStructure(content: string): StructureItem[] {
-  const items: StructureItem[] = []
-  const lines = content.split('\n')
-  for (let i = 0; i < lines.length; i++) {
-    const match = lines[i].match(/^(#{1,6})\s+(.+)/)
-    if (match) {
-      items.push({ label: match[2].trim(), line: i + 1, depth: match[1].length - 1 })
-    }
-  }
-  return items
-}
-
-function parseStructure(content: string, filename: string): StructureItem[] {
-  if (filename.endsWith('.py')) return parsePythonStructure(content)
-  if (filename.endsWith('.yml') || filename.endsWith('.yaml')) return parseYamlStructure(content)
-  if (filename.endsWith('.md')) return parseMarkdownStructure(content)
-  return []
-}
+import { parseStructure, StructurePanel } from './components/StructurePanel'
+import { SdkReferencePanel } from './components/SdkReferencePanel'
+import { YamlReferencePanel } from './components/YamlReferencePanel'
+import { DevSubmitDialog } from './components/DevSubmitDialog'
+import { DevValidationMsg } from './components/DevValidationMsg'
+import { FileTree } from './components/FileTree'
 
 function DevAppEditor({ id, requireAuth }: { id: string; requireAuth: (cb: () => void) => void }) {
   const [app, setApp] = useState<DevApp | null>(null)
@@ -127,13 +27,11 @@ function DevAppEditor({ id, requireAuth }: { id: string; requireAuth: (cb: () =>
   const [iconUrl, setIconUrl] = useState('')
   const [showIconInput, setShowIconInput] = useState(false)
   const [iconKey, setIconKey] = useState(0)
-  const [showNewFile, setShowNewFile] = useState(false)
-  const [newFileName, setNewFileName] = useState('')
   const [gotoLine, setGotoLine] = useState(0)
-  const [showAddMenu, setShowAddMenu] = useState(false)
-  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; file: string } | null>(null)
-  const uploadInputRef = useRef<HTMLInputElement>(null)
-  const uploadModeRef = useRef<'general' | 'icon'>('general')
+  const iconUploadRef = useRef<HTMLInputElement>(null)
+
+  const protectedFiles = useMemo(() => new Set(['app.yml', 'provision/install.py']), [])
+  const coreFileSet = useMemo(() => new Set(['app.yml', 'provision/install.py', 'README.md', 'icon.png']), [])
 
   const navigateToFile = useCallback((file: string, search?: string) => {
     setActiveFile(file)
@@ -153,7 +51,6 @@ function DevAppEditor({ id, requireAuth }: { id: string; requireAuth: (cb: () =>
 
   const handleGotoLine = useCallback((file: string, line: number) => {
     setActiveFile(file)
-    // Add tiny random offset so repeated clicks to the same line still trigger
     setGotoLine(line + Math.random() * 0.001)
   }, [])
 
@@ -178,7 +75,6 @@ function DevAppEditor({ id, requireAuth }: { id: string; requireAuth: (cb: () =>
   const dirtyRef = useRef(false)
   dirtyRef.current = isDirty
 
-  // Warn on browser refresh / tab close
   useEffect(() => {
     const handler = (e: BeforeUnloadEvent) => {
       if (dirtyRef.current) e.preventDefault()
@@ -187,7 +83,6 @@ function DevAppEditor({ id, requireAuth }: { id: string; requireAuth: (cb: () =>
     return () => window.removeEventListener('beforeunload', handler)
   }, [])
 
-  // Warn on in-app navigation (back button, link clicks)
   useEffect(() => {
     const editorHash = `#/dev/${id}`
     const handler = () => {
@@ -209,7 +104,6 @@ function DevAppEditor({ id, requireAuth }: { id: string; requireAuth: (cb: () =>
         if (file === 'app.yml') await api.devSaveManifest(id, content)
         else if (file === 'provision/install.py') await api.devSaveScript(id, content)
         else await api.devSaveFile(id, file, content)
-        // Update saved baseline so dirty check reflects the save
         setApp(prev => {
           if (!prev) return prev
           if (file === 'app.yml') return { ...prev, manifest: content }
@@ -229,7 +123,6 @@ function DevAppEditor({ id, requireAuth }: { id: string; requireAuth: (cb: () =>
   const handleValidate = () => {
     requireAuth(async () => {
       try {
-        // Save all files before validating
         await api.devSaveManifest(id, manifest)
         await api.devSaveScript(id, script)
         if (readme) await api.devSaveFile(id, 'README.md', readme)
@@ -245,7 +138,6 @@ function DevAppEditor({ id, requireAuth }: { id: string; requireAuth: (cb: () =>
     requireAuth(async () => {
       setDeploying(true)
       try {
-        // Save all files before deploying
         await api.devSaveManifest(id, manifest)
         await api.devSaveScript(id, script)
         if (readme) await api.devSaveFile(id, 'README.md', readme)
@@ -289,25 +181,12 @@ function DevAppEditor({ id, requireAuth }: { id: string; requireAuth: (cb: () =>
         await api.devSetIcon(id, iconUrl.trim())
         setIconUrl('')
         setShowIconInput(false)
-        setIconKey(k => k + 1) // bust cache
+        setIconKey(k => k + 1)
       } catch (e: unknown) {
         alert(e instanceof Error ? e.message : 'Failed to set icon')
       }
     })
   }
-
-  const coreFileSet = useMemo(() => new Set(['app.yml', 'provision/install.py', 'README.md', 'icon.png']), [])
-  const protectedFiles = useMemo(() => new Set(['app.yml', 'provision/install.py']), [])
-  const hasIcon = useMemo(() => !!(app?.files || []).find(f => f.path === 'icon.png'), [app])
-  const allFiles = useMemo(() => {
-    if (!app) return ['app.yml', 'provision/install.py', 'README.md']
-    const core = ['app.yml', 'provision/install.py']
-    const extra = (app.files || [])
-      .filter(f => !f.is_dir && !coreFileSet.has(f.path) && !f.path.startsWith('.') && !f.path.endsWith('.png') && !f.path.endsWith('.jpg') && !f.path.endsWith('.ico'))
-      .map(f => f.path)
-      .sort()
-    return [...core, ...extra, 'README.md', ...(hasIcon ? ['icon.png'] : [])]
-  }, [app, coreFileSet, hasIcon])
 
   const selectFile = useCallback(async (f: string) => {
     setActiveFile(f)
@@ -350,19 +229,16 @@ function DevAppEditor({ id, requireAuth }: { id: string; requireAuth: (cb: () =>
         await api.devDeleteFile(id, filePath)
         setSaveMsg('Deleted')
         setTimeout(() => setSaveMsg(''), 1500)
-        // Clean up local state
         setExtraFiles(prev => {
           const next = { ...prev }
           delete next[filePath]
           return next
         })
-        // Re-fetch app to refresh file list
         const updated = await api.devGetApp(id)
         setApp(updated)
         setManifest(updated.manifest)
         setScript(updated.script)
         setReadme(updated.readme)
-        // Switch to app.yml if deleted the active file
         if (activeFile === filePath) setActiveFile('app.yml')
       } catch (e: unknown) {
         alert(e instanceof Error ? e.message : 'Delete failed')
@@ -370,12 +246,92 @@ function DevAppEditor({ id, requireAuth }: { id: string; requireAuth: (cb: () =>
     })
   }, [id, requireAuth, activeFile, protectedFiles])
 
-  const handleContextMenu = useCallback((e: React.MouseEvent, file: string) => {
-    e.preventDefault()
-    setContextMenu({ x: e.clientX, y: e.clientY, file })
-  }, [])
+  const handleRenameFile = useCallback((oldPath: string, newPath: string) => {
+    requireAuth(async () => {
+      try {
+        await api.devRenameFile(id, oldPath, newPath)
+        setSaveMsg('Renamed')
+        setTimeout(() => setSaveMsg(''), 1500)
+        // Fetch content at the new path to ensure editor shows it
+        let content = ''
+        if (!coreFileSet.has(newPath)) {
+          try { content = (await api.devGetFile(id, newPath)).content } catch { /* empty */ }
+        }
+        setExtraFiles(prev => {
+          const next = { ...prev }
+          delete next[oldPath]
+          if (!coreFileSet.has(newPath)) next[newPath] = content
+          return next
+        })
+        const updated = await api.devGetApp(id)
+        setApp(updated)
+        setManifest(updated.manifest)
+        setScript(updated.script)
+        setReadme(updated.readme)
+        setActiveFile(newPath)
+      } catch (e: unknown) {
+        alert(e instanceof Error ? e.message : 'Rename failed')
+      }
+    })
+  }, [id, requireAuth, coreFileSet])
 
-  const dismissContextMenu = useCallback(() => setContextMenu(null), [])
+  const handleMoveFile = useCallback((filePath: string, targetDir: string) => {
+    const fileName = filePath.includes('/') ? filePath.split('/').pop()! : filePath
+    const newPath = targetDir ? `${targetDir}/${fileName}` : fileName
+    if (newPath === filePath) return
+    requireAuth(async () => {
+      try {
+        await api.devRenameFile(id, filePath, newPath)
+        setSaveMsg('Moved')
+        setTimeout(() => setSaveMsg(''), 1500)
+        // Fetch content at the new path to ensure editor shows it
+        let content = ''
+        if (!coreFileSet.has(newPath)) {
+          try { content = (await api.devGetFile(id, newPath)).content } catch { /* empty */ }
+        }
+        setExtraFiles(prev => {
+          const next = { ...prev }
+          delete next[filePath]
+          if (!coreFileSet.has(newPath)) next[newPath] = content
+          return next
+        })
+        const updated = await api.devGetApp(id)
+        setApp(updated)
+        setManifest(updated.manifest)
+        setScript(updated.script)
+        setReadme(updated.readme)
+        setActiveFile(newPath)
+      } catch (e: unknown) {
+        alert(e instanceof Error ? e.message : 'Move failed')
+      }
+    })
+  }, [id, requireAuth, coreFileSet])
+
+  const handleNewFile = useCallback(async (name: string) => {
+    try {
+      await api.devSaveFile(id, name, '')
+      setExtraFiles(prev => ({ ...prev, [name]: '' }))
+      const updated = await api.devGetApp(id)
+      setApp(updated)
+      setActiveFile(name)
+    } catch (err) {
+      alert(err instanceof Error ? err.message : 'Failed to create file')
+    }
+  }, [id])
+
+  const handleUploadIcon = useCallback((file: File) => {
+    requireAuth(async () => {
+      try {
+        const result = await api.devUploadFile(id, 'icon.png', file)
+        setSaveMsg(result.resized ? 'Icon uploaded (resized)' : 'Icon uploaded')
+        setTimeout(() => setSaveMsg(''), 2000)
+        setIconKey(k => k + 1)
+        const updated = await api.devGetApp(id)
+        setApp(updated)
+        setActiveFile('icon.png')
+      } catch (err: unknown) { alert(err instanceof Error ? err.message : 'Upload failed') }
+    })
+  }, [id, requireAuth])
 
   const currentContent = activeFile === 'app.yml' ? manifest : activeFile === 'provision/install.py' ? script : activeFile === 'README.md' ? readme : (extraFiles[activeFile] ?? '')
   const structureItems = useMemo(() => parseStructure(currentContent, activeFile), [currentContent, activeFile])
@@ -417,6 +373,7 @@ function DevAppEditor({ id, requireAuth }: { id: string; requireAuth: (cb: () =>
           <button onClick={() => { setShowSdkRef(!showSdkRef); if (!showSdkRef) setShowYamlRef(false) }} className={`bg-transparent border rounded px-3 py-1.5 text-xs font-mono cursor-pointer transition-colors ${showSdkRef ? 'border-primary text-primary' : 'border-border text-text-secondary hover:border-primary hover:text-primary'}`}>SDK Ref</button>
           <button onClick={() => setShowSubmit(true)} className="bg-transparent border border-border rounded px-3 py-1.5 text-xs font-mono text-text-secondary cursor-pointer hover:border-primary hover:text-primary transition-colors">Publish</button>
           {app.status === 'deployed' && <a href={`#/app/${app.id}?testInstall=1`} className="bg-transparent border border-primary rounded px-3 py-1.5 text-xs font-mono text-primary no-underline hover:bg-primary/10 transition-colors">Test Install</a>}
+          <button onClick={() => { requireAuth(async () => { const newId = prompt('New app ID:', id); if (!newId || newId === id) return; try { await api.devRenameApp(id, newId); window.location.hash = `#/dev/${newId}` } catch (e: unknown) { alert(e instanceof Error ? e.message : 'Rename failed') } }) }} className="bg-transparent border border-border rounded px-3 py-1.5 text-xs font-mono text-text-secondary cursor-pointer hover:border-primary hover:text-primary transition-colors">Rename</button>
           <button onClick={() => { requireAuth(async () => { if (!confirm(`Delete "${app.name || id}"? This cannot be undone.`)) return; try { await api.devDeleteApp(id); window.location.hash = '#/developer' } catch (e: unknown) { alert(e instanceof Error ? e.message : 'Failed') } }) }} className="bg-transparent border border-red-500/50 rounded px-3 py-1.5 text-xs font-mono text-red-400 cursor-pointer hover:border-red-500 hover:bg-red-500/10 transition-colors">Delete</button>
         </div>
       </div>
@@ -437,168 +394,35 @@ function DevAppEditor({ id, requireAuth }: { id: string; requireAuth: (cb: () =>
         </div>
       )}
 
-      {/* Context menu overlay */}
-      {contextMenu && (
-        <>
-          <div className="fixed inset-0 z-40" onClick={dismissContextMenu} onContextMenu={e => { e.preventDefault(); dismissContextMenu() }} />
-          <div className="fixed z-50 bg-bg-card border border-border rounded-lg shadow-lg overflow-hidden min-w-[140px]" style={{ left: contextMenu.x, top: contextMenu.y }}>
-            {!protectedFiles.has(contextMenu.file) && (
-              <button
-                className="w-full text-left px-3 py-2 text-xs font-mono text-red-400 hover:bg-red-500/10 cursor-pointer transition-colors"
-                onClick={() => { dismissContextMenu(); handleDeleteFile(contextMenu.file) }}
-              >Delete</button>
-            )}
-            {contextMenu.file === 'icon.png' && (
-              <button
-                className="w-full text-left px-3 py-2 text-xs font-mono text-text-secondary hover:bg-white/5 hover:text-text-primary cursor-pointer transition-colors border-t border-border"
-                onClick={() => { dismissContextMenu(); uploadModeRef.current = 'icon'; uploadInputRef.current?.click() }}
-              >Replace</button>
-            )}
-            <button
-              className="w-full text-left px-3 py-2 text-xs font-mono text-text-secondary hover:bg-white/5 hover:text-text-primary cursor-pointer transition-colors border-t border-border"
-              onClick={() => { dismissContextMenu(); setShowNewFile(true); setNewFileName('') }}
-            >New file</button>
-            <button
-              className="w-full text-left px-3 py-2 text-xs font-mono text-text-secondary hover:bg-white/5 hover:text-text-primary cursor-pointer transition-colors border-t border-border"
-              onClick={() => { dismissContextMenu(); uploadModeRef.current = 'general'; uploadInputRef.current?.click() }}
-            >Upload file</button>
-          </div>
-        </>
-      )}
+      {/* Hidden input for icon upload from preview */}
+      <input
+        ref={iconUploadRef}
+        type="file"
+        className="hidden"
+        onChange={e => {
+          const f = e.target.files?.[0]
+          if (f) handleUploadIcon(f)
+          e.target.value = ''
+        }}
+      />
 
       {/* Main editor area */}
       <div className="flex gap-4" style={{ height: 'calc(100vh - 280px)' }}>
         {/* File tree + Structure */}
         <div className="w-[20%] min-w-48 border border-border rounded-lg overflow-hidden shrink-0 flex flex-col">
-          <div className="bg-bg-card px-3 py-2 border-b border-border flex items-center justify-between">
-            <span className="text-xs text-text-muted font-mono uppercase">Files</span>
-            <div className="relative">
-              <button
-                onClick={() => setShowAddMenu(!showAddMenu)}
-                className="text-text-muted hover:text-primary text-sm font-mono cursor-pointer transition-colors leading-none"
-                title="Add file"
-              >+</button>
-              {showAddMenu && (
-                <>
-                  <div className="fixed inset-0 z-10" onClick={() => setShowAddMenu(false)} />
-                  <div className="absolute right-0 top-full mt-1 z-20 bg-bg-card border border-border rounded-lg shadow-lg overflow-hidden min-w-[120px]">
-                    <button
-                      className="w-full text-left px-3 py-2 text-xs font-mono text-text-secondary hover:bg-white/5 hover:text-text-primary cursor-pointer transition-colors"
-                      onClick={() => { setShowAddMenu(false); setShowNewFile(true); setNewFileName('') }}
-                    >New file</button>
-                    <button
-                      className="w-full text-left px-3 py-2 text-xs font-mono text-text-secondary hover:bg-white/5 hover:text-text-primary cursor-pointer transition-colors border-t border-border"
-                      onClick={() => { setShowAddMenu(false); uploadModeRef.current = 'general'; uploadInputRef.current?.click() }}
-                    >Upload file</button>
-                  </div>
-                </>
-              )}
-            </div>
-            <input
-              ref={uploadInputRef}
-              type="file"
-              className="hidden"
-              onChange={e => {
-                const f = e.target.files?.[0]
-                if (f) {
-                  if (uploadModeRef.current === 'icon') {
-                    requireAuth(async () => {
-                      try {
-                        const result = await api.devUploadFile(id, 'icon.png', f)
-                        setSaveMsg(result.resized ? 'Icon uploaded (resized)' : 'Icon uploaded')
-                        setTimeout(() => setSaveMsg(''), 2000)
-                        setIconKey(k => k + 1)
-                        const updated = await api.devGetApp(id)
-                        setApp(updated)
-                        setActiveFile('icon.png')
-                      } catch (err: unknown) { alert(err instanceof Error ? err.message : 'Upload failed') }
-                    })
-                  } else {
-                    handleUploadFile(f)
-                  }
-                }
-                e.target.value = ''
-              }}
-            />
-          </div>
-          <div
-            className="p-1 flex-1 min-h-0 overflow-y-auto"
-            onContextMenu={e => {
-              // Right-click on empty space in file panel
-              if (e.target === e.currentTarget) {
-                e.preventDefault()
-                setContextMenu({ x: e.clientX, y: e.clientY, file: '' })
-              }
-            }}
-          >
-            {allFiles.map(f => (
-              <button
-                key={f}
-                onClick={() => selectFile(f)}
-                onContextMenu={e => handleContextMenu(e, f)}
-                className={`w-full text-left px-3 py-1.5 text-xs font-mono rounded cursor-pointer transition-colors ${activeFile === f ? 'bg-primary/10 text-primary' : 'text-text-secondary hover:text-text-primary hover:bg-white/5'}`}
-              >
-                {f}
-              </button>
-            ))}
-            {showNewFile && (
-              <form
-                className="px-1 py-1"
-                onSubmit={async (e) => {
-                  e.preventDefault()
-                  const name = newFileName.trim()
-                  if (!name) return
-                  try {
-                    await api.devSaveFile(id, name, '')
-                    setExtraFiles(prev => ({ ...prev, [name]: '' }))
-                    setShowNewFile(false)
-                    setNewFileName('')
-                    // Re-fetch app to refresh file list
-                    const updated = await api.devGetApp(id)
-                    setApp(updated)
-                    setActiveFile(name)
-                  } catch (err) {
-                    alert(err instanceof Error ? err.message : 'Failed to create file')
-                  }
-                }}
-              >
-                <input
-                  autoFocus
-                  value={newFileName}
-                  onChange={e => setNewFileName(e.target.value)}
-                  onBlur={() => { if (!newFileName.trim()) setShowNewFile(false) }}
-                  placeholder="filename..."
-                  className="w-full bg-bg-primary border border-primary rounded px-2 py-1 text-xs font-mono text-text-primary outline-none"
-                  onKeyDown={e => { if (e.key === 'Escape') setShowNewFile(false) }}
-                />
-              </form>
-            )}
-          </div>
-          {/* Structure panel */}
-          <div className="border-t border-border flex flex-col flex-1 min-h-0">
-            <div className="bg-bg-card px-3 py-2 border-b border-border">
-              <span className="text-xs text-text-muted font-mono uppercase">Structure</span>
-            </div>
-            <div className="p-1 flex-1 min-h-0 overflow-y-auto">
-              {structureItems.length > 0 ? structureItems.map((item, i) => {
-                const depthColors = ['text-primary', 'text-blue-400', 'text-purple-400']
-                const color = depthColors[Math.min(item.depth, depthColors.length - 1)]
-                return (
-                  <button
-                    key={i}
-                    onClick={() => handleGotoLine(activeFile, item.line)}
-                    className={`w-full text-left px-2 py-0.5 text-[11px] font-mono rounded cursor-pointer transition-colors hover:bg-white/5 flex items-center justify-between gap-1 group ${color}`}
-                    style={{ paddingLeft: `${8 + item.depth * 12}px` }}
-                  >
-                    <span className="truncate">{item.label}</span>
-                    <span className="text-text-muted text-[10px] opacity-0 group-hover:opacity-100 shrink-0">{item.line}</span>
-                  </button>
-                )
-              }) : (
-                <span className="text-[11px] text-text-muted font-mono px-2 py-2 block">No structure available</span>
-              )}
-            </div>
-          </div>
+          <FileTree
+            files={app.files || []}
+            activeFile={activeFile}
+            protectedFiles={protectedFiles}
+            onSelectFile={selectFile}
+            onDeleteFile={handleDeleteFile}
+            onRenameFile={handleRenameFile}
+            onMoveFile={handleMoveFile}
+            onNewFile={handleNewFile}
+            onUploadFile={handleUploadFile}
+            onUploadIcon={handleUploadIcon}
+          />
+          <StructurePanel items={structureItems} activeFile={activeFile} onGotoLine={handleGotoLine} />
         </div>
 
         {/* Editor / Icon Preview */}
@@ -628,7 +452,7 @@ function DevAppEditor({ id, requireAuth }: { id: string; requireAuth: (cb: () =>
               />
               <span className="text-xs text-text-muted font-mono">256x256 max &middot; PNG or JPEG</span>
               <button
-                onClick={() => { uploadModeRef.current = 'icon'; uploadInputRef.current?.click() }}
+                onClick={() => iconUploadRef.current?.click()}
                 className="bg-primary text-bg-primary rounded px-4 py-2 text-xs font-mono font-bold cursor-pointer hover:opacity-90"
               >Replace Icon</button>
             </div>
@@ -683,364 +507,6 @@ function DevAppEditor({ id, requireAuth }: { id: string; requireAuth: (cb: () =>
       {showSubmit && <DevSubmitDialog id={id} appName={app.name || app.id} onClose={() => setShowSubmit(false)} requireAuth={requireAuth} />}
     </div>
   )
-}
-
-const sdkReference = [
-  { group: 'Package Management', methods: [
-    { name: 'self.pkg_install(*packages)', desc: 'OS-aware install: apt on Debian, apk on Alpine' },
-    { name: 'self.apt_install(*packages)', desc: 'Install apt packages (Debian only)' },
-    { name: 'self.pip_install(*packages, venv?)', desc: 'Install pip packages in venv (default /opt/venv)' },
-    { name: 'self.create_venv(path)', desc: 'Create a Python virtual environment' },
-    { name: 'self.add_apt_key(url, keyring_path)', desc: 'Download GPG key; auto-dearmors for .gpg extension' },
-    { name: 'self.add_apt_repo(repo_line, filename)', desc: 'Add APT repository source line to file' },
-    { name: 'self.add_apt_repository(repo_url, key_url, name?, ...)', desc: 'Add repo + key in one call with signed-by' },
-    { name: 'self.pull_oci_binary(image, dest, tag?)', desc: 'Download binary from Docker/OCI image without Docker' },
-  ]},
-  { group: 'File Operations', methods: [
-    { name: 'self.write_config(path, template, **vars)', desc: 'Write config file with $var and {{#cond}} templates' },
-    { name: 'self.render_template(name, dest, **vars)', desc: 'Render a template file from provision/ directory' },
-    { name: 'self.provision_file(name)', desc: 'Read a file from provision/ dir, return contents' },
-    { name: 'self.deploy_provision_file(name, dest, mode?)', desc: 'Copy file from provision/ dir to destination' },
-    { name: 'self.write_env_file(path, env_dict, mode?)', desc: 'Write KEY=VALUE env file, skips None/empty values' },
-    { name: 'self.create_dir(path, owner?, mode?)', desc: 'Create directory with optional ownership and mode' },
-    { name: 'self.chown(path, owner, recursive?)', desc: 'Change file/directory ownership' },
-    { name: 'self.download(url, dest)', desc: 'Download a file from URL to destination path' },
-  ]},
-  { group: 'Service Management', methods: [
-    { name: 'self.create_service(name, exec_start, ...)', desc: 'Create, enable & start a systemd/OpenRC service' },
-    { name: 'self.enable_service(name)', desc: 'Enable and start an existing service' },
-    { name: 'self.restart_service(name)', desc: 'Restart a service' },
-  ]},
-  { group: 'Commands & System', methods: [
-    { name: 'self.run_command(cmd, check?, input_text?)', desc: 'Run a command list, raises on non-zero by default' },
-    { name: 'self.run_installer_script(url)', desc: 'Download and execute an installer script' },
-    { name: 'self.sysctl(settings)', desc: 'Apply sysctl settings persistently' },
-    { name: 'self.disable_ipv6()', desc: 'Disable IPv6 system-wide via sysctl' },
-    { name: 'self.wait_for_http(url, timeout?, interval?)', desc: 'Poll URL until HTTP 200 (default 60s timeout)' },
-  ]},
-  { group: 'User Management', methods: [
-    { name: 'self.create_user(name, system?, home?, shell?)', desc: 'Create user: useradd on Debian, adduser on Alpine' },
-  ]},
-  { group: 'Advanced', methods: [
-    { name: 'self.status_page(port, title, api_url, fields)', desc: 'Deploy a status page server with CCO theme' },
-  ]},
-  { group: 'Inputs', methods: [
-    { name: 'self.inputs.string(key, default?)', desc: 'Get string input value' },
-    { name: 'self.inputs.integer(key, default?)', desc: 'Get integer input value' },
-    { name: 'self.inputs.boolean(key, default?)', desc: 'Get boolean input value' },
-    { name: 'self.inputs.secret(key)', desc: 'Get secret input value (not logged)' },
-  ]},
-  { group: 'Logging & Outputs', methods: [
-    { name: 'self.log.info(message)', desc: 'Log info message to job output' },
-    { name: 'self.log.warn(message)', desc: 'Log warning message' },
-    { name: 'self.log.error(message)', desc: 'Log error message' },
-    { name: 'self.log.output(key, value)', desc: 'Emit a key-value output (shown in UI)' },
-  ]},
-]
-
-function SdkReferencePanel() {
-  return (
-    <div className="border border-border rounded-lg mt-4 overflow-hidden">
-      <div className="bg-bg-card px-4 py-2 border-b border-border">
-        <span className="text-xs text-text-muted font-mono uppercase">Python SDK Reference</span>
-      </div>
-      <div className="p-4 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 max-h-64 overflow-y-auto">
-        {sdkReference.map(group => (
-          <div key={group.group}>
-            <h4 className="text-xs font-mono text-primary font-bold mb-1">{group.group}</h4>
-            {group.methods.map(m => (
-              <div key={m.name} className="mb-1.5">
-                <code className="text-xs font-mono text-text-primary">{m.name}</code>
-                <p className="text-xs text-text-muted mt-0.5">{m.desc}</p>
-              </div>
-            ))}
-          </div>
-        ))}
-      </div>
-    </div>
-  )
-}
-
-const yamlReference = [
-  { group: 'Top-Level (required)', fields: [
-    { name: 'id', type: 'string', desc: 'Unique kebab-case identifier (e.g. my-app)' },
-    { name: 'name', type: 'string', desc: 'Display name shown in the catalog' },
-    { name: 'description', type: 'string', desc: 'Short one-line description' },
-    { name: 'version', type: 'string', desc: 'App version (e.g. "1.0.0")' },
-    { name: 'categories', type: 'string[]', desc: 'At least one: development, media, network, etc.' },
-  ]},
-  { group: 'Top-Level (optional)', fields: [
-    { name: 'overview', type: 'string', desc: 'Multi-line markdown overview (use | for block)' },
-    { name: 'tags', type: 'string[]', desc: 'Search tags (e.g. git, ci-cd, docker)' },
-    { name: 'homepage', type: 'string', desc: 'URL to project homepage' },
-    { name: 'license', type: 'string', desc: 'License identifier (e.g. MIT, GPL-3.0)' },
-    { name: 'official', type: 'bool', desc: 'Maintained by the app store team' },
-    { name: 'featured', type: 'bool', desc: 'Show in featured section' },
-    { name: 'maintainers', type: 'string[]', desc: 'List of maintainer names' },
-  ]},
-  { group: 'lxc (required)', fields: [
-    { name: 'ostemplate', type: 'string', desc: 'Template name (e.g. ubuntu-24.04, debian-12, alpine-3.21)' },
-    { name: 'defaults.unprivileged', type: 'bool', desc: 'true recommended; false for special needs' },
-    { name: 'defaults.cores', type: 'int', desc: 'CPU cores (min 1)' },
-    { name: 'defaults.memory_mb', type: 'int', desc: 'RAM in MB (min 128)' },
-    { name: 'defaults.disk_gb', type: 'int', desc: 'Root disk in GB (min 1)' },
-    { name: 'defaults.features', type: 'string[]', desc: 'LXC features: nesting, keyctl, fuse' },
-    { name: 'defaults.onboot', type: 'bool', desc: 'Start container on host boot' },
-    { name: 'extra_config', type: 'string[]', desc: 'Raw lxc.* config lines appended to CT conf' },
-  ]},
-  { group: 'inputs[]', fields: [
-    { name: 'key', type: 'string', desc: 'Unique key used in install.py via self.inputs' },
-    { name: 'label', type: 'string', desc: 'Display label in the install form' },
-    { name: 'type', type: 'string', desc: 'string | number | boolean | secret | select' },
-    { name: 'default', type: 'any', desc: 'Default value (type-appropriate)' },
-    { name: 'required', type: 'bool', desc: 'Must be provided at install time' },
-    { name: 'reconfigurable', type: 'bool', desc: 'Can be changed post-install via reconfigure' },
-    { name: 'group', type: 'string', desc: 'Group inputs visually (e.g. General, Network)' },
-    { name: 'description', type: 'string', desc: 'Short description below the input' },
-    { name: 'help', type: 'string', desc: 'Tooltip/help text' },
-    { name: 'validation.regex', type: 'string', desc: 'Regex pattern to validate string input' },
-    { name: 'validation.min / max', type: 'number', desc: 'Min/max for number inputs' },
-    { name: 'validation.min_length / max_length', type: 'int', desc: 'String length constraints' },
-    { name: 'validation.enum', type: 'string[]', desc: 'Allowed values for select type' },
-    { name: 'show_when.input', type: 'string', desc: 'Key of another input to check' },
-    { name: 'show_when.values', type: 'string[]', desc: 'Show only when input matches one of these' },
-  ]},
-  { group: 'volumes[]', fields: [
-    { name: 'name', type: 'string', desc: 'Unique volume name (e.g. data, config)' },
-    { name: 'type', type: 'string', desc: 'volume (managed disk) or bind (host path)' },
-    { name: 'mount_path', type: 'string', desc: 'Absolute path inside the container' },
-    { name: 'size_gb', type: 'int', desc: 'Size in GB (type=volume only, min 1)' },
-    { name: 'label', type: 'string', desc: 'Display label in the install form' },
-    { name: 'default_host_path', type: 'string', desc: 'Suggested host path (type=bind only)' },
-    { name: 'required', type: 'bool', desc: 'Volume must be configured at install' },
-    { name: 'read_only', type: 'bool', desc: 'Mount as read-only' },
-    { name: 'description', type: 'string', desc: 'Description shown in the install form' },
-  ]},
-  { group: 'gpu', fields: [
-    { name: 'required', type: 'bool', desc: 'true = fail if no GPU; false = optional' },
-    { name: 'supported', type: 'string[]', desc: 'GPU vendors: nvidia, intel, amd' },
-    { name: 'profiles', type: 'string[]', desc: 'Device profiles: nvidia-basic, dri-render' },
-    { name: 'notes', type: 'string', desc: 'Shown to user in install form' },
-  ]},
-  { group: 'provisioning', fields: [
-    { name: 'script', type: 'string', desc: 'Path to install script (e.g. provision/install.py)' },
-    { name: 'timeout_sec', type: 'int', desc: 'Max provision time (default: 600)' },
-    { name: 'env', type: 'map', desc: 'Extra env vars passed to the script' },
-  ]},
-  { group: 'permissions', fields: [
-    { name: 'packages', type: 'string[]', desc: 'Allowed apt/apk packages' },
-    { name: 'pip', type: 'string[]', desc: 'Allowed pip packages' },
-    { name: 'urls', type: 'string[]', desc: 'Allowed URLs for downloads (supports *)' },
-    { name: 'apt_repos', type: 'string[]', desc: 'Allowed APT repository URLs' },
-    { name: 'installer_scripts', type: 'string[]', desc: 'Allowed installer script URLs' },
-    { name: 'paths', type: 'string[]', desc: 'Allowed filesystem path prefixes' },
-    { name: 'commands', type: 'string[]', desc: 'Allowed binary names (supports *)' },
-    { name: 'services', type: 'string[]', desc: 'Allowed systemd service names' },
-    { name: 'users', type: 'string[]', desc: 'Allowed usernames for create_user()' },
-  ]},
-  { group: 'outputs[]', fields: [
-    { name: 'key', type: 'string', desc: 'Unique output key' },
-    { name: 'label', type: 'string', desc: 'Display label (e.g. Web UI, Admin Password)' },
-    { name: 'value', type: 'string', desc: 'Template: http://{{ip}}:{{port}} or {{input_key}}' },
-  ]},
-]
-
-function YamlReferencePanel() {
-  return (
-    <div className="border border-border rounded-lg mt-4 overflow-hidden">
-      <div className="bg-bg-card px-4 py-2 border-b border-border">
-        <span className="text-xs text-text-muted font-mono uppercase">app.yml Manifest Reference</span>
-      </div>
-      <div className="p-4 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 max-h-[400px] overflow-y-auto">
-        {yamlReference.map(group => (
-          <div key={group.group}>
-            <h4 className="text-xs font-mono text-primary font-bold mb-1">{group.group}</h4>
-            {group.fields.map(f => (
-              <div key={f.name} className="mb-1.5">
-                <div className="flex items-baseline gap-1.5">
-                  <code className="text-xs font-mono text-text-primary">{f.name}</code>
-                  <span className="text-[10px] font-mono text-text-muted">{f.type}</span>
-                </div>
-                <p className="text-xs text-text-muted mt-0.5">{f.desc}</p>
-              </div>
-            ))}
-          </div>
-        ))}
-      </div>
-    </div>
-  )
-}
-
-function DevSubmitDialog({ id, appName, onClose, requireAuth, isStack }: { id: string; appName: string; onClose: () => void; requireAuth: (cb: () => void) => void; isStack?: boolean }) {
-  useEscapeKey(onClose)
-  const [publishStatus, setPublishStatus] = useState<PublishStatus | null>(null)
-  const [loading, setLoading] = useState(true)
-  const [publishing, setPublishing] = useState(false)
-  const [prUrl, setPrUrl] = useState('')
-  const [publishAction, setPublishAction] = useState<'created' | 'updated' | ''>('')
-  const [error, setError] = useState('')
-
-  useEffect(() => {
-    const fetchStatus = isStack ? api.devStackPublishStatus(id) : api.devPublishStatus(id)
-    fetchStatus
-      .then(s => { setPublishStatus(s); if (s.pr_url) setPrUrl(s.pr_url) })
-      .catch(() => {})
-      .finally(() => setLoading(false))
-  }, [id, isStack])
-
-  const handlePublish = () => {
-    requireAuth(async () => {
-      setPublishing(true)
-      setError('')
-      try {
-        const result = isStack ? await api.devPublishStack(id) : await api.devPublish(id)
-        setPrUrl(result.pr_url)
-        setPublishAction((result.action as 'created' | 'updated') || 'created')
-      } catch (e: unknown) {
-        setError(e instanceof Error ? e.message : 'Publish failed')
-      }
-      setPublishing(false)
-    })
-  }
-
-  const handleExportFallback = () => {
-    requireAuth(() => {
-      const form = document.createElement('form')
-      form.method = 'POST'
-      form.action = isStack ? api.devExportStackUrl(id) : api.devExportUrl(id)
-      form.target = '_blank'
-      document.body.appendChild(form)
-      form.submit()
-      document.body.removeChild(form)
-
-      const kind = isStack ? 'Stack' : 'App'
-      const title = encodeURIComponent(`New ${kind}: ${appName}`)
-      const body = encodeURIComponent(`## ${kind} Submission\n\n**${kind} ID:** ${id}\n**${kind} Name:** ${appName}\n\nPlease attach the exported zip file to this issue.`)
-      window.open(`https://github.com/battlewithbytes/pve-appstore-catalog/issues/new?title=${title}&body=${body}`, '_blank')
-      onClose()
-    })
-  }
-
-  const checkLabels: Record<string, string> = {
-    github_connected: 'GitHub connected',
-    validation_passed: 'Manifest validates',
-    test_installed: 'Test install exists',
-    apps_published: 'All apps published',
-  }
-
-  return (
-    <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50" onClick={onClose}>
-      <div className="bg-bg-card border border-border rounded-lg p-6 w-full max-w-lg" onClick={(e) => e.stopPropagation()}>
-        <h3 className="text-lg font-bold text-text-primary font-mono mb-4">Submit to Catalog</h3>
-
-        {prUrl ? (
-          <div>
-            <div className="flex items-center gap-2 mb-4">
-              <span className="text-primary text-lg">[OK]</span>
-              <span className="text-sm font-mono text-text-primary">{publishAction === 'updated' ? 'Pull request updated!' : 'Pull request created!'}</span>
-              {publishStatus?.pr_state && <PRStateBadge state={publishStatus.pr_state} />}
-            </div>
-            <a href={prUrl} target="_blank" rel="noopener noreferrer" className="text-sm font-mono text-primary underline break-all">{prUrl}</a>
-            <div className="flex justify-end mt-4">
-              <button onClick={onClose} className="bg-primary text-bg-primary rounded px-4 py-2 text-sm font-mono font-bold cursor-pointer hover:opacity-90">Done</button>
-            </div>
-          </div>
-        ) : loading ? (
-          <p className="text-text-muted font-mono text-sm">Checking publish readiness...</p>
-        ) : (
-          <div>
-            {publishStatus && (
-              <div className="mb-4">
-                <span className="text-xs text-text-muted font-mono uppercase mb-2 block">Publish Checklist</span>
-                {Object.entries(publishStatus.checks).map(([key, passed]) => (
-                  <div key={key} className="flex items-center gap-2 py-0.5 text-xs font-mono">
-                    <span className={passed ? 'text-primary' : 'text-red-400'}>{passed ? '[x]' : '[ ]'}</span>
-                    <span className={passed ? 'text-text-secondary' : 'text-text-muted'}>{checkLabels[key] || key}</span>
-                  </div>
-                ))}
-              </div>
-            )}
-
-            {publishStatus?.checks.github_connected ? (
-              <div>
-                <p className="text-xs text-text-muted mb-4">
-                  This will push your changes and submit a pull request on the official catalog repository.
-                </p>
-                {error && <p className="text-xs text-red-400 font-mono mb-3">{error}</p>}
-                <div className="flex justify-end gap-2">
-                  <button onClick={onClose} className="bg-transparent border border-border rounded px-4 py-2 text-sm font-mono text-text-secondary cursor-pointer hover:border-primary transition-colors">Cancel</button>
-                  <button
-                    onClick={handlePublish}
-                    disabled={publishing || !publishStatus?.ready}
-                    className="bg-primary text-bg-primary rounded px-4 py-2 text-sm font-mono font-bold cursor-pointer hover:opacity-90 disabled:opacity-50"
-                  >
-                    {publishing ? 'Publishing...' : (publishStatus?.published && publishStatus?.pr_state === 'pr_open' ? 'Update Pull Request' : 'Submit Pull Request')}
-                  </button>
-                </div>
-              </div>
-            ) : (
-              <div>
-                <p className="text-xs text-text-muted mb-2">
-                  GitHub is not connected. Connect GitHub in Settings to submit via pull request, or use the manual export method below.
-                </p>
-                <div className="flex justify-end gap-2">
-                  <button onClick={onClose} className="bg-transparent border border-border rounded px-4 py-2 text-sm font-mono text-text-secondary cursor-pointer hover:border-primary transition-colors">Cancel</button>
-                  <button onClick={() => { window.location.hash = '#/settings'; onClose() }} className="bg-transparent border border-border rounded px-4 py-2 text-sm font-mono text-text-secondary cursor-pointer hover:border-primary transition-colors">Go to Settings</button>
-                  <button onClick={handleExportFallback} className="bg-primary text-bg-primary rounded px-4 py-2 text-sm font-mono font-bold cursor-pointer hover:opacity-90">Export + Manual Submit</button>
-                </div>
-              </div>
-            )}
-          </div>
-        )}
-      </div>
-    </div>
-  )
-}
-
-function DevValidationMsg({ msg, type, onNavigate, onGotoLine }: { msg: ValidationMsg; type: 'error' | 'warning'; onNavigate?: (file: string, search?: string) => void; onGotoLine?: (file: string, line: number) => void }) {
-  const color = type === 'error' ? 'border-red-400/30' : 'border-yellow-400/30'
-  const permLink = msg.code?.startsWith('PERM_MISSING_')
-  const scriptLink = msg.code?.startsWith('SCRIPT_') && !permLink
-  const permSectionMap: Record<string, string> = {
-    PERM_MISSING_PACKAGE: 'packages', PERM_MISSING_PIP: 'pip',
-    PERM_MISSING_SERVICE: 'services', PERM_MISSING_COMMAND: 'commands',
-    PERM_MISSING_USER: 'users', PERM_MISSING_PATH: 'paths',
-    PERM_MISSING_URL: 'urls', PERM_MISSING_APT_REPO: 'apt_repos',
-  }
-  const permSection = (permLink && msg.code) ? (permSectionMap[msg.code] || '') : ''
-  return (
-    <div className={`border-l-2 ${color} px-2 py-1.5 my-1 text-xs font-mono`}>
-      <div className="text-text-muted">{msg.file}{msg.line ? `:${msg.line}` : ''}</div>
-      <div className={type === 'error' ? 'text-red-300' : 'text-yellow-300'}>{msg.message}</div>
-      {permLink && onNavigate && (
-        <button
-          onClick={() => onNavigate('app.yml', permSection)}
-          className="mt-1 text-primary hover:underline bg-transparent border-0 p-0 cursor-pointer text-xs font-mono"
-        >→ Edit permissions.{permSection} in app.yml</button>
-      )}
-      {scriptLink && msg.line && onGotoLine && (
-        <button
-          onClick={() => onGotoLine('provision/install.py', msg.line!)}
-          className="mt-1 text-primary hover:underline bg-transparent border-0 p-0 cursor-pointer text-xs font-mono"
-        >→ Go to line {msg.line} in install.py</button>
-      )}
-    </div>
-  )
-}
-
-function PRStateBadge({ state }: { state: string }) {
-  const styles: Record<string, string> = {
-    pr_open: 'border-yellow-400 text-yellow-400',
-    pr_merged: 'border-primary text-primary',
-    pr_closed: 'border-red-400 text-red-400',
-  }
-  const labels: Record<string, string> = {
-    pr_open: 'PR Open',
-    pr_merged: 'PR Merged',
-    pr_closed: 'PR Closed',
-  }
-  if (!state || !labels[state]) return null
-  return <span className={`text-xs font-mono px-2 py-0.5 border rounded ${styles[state] || ''}`}>{labels[state]}</span>
 }
 
 export { DevAppEditor, DevSubmitDialog, DevValidationMsg }

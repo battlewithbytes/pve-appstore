@@ -2468,3 +2468,280 @@ func TestScaffoldDirectoriesMerged(t *testing.T) {
 		t.Errorf("expected /data to appear once in create_dir, got %d times", count)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Helper function tests
+// ---------------------------------------------------------------------------
+
+func TestMapUnraidCategory(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected []string
+	}{
+		{"Network:Other Other:", []string{"networking"}},
+		{"MediaApp:Video", []string{"media"}},
+		{"Productivity:", []string{"productivity"}},
+		{"GameServers:", []string{"gaming"}},
+		{"HomeAuto:", []string{"automation"}},
+		{"Network:DNS MediaServer:", []string{"networking", "media"}},
+		{"SomethingUnknown:", []string{"utilities"}},
+		{"", []string{"utilities"}},
+		{"Security: Tools:", []string{"security", "tools"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			got := mapUnraidCategory(tt.input)
+			if len(got) != len(tt.expected) {
+				t.Fatalf("expected %v, got %v", tt.expected, got)
+			}
+			for i := range got {
+				if got[i] != tt.expected[i] {
+					t.Errorf("expected[%d]=%q, got %q", i, tt.expected[i], got[i])
+				}
+			}
+		})
+	}
+}
+
+func TestParseWebUIPath(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected string
+	}{
+		{"http://[IP]:[PORT:8155]/admin", "/admin"},
+		{"http://[IP]:[PORT:8080]/", ""},
+		{"http://[IP]:[PORT:8080]", ""},
+		{"http://[IP]:[PORT:9090]/web/index.html", "/web/index.html"},
+		{"", ""},
+		{"http://no-brackets.com/path", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			got := parseWebUIPath(tt.input)
+			if got != tt.expected {
+				t.Errorf("expected %q, got %q", tt.expected, got)
+			}
+		})
+	}
+}
+
+func TestParseCapAdds(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected []string
+	}{
+		{"--cap-add NET_ADMIN", []string{"NET_ADMIN"}},
+		{"--cap-add NET_ADMIN --cap-add SYS_ADMIN", []string{"NET_ADMIN", "SYS_ADMIN"}},
+		{"--restart=always", nil},
+		{"", nil},
+		{"--cap-add NET_ADMIN --restart=always --cap-add SYS_PTRACE", []string{"NET_ADMIN", "SYS_PTRACE"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			got := parseCapAdds(tt.input)
+			if len(got) != len(tt.expected) {
+				t.Fatalf("expected %v, got %v", tt.expected, got)
+			}
+			for i := range got {
+				if got[i] != tt.expected[i] {
+					t.Errorf("expected[%d]=%q, got %q", i, tt.expected[i], got[i])
+				}
+			}
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Pihole-like Unraid template integration test
+// ---------------------------------------------------------------------------
+
+func TestConvertPiholeTemplate(t *testing.T) {
+	xml := `<?xml version="1.0"?>
+<Container version="2">
+    <Name>binhex-official-pihole</Name>
+    <Category>Network:Other Other:</Category>
+    <Repository>pihole/pihole</Repository>
+    <Network>bridge</Network>
+    <Privileged>false</Privileged>
+    <ExtraParams>--cap-add NET_ADMIN</ExtraParams>
+    <GitHub>https://github.com/pi-hole/pi-hole</GitHub>
+    <Project>https://pi-hole.net/</Project>
+    <Overview>Pi-hole is a DNS sinkhole that blocks ads.</Overview>
+    <WebUI>http://[IP]:[PORT:8155]/admin</WebUI>
+    <Icon>https://example.com/pihole-icon.png</Icon>
+    <Config Name="Port: Web Interface" Target="80" Default="8155" Mode="tcp" Description="Web UI port" Type="Port" Display="always" Required="true" Mask="false"/>
+    <Config Name="Port: DNS TCP" Target="53" Default="53" Mode="tcp" Description="DNS TCP port" Type="Port" Display="always" Required="true" Mask="false"/>
+    <Config Name="Port: DNS UDP" Target="53" Default="53" Mode="udp" Description="DNS UDP port" Type="Port" Display="always" Required="true" Mask="false"/>
+    <Config Name="Variable: DNSMASQ_LISTENING" Target="DNSMASQ_LISTENING" Default="all" Description="DNS listening mode" Type="Variable" Display="advanced" Required="true" Mask="false"/>
+    <Config Name="Path: /etc/pihole" Target="/etc/pihole" Default="/mnt/appdata/pihole" Mode="rw" Description="Pihole config" Type="Path" Display="always" Required="true" Mask="false"/>
+</Container>`
+
+	c, err := ParseUnraidXML([]byte(xml))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	id, manifest, script := ConvertUnraidToScaffold(c, nil)
+
+	// Check ID
+	if id != "binhex-official-pihole" {
+		t.Errorf("expected id=binhex-official-pihole, got %q", id)
+	}
+
+	// Check icon URL is used
+	if !strings.Contains(manifest, `icon: "https://example.com/pihole-icon.png"`) {
+		t.Error("manifest should include icon URL from XML")
+	}
+
+	// Check category mapping
+	if !strings.Contains(manifest, "- networking") {
+		t.Error("manifest should map Network:Other to networking category")
+	}
+	if strings.Contains(manifest, "- utilities") {
+		t.Error("manifest should not use default utilities when a mapped category exists")
+	}
+
+	// Check unprivileged=false due to --cap-add NET_ADMIN
+	if !strings.Contains(manifest, "unprivileged: false") {
+		t.Error("manifest should set unprivileged=false due to NET_ADMIN capability")
+	}
+
+	// Check capabilities comment
+	if !strings.Contains(manifest, "NET_ADMIN") {
+		t.Error("manifest should mention NET_ADMIN in comments")
+	}
+
+	// Check WebUI path /admin is preserved in output URL
+	if !strings.Contains(manifest, "/admin") {
+		t.Error("manifest output URL should include /admin path from WebUI template")
+	}
+
+	// Check Project and GitHub URLs
+	if !strings.Contains(manifest, "pi-hole.net") {
+		t.Error("manifest should include project homepage")
+	}
+	if !strings.Contains(manifest, "github.com/pi-hole/pi-hole") {
+		t.Error("manifest should include GitHub URL")
+	}
+
+	// Check port deduplication (53 tcp + 53 udp → one input)
+	portDNSCount := strings.Count(manifest, "port_dns")
+	if portDNSCount != 1 {
+		t.Errorf("expected 1 DNS port input (deduped), got %d", portDNSCount)
+	}
+
+	// Check DNSMASQ_LISTENING variable
+	if !strings.Contains(manifest, "dnsmasq_listening") {
+		t.Error("manifest should include DNSMASQ_LISTENING as input")
+	}
+
+	// Check script has create_dir for /etc/pihole
+	if !strings.Contains(script, `"/etc/pihole"`) {
+		t.Error("script should create /etc/pihole directory")
+	}
+
+	// Check permissions section includes all fields
+	if !strings.Contains(manifest, "permissions:") {
+		t.Error("manifest should have permissions section")
+	}
+	if !strings.Contains(manifest, "  packages: []") {
+		t.Error("manifest permissions should include packages placeholder")
+	}
+	if !strings.Contains(manifest, "  commands: []") {
+		t.Error("manifest permissions should include commands placeholder")
+	}
+	if !strings.Contains(manifest, "    - binhex-official-pihole") {
+		t.Error("manifest permissions.services should include the inferred service name")
+	}
+	if !strings.Contains(manifest, "    - /etc/pihole") {
+		t.Error("manifest permissions.paths should include /etc/pihole")
+	}
+
+	// Check script has configure() that reads inputs and writes config
+	if !strings.Contains(script, "def configure(self):") {
+		t.Error("script should have configure() method")
+	}
+	if !strings.Contains(script, "self.configure()") {
+		t.Error("install() should call self.configure()")
+	}
+	// configure() should re-read inputs
+	configureIdx := strings.Index(script, "def configure(self):")
+	if configureIdx > 0 {
+		configBody := script[configureIdx:]
+		if !strings.Contains(configBody, "self.inputs.integer") {
+			t.Error("configure() should read port inputs")
+		}
+		if !strings.Contains(configBody, "self.inputs.string") {
+			t.Error("configure() should read string inputs")
+		}
+		if !strings.Contains(configBody, "self.write_config") {
+			t.Error("configure() should write config file")
+		}
+		if !strings.Contains(configBody, "self.restart_service") {
+			t.Error("configure() should restart service")
+		}
+	}
+
+	// Check /etc/default/ in permissions for configure() config writing
+	if !strings.Contains(manifest, "    - /etc/default/") {
+		t.Error("manifest permissions.paths should include /etc/default/ for configure()")
+	}
+}
+
+func TestConvertScaffoldUsesIconURL(t *testing.T) {
+	c := &UnraidContainer{
+		Name: "test-app",
+		Icon: "https://example.com/icon.png",
+	}
+	_, manifest, _ := ConvertUnraidToScaffold(c, nil)
+	if !strings.Contains(manifest, `icon: "https://example.com/icon.png"`) {
+		t.Error("expected icon URL in manifest")
+	}
+}
+
+func TestConvertScaffoldEmptyIconFallback(t *testing.T) {
+	c := &UnraidContainer{
+		Name: "test-app",
+	}
+	_, manifest, _ := ConvertUnraidToScaffold(c, nil)
+	if !strings.Contains(manifest, `icon: ""`) {
+		t.Error("expected empty icon fallback in manifest")
+	}
+}
+
+func TestConvertPrivilegedScaffold(t *testing.T) {
+	c := &UnraidContainer{
+		Name:       "priv-app",
+		Privileged: "true",
+	}
+	_, manifest, _ := ConvertUnraidToScaffold(c, nil)
+	if !strings.Contains(manifest, "unprivileged: false") {
+		t.Error("expected unprivileged=false for Privileged=true")
+	}
+}
+
+func TestConvertCapAddSetsPrivileged(t *testing.T) {
+	c := &UnraidContainer{
+		Name:        "cap-app",
+		Privileged:  "false",
+		ExtraParams: "--cap-add NET_ADMIN",
+	}
+	_, manifest, _ := ConvertUnraidToScaffold(c, nil)
+	if !strings.Contains(manifest, "unprivileged: false") {
+		t.Error("expected unprivileged=false when ExtraParams has --cap-add")
+	}
+}
+
+func TestConvertWebUIPathPreserved(t *testing.T) {
+	c := &UnraidContainer{
+		Name:  "webui-app",
+		WebUI: "http://[IP]:[PORT:8080]/dashboard",
+		Configs: []UnraidConfig{
+			{Name: "Web Port", Target: "8080", Default: "8080", Type: "Port", Mode: "tcp"},
+		},
+	}
+	_, manifest, _ := ConvertUnraidToScaffold(c, nil)
+	if !strings.Contains(manifest, "/dashboard") {
+		t.Errorf("expected /dashboard in output URL, manifest:\n%s", manifest)
+	}
+}

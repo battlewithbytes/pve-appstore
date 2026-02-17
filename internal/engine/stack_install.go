@@ -379,11 +379,8 @@ func (e *Engine) runStackInstall(bgCtx context.Context, job *Job, stackID, osTem
 
 	// Step 3: Resolve template and create container (ctidMu released after Create)
 	ctx.transition(StateCreateContainer)
-	template := osTemplate
-	if !strings.Contains(template, ":") {
-		ctx.info("Resolving template %q...", template)
-		template = e.cm.ResolveTemplate(bgCtx, template, job.Storage)
-	}
+	ctx.info("Resolving template %q...", osTemplate)
+	template := e.cm.ResolveTemplate(bgCtx, osTemplate, job.Storage)
 
 	// Merge features from all manifests
 	featureSet := make(map[string]bool)

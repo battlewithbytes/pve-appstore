@@ -15,6 +15,18 @@ import (
 	"github.com/battlewithbytes/pve-appstore/internal/pct"
 )
 
+// builtinFormats maps format names to pre-compiled regexes and error messages.
+var builtinFormats = map[string]struct {
+	re  *regexp.Regexp
+	msg string
+}{
+	"ipv4":     {regexp.MustCompile(`^(\d{1,3}\.){3}\d{1,3}$`), "must be a valid IPv4 address"},
+	"cidr":     {regexp.MustCompile(`^(\d{1,3}\.){3}\d{1,3}/\d{1,2}$`), "must be a valid CIDR (e.g. 192.168.1.0/24)"},
+	"url":      {regexp.MustCompile(`^https?://\S+$`), "must be a valid URL (http:// or https://)"},
+	"email":    {regexp.MustCompile(`^[^\s@]+@[^\s@]+\.[^\s@]+$`), "must be a valid email address"},
+	"hostname": {regexp.MustCompile(`^[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?)*$`), "must be a valid hostname"},
+}
+
 // installSteps defines the ordered state machine for an install job.
 // Each step returns the next state or an error (which moves to "failed").
 // StateReadVolumeIDs is the state for reading volume IDs after container creation.
@@ -255,6 +267,13 @@ func validateInputs(manifest *catalog.AppManifest, inputs map[string]string) err
 					return fmt.Errorf("input %q: value does not match pattern %q", inp.Key, v.Regex)
 				}
 			}
+			if v.Format != "" {
+				if f, ok := builtinFormats[v.Format]; ok {
+					if !f.re.MatchString(val) {
+						return fmt.Errorf("input %q: %s (got %q)", inp.Key, f.msg, val)
+					}
+				}
+			}
 		}
 
 		if len(v.Enum) > 0 {
@@ -320,13 +339,11 @@ func stepCreateContainer(ctx *installContext) error {
 		ctx.ctidLocked = false
 	}()
 
-	// Resolve OS template
+	// Resolve OS template (handles both short names like "debian-12" and
+	// full volid paths — auto-downloads if not found locally)
 	template := ctx.manifest.LXC.OSTemplate
-	if !strings.Contains(template, ":") {
-		// Shorthand like "debian-12" — resolve to a full template path
-		ctx.info("Resolving template %q (will download if needed)...", template)
-		template = ctx.engine.cm.ResolveTemplate(context.Background(), template, ctx.job.Storage)
-	}
+	ctx.info("Resolving template %q (will download if needed)...", template)
+	template = ctx.engine.cm.ResolveTemplate(context.Background(), template, ctx.job.Storage)
 
 	opts := CreateOptions{
 		CTID:         ctx.job.CTID,

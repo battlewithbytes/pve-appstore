@@ -92,7 +92,7 @@ function App() {
   return (
     <div className="min-h-screen flex flex-col bg-bg-primary">
       <Header health={health} authed={authed} authRequired={authRequired} devMode={devMode} onLogout={handleLogout} onLogin={() => setShowLogin(true)} />
-      <main className="flex-1 max-w-[1200px] mx-auto px-4 py-6 w-full">
+      <main className={`flex-1 mx-auto px-4 py-6 w-full ${devAppMatch || devStackMatch ? 'max-w-[1800px]' : 'max-w-[1200px]'}`}>
         {content}
       </main>
       <Footer />

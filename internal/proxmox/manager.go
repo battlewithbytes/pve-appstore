@@ -155,6 +155,28 @@ func (m *Manager) AppendLXCConfig(ctid int, lines []string) error {
 	return pct.AppendConf(ctid, lines)
 }
 
+func (m *Manager) ListOSTemplates(ctx context.Context) ([]engine.OSTemplate, error) {
+	available, err := m.client.ListAvailableTemplates(ctx)
+	if err != nil {
+		return nil, err
+	}
+	seen := make(map[string]bool)
+	var result []engine.OSTemplate
+	for _, a := range available {
+		short := extractShortName(a.Template)
+		if short == "" || seen[short] {
+			continue
+		}
+		seen[short] = true
+		result = append(result, engine.OSTemplate{
+			ShortName: short,
+			Template:  a.Template,
+			Section:   a.Section,
+		})
+	}
+	return result, nil
+}
+
 func (m *Manager) ListBridges(ctx context.Context) ([]engine.BridgeInfo, error) {
 	ifaces, err := m.client.ListNodeNetworks(ctx)
 	if err != nil {

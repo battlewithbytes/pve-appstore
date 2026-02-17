@@ -50,6 +50,7 @@ type astAnalysis struct {
 	InputKeys        []inputKeyRef   `json:"input_keys"`
 	MethodCalls      []methodCall    `json:"method_calls"`
 	UnsafePatterns   []unsafePattern `json:"unsafe_patterns"`
+	DefinedMethods   []string        `json:"defined_methods"`
 	Error            string          `json:"error"`
 }
 
@@ -173,6 +174,14 @@ func validateManifest(result *ValidationResult, data []byte, appDir string) {
 		result.Valid = false
 	}
 
+	// Check that manifest ID matches directory name
+	dirName := filepath.Base(appDir)
+	if manifest.ID != "" && manifest.ID != dirName {
+		result.addWarning("app.yml", 0,
+			fmt.Sprintf("Manifest id %q does not match directory name %q — exports and APIs use the directory name. Use Rename App to fix.", manifest.ID, dirName),
+			"MANIFEST_ID_MISMATCH")
+	}
+
 	// Additional dev mode checks
 	if len(manifest.Maintainers) == 0 {
 		result.addWarning("app.yml", 0, "No maintainers listed", "MANIFEST_NO_MAINTAINERS")
@@ -185,6 +194,11 @@ func validateManifest(result *ValidationResult, data []byte, appDir string) {
 	// Check version is semver-like
 	if manifest.Version != "" && !regexp.MustCompile(`^\d+\.\d+\.\d+`).MatchString(manifest.Version) {
 		result.addWarning("app.yml", 0, "Version should follow semver format (e.g. 1.0.0)", "MANIFEST_VERSION_FORMAT")
+	}
+
+	// Note require_static_ip flag
+	if manifest.LXC.Defaults.RequireStaticIP {
+		result.addWarning("app.yml", 0, "require_static_ip is set — users must provide a static IP at install time", "MANIFEST_REQUIRE_STATIC_IP")
 	}
 
 	// Check icon
@@ -344,10 +358,10 @@ func validateScript(result *ValidationResult, script string, manifestData []byte
 	for _, p := range analysis.UnsafePatterns {
 		if p.Pattern == "os.system" {
 			result.addWarning("provision/install.py", p.Line,
-				"Use self.run_command() instead of os.system()", "SCRIPT_OS_SYSTEM")
+				"Use self.run_command() or self.run_shell() instead of os.system()", "SCRIPT_OS_SYSTEM")
 		} else {
 			result.addWarning("provision/install.py", p.Line,
-				"Use self.run_command() instead of subprocess directly", "SCRIPT_SUBPROCESS")
+				"Use self.run_command() or self.run_shell() instead of subprocess directly", "SCRIPT_SUBPROCESS")
 		}
 	}
 
@@ -364,11 +378,14 @@ func validateScript(result *ValidationResult, script string, manifestData []byte
 		for _, ik := range analysis.InputKeys {
 			if !manifestKeys[ik.Key] {
 				result.addWarning("provision/install.py", ik.Line,
-					fmt.Sprintf("Script reads input %q which is not defined in manifest", ik.Key),
+					fmt.Sprintf("Script uses self.inputs[\"%s\"] but no input with key %q exists in app.yml — add it under inputs: in the manifest", ik.Key, ik.Key),
 					"SCRIPT_UNKNOWN_INPUT")
 			}
 		}
 	}
+
+	// --- Unknown self.<method>() calls ---
+	validateUnknownMethods(result, analysis)
 
 	// Cross-reference SDK calls against manifest permissions
 	validatePermissionsFromAST(result, analysis, manifestData)
@@ -470,8 +487,34 @@ func validatePermissionsFromAST(result *ValidationResult, analysis *astAnalysis,
 			}
 
 		case "run_command":
-			// arg[0] should be a list; first element is the command
+			// arg[0] can be a list ["git", "clone", ...] or a string "git clone ..."
+			// (SDK accepts both via shlex.split)
 			if cmd, ok := firstListElement(call, 0); ok {
+				if cmd != "sh" && cmd != "bash" && !matchesAny(cmd, cmdSet, perms.Commands) {
+					result.addWarning("provision/install.py", call.Line,
+						fmt.Sprintf("Command %q not in permissions.commands", cmd),
+						"PERM_MISSING_COMMAND")
+				}
+			} else if cmdStr, ok := stringArg(call, 0); ok {
+				// String form: extract first word as the command binary
+				cmd := cmdStr
+				if idx := strings.Index(cmdStr, " "); idx > 0 {
+					cmd = cmdStr[:idx]
+				}
+				if cmd != "sh" && cmd != "bash" && !matchesAny(cmd, cmdSet, perms.Commands) {
+					result.addWarning("provision/install.py", call.Line,
+						fmt.Sprintf("Command %q not in permissions.commands", cmd),
+						"PERM_MISSING_COMMAND")
+				}
+			}
+
+		case "run_shell":
+			// arg[0] is a shell command string; extract first word as the command binary
+			if cmdStr, ok := stringArg(call, 0); ok {
+				cmd := cmdStr
+				if idx := strings.Index(cmdStr, " "); idx > 0 {
+					cmd = cmdStr[:idx]
+				}
 				if cmd != "sh" && cmd != "bash" && !matchesAny(cmd, cmdSet, perms.Commands) {
 					result.addWarning("provision/install.py", call.Line,
 						fmt.Sprintf("Command %q not in permissions.commands", cmd),
@@ -598,6 +641,63 @@ func validatePermissionsFromAST(result *ValidationResult, analysis *astAnalysis,
 						"PERM_MISSING_PATH")
 				}
 			}
+		}
+	}
+}
+
+// knownSDKMethods is extracted from the embedded SDK's base.py at init time.
+// It contains all public method names defined on AppBase (i.e. `def method(self`
+// where method does not start with '_').
+var knownSDKMethods map[string]bool
+
+func init() {
+	knownSDKMethods = extractSDKMethods()
+}
+
+// extractSDKMethods parses the embedded base.py to find all public instance methods.
+func extractSDKMethods() map[string]bool {
+	data, err := sdk.PythonFS.ReadFile("python/appstore/base.py")
+	if err != nil {
+		return map[string]bool{}
+	}
+	methods := make(map[string]bool)
+	for _, line := range strings.Split(string(data), "\n") {
+		trimmed := strings.TrimSpace(line)
+		if !strings.HasPrefix(trimmed, "def ") {
+			continue
+		}
+		// Extract method name from "def method_name(self..."
+		rest := trimmed[4:]
+		idx := strings.Index(rest, "(")
+		if idx <= 0 {
+			continue
+		}
+		name := rest[:idx]
+		// Skip private/dunder methods
+		if strings.HasPrefix(name, "_") {
+			continue
+		}
+		// Verify it takes self as first parameter
+		params := rest[idx+1:]
+		if strings.HasPrefix(params, "self") {
+			methods[name] = true
+		}
+	}
+	return methods
+}
+
+// validateUnknownMethods flags any self.<method>() call that doesn't match
+// a known SDK method or a method defined in the user's own class.
+func validateUnknownMethods(result *ValidationResult, analysis *astAnalysis) {
+	userMethods := make(map[string]bool, len(analysis.DefinedMethods))
+	for _, m := range analysis.DefinedMethods {
+		userMethods[m] = true
+	}
+	for _, call := range analysis.MethodCalls {
+		if !knownSDKMethods[call.Method] && !userMethods[call.Method] {
+			result.addWarning("provision/install.py", call.Line,
+				fmt.Sprintf("Unknown SDK method self.%s() — see SDK reference for valid methods", call.Method),
+				"SCRIPT_UNKNOWN_METHOD")
 		}
 	}
 }

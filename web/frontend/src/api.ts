@@ -292,6 +292,20 @@ export const api = {
   devDeleteFile: (id: string, path: string) =>
     fetchJSON<{ status: string; path: string }>(`${BASE}/dev/apps/${id}/file?path=${encodeURIComponent(path)}`, { method: 'DELETE' }),
 
+  devRenameFile: (id: string, from: string, to: string) =>
+    fetchJSON<{ status: string }>(`${BASE}/dev/apps/${id}/file/rename`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ from, to }),
+    }),
+
+  devRenameApp: (id: string, newId: string) =>
+    fetchJSON<{ status: string; new_id: string }>(`${BASE}/dev/apps/${id}/rename`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ new_id: newId }),
+    }),
+
   devDeleteApp: (id: string) =>
     fetchJSON<{ status: string }>(`${BASE}/dev/apps/${id}`, { method: 'DELETE' }),
 

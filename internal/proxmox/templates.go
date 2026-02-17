@@ -73,10 +73,62 @@ func matchesTemplate(candidate, name string) bool {
 	return false
 }
 
-// ResolveTemplate finds a template matching the short name (e.g., "debian-12")
-// from the available templates on the given storage. If not found locally,
-// it searches the Proxmox appliance list and downloads it automatically.
+// ResolveTemplate finds a template matching the given name and ensures it exists locally.
+// Accepts both short names (e.g., "debian-12") and full volid paths
+// (e.g., "local:vztmpl/debian-12-standard_12.7-1_amd64.tar.zst").
+// If the template is not found locally, it searches the Proxmox appliance list
+// and downloads it automatically.
 func (c *Client) ResolveTemplate(ctx context.Context, name, storage string) string {
+	// If a full volid path is given (contains ":"), check if it exists first.
+	// If it does, return it directly. If not, extract the filename and try
+	// to download it, then fall back to short-name resolution.
+	if strings.Contains(name, ":") {
+		volStorage, filename := parseVolid(name)
+
+		// Check if this exact volid exists
+		templates, err := c.ListTemplates(ctx, volStorage)
+		if err == nil {
+			for _, t := range templates {
+				if t.Volid == name {
+					return name
+				}
+			}
+		}
+
+		// Not found — try to download the exact filename from appliance list
+		log.Printf("[template] %s not found locally, searching appliance list...", name)
+		available, err := c.ListAvailableTemplates(ctx)
+		if err == nil {
+			for _, a := range available {
+				if a.Template == filename {
+					log.Printf("[template] found exact match: %s — downloading to %s", a.Template, volStorage)
+					if dlErr := c.DownloadTemplate(ctx, volStorage, a.Template); dlErr == nil {
+						return name
+					}
+					log.Printf("[template] download to %s failed, trying local", volStorage)
+					if volStorage != "local" {
+						if dlErr := c.DownloadTemplate(ctx, "local", a.Template); dlErr == nil {
+							return "local:vztmpl/" + a.Template
+						}
+					}
+					break
+				}
+			}
+		}
+
+		// Exact filename not in appliance list — fall back to short-name resolution
+		// Extract short name like "debian-12" from "debian-12-standard_12.7-1_amd64.tar.zst"
+		shortName := extractShortName(filename)
+		if shortName != "" {
+			log.Printf("[template] falling back to short-name resolution for %q", shortName)
+			return c.ResolveTemplate(ctx, shortName, storage)
+		}
+
+		// Nothing worked, return original (will fail with a clear error)
+		return name
+	}
+
+	// Short name path (e.g., "debian-12")
 	// 1. Check if template already exists on the target storage
 	templates, err := c.ListTemplates(ctx, storage)
 	if err == nil {
@@ -128,4 +180,35 @@ func (c *Client) ResolveTemplate(ctx context.Context, name, storage string) stri
 		return fmt.Sprintf("local:vztmpl/%s-default_amd64.tar.xz", name)
 	}
 	return fmt.Sprintf("local:vztmpl/%s-standard_amd64.tar.zst", name)
+}
+
+// parseVolid splits "local:vztmpl/debian-12-standard_12.7-1_amd64.tar.zst"
+// into storage "local" and filename "debian-12-standard_12.7-1_amd64.tar.zst".
+func parseVolid(volid string) (storage, filename string) {
+	parts := strings.SplitN(volid, ":", 2)
+	if len(parts) != 2 {
+		return "local", volid
+	}
+	storage = parts[0]
+	filename = parts[1]
+	// Strip "vztmpl/" prefix if present
+	if strings.HasPrefix(filename, "vztmpl/") {
+		filename = filename[len("vztmpl/"):]
+	}
+	return storage, filename
+}
+
+// extractShortName extracts a short template name from a full filename.
+// "debian-12-standard_12.7-1_amd64.tar.zst" → "debian-12"
+// "ubuntu-24.04-standard_24.04-2_amd64.tar.zst" → "ubuntu-24.04"
+// "alpine-3.22-default_20250617_amd64.tar.xz" → "alpine-3.22"
+func extractShortName(filename string) string {
+	lower := strings.ToLower(filename)
+	for _, suffix := range templateSuffixes {
+		idx := strings.Index(lower, suffix)
+		if idx > 0 {
+			return filename[:idx]
+		}
+	}
+	return ""
 }

@@ -27,7 +27,7 @@ apps:
     #   key: value
 
 lxc:
-  ostemplate: "local:vztmpl/debian-12-standard_12.7-1_amd64.tar.zst"
+  ostemplate: debian-12
   defaults:
     cores: 2
     memory_mb: 1024
@@ -54,7 +54,7 @@ apps:
       db_name: webapp
 
 lxc:
-  ostemplate: "local:vztmpl/debian-12-standard_12.7-1_amd64.tar.zst"
+  ostemplate: debian-12
   defaults:
     cores: 2
     memory_mb: 1024

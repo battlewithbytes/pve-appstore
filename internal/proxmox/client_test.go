@@ -383,6 +383,88 @@ func TestResolveTemplateFallback(t *testing.T) {
 	}
 }
 
+func TestResolveTemplateFullVolidExists(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api2/json/nodes/pve/storage/local/content", func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"data": []map[string]interface{}{
+				{"volid": "local:vztmpl/debian-12-standard_12.12-1_amd64.tar.zst", "size": 123456},
+			},
+		})
+	})
+
+	_, client := newTestServer(t, mux)
+	// Full volid that exists — should return it directly
+	tmpl := client.ResolveTemplate(context.Background(), "local:vztmpl/debian-12-standard_12.12-1_amd64.tar.zst", "local")
+	if tmpl != "local:vztmpl/debian-12-standard_12.12-1_amd64.tar.zst" {
+		t.Errorf("expected exact volid, got %q", tmpl)
+	}
+}
+
+func TestResolveTemplateFullVolidMissing_FallsBackToShortName(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api2/json/nodes/pve/storage/local/content", func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"data": []map[string]interface{}{
+				// Has 12.12-1, not 12.7-1
+				{"volid": "local:vztmpl/debian-12-standard_12.12-1_amd64.tar.zst", "size": 123456},
+			},
+		})
+	})
+	mux.HandleFunc("/api2/json/nodes/pve/aplinfo", func(w http.ResponseWriter, r *http.Request) {
+		// Appliance list doesn't have the exact old version either
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"data": []map[string]interface{}{
+				{"template": "debian-12-standard_12.12-1_amd64.tar.zst", "section": "system"},
+			},
+		})
+	})
+
+	_, client := newTestServer(t, mux)
+	// Full volid for a version that doesn't exist — should fall back to short name
+	// and find the local 12.12-1 version
+	tmpl := client.ResolveTemplate(context.Background(), "local:vztmpl/debian-12-standard_12.7-1_amd64.tar.zst", "local")
+	if tmpl != "local:vztmpl/debian-12-standard_12.12-1_amd64.tar.zst" {
+		t.Errorf("expected fallback to local version, got %q", tmpl)
+	}
+}
+
+func TestParseVolid(t *testing.T) {
+	tests := []struct {
+		input           string
+		wantStorage     string
+		wantFilename    string
+	}{
+		{"local:vztmpl/debian-12-standard_12.7-1_amd64.tar.zst", "local", "debian-12-standard_12.7-1_amd64.tar.zst"},
+		{"ceph:vztmpl/ubuntu-24.04-standard_24.04-2_amd64.tar.zst", "ceph", "ubuntu-24.04-standard_24.04-2_amd64.tar.zst"},
+		{"local:iso/something.iso", "local", "iso/something.iso"},
+	}
+	for _, tt := range tests {
+		storage, filename := parseVolid(tt.input)
+		if storage != tt.wantStorage || filename != tt.wantFilename {
+			t.Errorf("parseVolid(%q) = (%q, %q), want (%q, %q)", tt.input, storage, filename, tt.wantStorage, tt.wantFilename)
+		}
+	}
+}
+
+func TestExtractShortName(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected string
+	}{
+		{"debian-12-standard_12.7-1_amd64.tar.zst", "debian-12"},
+		{"ubuntu-24.04-standard_24.04-2_amd64.tar.zst", "ubuntu-24.04"},
+		{"alpine-3.22-default_20250617_amd64.tar.xz", "alpine-3.22"},
+		{"something-weird.tar.gz", ""},
+	}
+	for _, tt := range tests {
+		got := extractShortName(tt.input)
+		if got != tt.expected {
+			t.Errorf("extractShortName(%q) = %q, want %q", tt.input, got, tt.expected)
+		}
+	}
+}
+
 func TestTaskTimeout(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api2/json/nodes/pve/tasks/", func(w http.ResponseWriter, r *http.Request) {
