@@ -181,9 +181,13 @@ func ApplyUpdateDirect(newBinaryPath, targetPath string) error {
 }
 
 // ApplyUpdateSudo runs the update script via sudo (for web-triggered updates).
-// Uses setsid to detach the process so it survives the service restart.
+// Uses nsenter to escape the service's ProtectSystem=strict mount namespace,
+// and setsid to detach so the process survives the service restart.
 func ApplyUpdateSudo(newBinaryPath string) error {
-	cmd := exec.Command("setsid", "sudo", UpdateScript, newBinaryPath)
+	cmd := exec.Command("setsid",
+		"sudo", "/usr/bin/nsenter", "--mount=/proc/1/ns/mnt", "--",
+		UpdateScript, newBinaryPath,
+	)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("starting update script: %w", err)

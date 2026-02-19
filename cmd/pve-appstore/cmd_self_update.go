@@ -73,7 +73,7 @@ var selfUpdateCmd = &cobra.Command{
 func appendUpdateSudoers() error {
 	const sudoersPath = "/etc/sudoers.d/pve-appstore"
 	const marker = "/opt/pve-appstore/update.sh"
-	const entry = "appstore ALL=(root) NOPASSWD: /opt/pve-appstore/update.sh\n"
+	const entry = "appstore ALL=(root) NOPASSWD: /usr/bin/nsenter --mount=/proc/1/ns/mnt -- /opt/pve-appstore/update.sh *\n"
 
 	data, err := os.ReadFile(sudoersPath)
 	if err != nil {

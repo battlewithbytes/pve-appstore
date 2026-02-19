@@ -58,7 +58,7 @@ appstore ALL=(root) NOPASSWD: /usr/bin/nsenter --mount=/proc/1/ns/mnt -- /usr/sb
 appstore ALL=(root) NOPASSWD: /usr/bin/nsenter --mount=/proc/1/ns/mnt -- /usr/bin/tee -a /etc/pve/lxc/*
 appstore ALL=(root) NOPASSWD: /usr/bin/nsenter --mount=/proc/1/ns/mnt -- /usr/bin/mkdir -p *
 appstore ALL=(root) NOPASSWD: /usr/bin/nsenter --mount=/proc/1/ns/mnt -- /usr/bin/chown *
-appstore ALL=(root) NOPASSWD: /opt/pve-appstore/update.sh
+appstore ALL=(root) NOPASSWD: /usr/bin/nsenter --mount=/proc/1/ns/mnt -- /opt/pve-appstore/update.sh *
 ```
 
 No other commands can be run as root by the `appstore` user.
@@ -78,13 +78,13 @@ The CLI command runs as root directly. It:
 
 The web endpoint runs as the `appstore` user and cannot replace the binary directly. Instead:
 1. Downloads the new binary to `/var/lib/pve-appstore/pve-appstore.new`
-2. Delegates to `/opt/pve-appstore/update.sh` via `sudo`
+2. Delegates to `/opt/pve-appstore/update.sh` via `sudo nsenter --mount=/proc/1/ns/mnt --` to escape the service's `ProtectSystem=strict` mount namespace
 3. The script removes the old binary, moves the new one into place, and restarts the service
 4. Uses `setsid` to detach the update process so it survives the service restart
 
 The update script is added to the sudoers allowlist:
 ```
-appstore ALL=(root) NOPASSWD: /opt/pve-appstore/update.sh
+appstore ALL=(root) NOPASSWD: /usr/bin/nsenter --mount=/proc/1/ns/mnt -- /opt/pve-appstore/update.sh *
 ```
 
 ### Update check endpoint
