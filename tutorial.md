@@ -527,7 +527,8 @@ Instead of creating files manually, you can use **Developer Mode** in the web UI
 2. **Edit** — Code editor with SDK autocompletions for the manifest and install script
 3. **Validate** — One-click manifest + script validation
 4. **Deploy** — Merge into the running catalog for testing
-5. **Export** — Download as a zip ready to submit as a PR
+5. **Test Install** — Install the deployed app on a real container; must succeed before publishing
+6. **Export** — Download as a zip ready to submit as a PR
 
 ### Dockerfile Import
 

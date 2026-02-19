@@ -4,6 +4,8 @@ An app store for Proxmox VE — install self-hosted apps in one click.
 
 PVE App Store lets you browse a catalog of self-hosted applications and deploy them as LXC containers on your Proxmox server, all from a web UI. Pick an app, tweak a few settings, and the store handles container creation, networking, and provisioning automatically.
 
+> **Alpha software** — This project is under active development and there will be bugs. If you run into issues or have ideas, please [open an issue](https://github.com/battlewithbytes/pve-appstore/issues) or [submit a pull request](https://github.com/battlewithbytes/pve-appstore/pulls). Contributions are welcome!
+
 ![App Catalog](docs/screenshots/apps.png)
 
 ## Highlights
@@ -87,13 +89,14 @@ Build custom apps directly from the web UI with a full IDE experience:
 2. **Edit** the manifest and install script in a CodeMirror editor with SDK autocompletion, hover docs, and file management
 3. **Validate** — checks manifest schema, Python syntax, permission consistency, and unknown SDK methods
 4. **Deploy** to the local catalog for testing — your app appears alongside official apps
-5. **Publish** to GitHub — connect your account, push to a fork of the catalog repo, and open a PR
+5. **Test Install** — install the deployed app on a real container; must succeed before publishing
+6. **Publish** to GitHub — connect your account, push to a fork of the catalog repo, and open a PR
 
 ### Import Sources
 
 - **Starter templates** — Minimal, Web App, Database, Media Server, and more
-- **Dockerfile** — analyzes FROM, RUN, COPY, ENV, EXPOSE and generates SDK calls (scaffold, not a converter)
-- **Unraid XML** — converts Unraid Community App templates to PVE App Store format
+- **Dockerfile** — analyzes FROM, RUN, COPY, ENV, EXPOSE and generates SDK calls as a starting point. **This will not produce a working LXC container out of the box** — Docker images rely on init systems, entrypoint scripts, and layered builds that don't translate directly to LXC. Expect to manually finish the generated script.
+- **Unraid XML** — converts Unraid Community App templates to PVE App Store format. Like Dockerfile import, **this is a scaffold** — the output gets you started but will need manual editing and testing to produce a working app.
 - **ZIP** — import a previously exported app
 
 ## Writing Your Own App
@@ -137,6 +140,14 @@ web/frontend/            React + TypeScript SPA
 deploy/                  install.sh one-liner
 testdata/catalog/        sample app catalog (12 apps)
 ```
+
+## Contributing
+
+This project is in alpha and contributions are welcome. Found a bug? Have a feature request? Want to add an app to the catalog?
+
+- [Open an issue](https://github.com/battlewithbytes/pve-appstore/issues) for bugs and feature requests
+- [Submit a pull request](https://github.com/battlewithbytes/pve-appstore/pulls) for code changes
+- [Contribute apps](https://github.com/battlewithbytes/pve-appstore-catalog) to the catalog repo
 
 ## License
 
