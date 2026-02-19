@@ -606,7 +606,8 @@ function SettingsView({ requireAuth, onDevModeChange, onUpdateApplied, onAuthCha
                 <div className="text-sm font-mono">
                   <span className="text-text-muted">Port:</span> <span className="text-text-primary">{settings.service.port}</span>
                 </div>
-                <p className="text-xs text-text-muted mt-2">Port is configured via the TUI installer.</p>
+                <p className="text-xs text-text-muted mt-2">To change the port:</p>
+                <code className="block text-xs font-mono text-text-secondary bg-bg-primary rounded px-3 py-2 mt-1">sudo pve-appstore config set-port &lt;port&gt;</code>
               </InfoCard>
 
               <InfoCard title="Authentication">

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -18,6 +19,7 @@ func init() {
 	configCmd.AddCommand(configRemoveStorageCmd)
 	configCmd.AddCommand(configAddBridgeCmd)
 	configCmd.AddCommand(configRemoveBridgeCmd)
+	configCmd.AddCommand(configSetPortCmd)
 	rootCmd.AddCommand(configCmd)
 }
 
@@ -226,6 +228,49 @@ var configRemoveBridgeCmd = &cobra.Command{
 
 		restartService()
 		fmt.Println(ui.Green.Render("✓") + " Removed bridge " + ui.White.Render(name))
+		return nil
+	},
+}
+
+var configSetPortCmd = &cobra.Command{
+	Use:   "set-port <port>",
+	Short: "Change the web UI port",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		if os.Geteuid() != 0 {
+			return fmt.Errorf("must be run as root")
+		}
+
+		port, err := strconv.Atoi(args[0])
+		if err != nil {
+			return fmt.Errorf("invalid port: %s", args[0])
+		}
+		if port < 1 || port > 65535 {
+			return fmt.Errorf("port must be between 1 and 65535")
+		}
+
+		cfg, err := config.Load(config.DefaultConfigPath)
+		if err != nil {
+			return fmt.Errorf("loading config: %w", err)
+		}
+
+		if cfg.Service.Port == port {
+			fmt.Println(ui.Dim.Render("Port is already set to ") + ui.White.Render(fmt.Sprintf("%d", port)))
+			return nil
+		}
+
+		oldPort := cfg.Service.Port
+		cfg.Service.Port = port
+
+		if err := cfg.Validate(); err != nil {
+			return fmt.Errorf("invalid config: %w", err)
+		}
+		if err := saveAndRestore(cfg); err != nil {
+			return err
+		}
+
+		restartService()
+		fmt.Println(ui.Green.Render("✓") + " Port changed from " + ui.White.Render(fmt.Sprintf("%d", oldPort)) + " to " + ui.White.Render(fmt.Sprintf("%d", port)))
 		return nil
 	},
 }
