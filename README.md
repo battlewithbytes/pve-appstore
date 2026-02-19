@@ -73,6 +73,28 @@ Back up all installs and stacks as portable YAML, then restore on another node.
 
 ![Configuration](docs/screenshots/config.png)
 
+## Updating
+
+### Web UI
+
+When a new version is available, an **Update** badge appears in the header next to the version number. Click it to go to **Settings > Service** where you can see version details and click **Update Now**. The service restarts automatically.
+
+### CLI
+
+```bash
+sudo pve-appstore self-update
+```
+
+Checks GitHub for the latest release, downloads the binary, and restarts the service.
+
+### Fresh install
+
+Re-running the installer will also update the binary:
+
+```bash
+curl -fsSL https://github.com/battlewithbytes/pve-appstore/releases/latest/download/install.sh | bash
+```
+
 ## How It Works
 
 The catalog is a Git repository of app manifests (YAML + Python install scripts). PVE App Store clones it locally and serves the catalog through a web UI. When you install an app, a job engine creates an LXC container via the Proxmox REST API, pushes the install script inside, and runs it through a sandboxed Python SDK that enforces declared permissions.
