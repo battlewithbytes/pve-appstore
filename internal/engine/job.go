@@ -172,11 +172,12 @@ type ReinstallRequest struct {
 // EditRequest is the input for editing (recreating) an active install.
 // Storage is excluded (volumes are tied to it). Disk can only grow.
 type EditRequest struct {
-	Cores    int               `json:"cores,omitempty"`
-	MemoryMB int               `json:"memory_mb,omitempty"`
-	DiskGB   int               `json:"disk_gb,omitempty"`
-	Bridge   string            `json:"bridge,omitempty"`
-	Inputs   map[string]string `json:"inputs,omitempty"`
+	Cores    int                  `json:"cores,omitempty"`
+	MemoryMB int                  `json:"memory_mb,omitempty"`
+	DiskGB   int                  `json:"disk_gb,omitempty"`
+	Bridge   string               `json:"bridge,omitempty"`
+	Inputs   map[string]string    `json:"inputs,omitempty"`
+	Devices  *[]DevicePassthrough `json:"devices,omitempty"` // nil=keep existing, non-nil=replace
 }
 
 // ReconfigureRequest is the input for in-place reconfiguration of an active install.

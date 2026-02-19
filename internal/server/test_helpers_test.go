@@ -82,6 +82,9 @@ func (m *mockCM) ListOSTemplates(ctx context.Context) ([]engine.OSTemplate, erro
 		{ShortName: "alpine-3.22", Template: "alpine-3.22-default_20250617_amd64.tar.xz", Section: "system"},
 	}, nil
 }
+func (m *mockCM) ListPCIDevices(ctx context.Context) ([]engine.PCIDevice, error) {
+	return nil, nil
+}
 func (m *mockCM) GetStorageInfo(ctx context.Context, storageID string) (*engine.StorageInfo, error) {
 	path := m.storagePath
 	if path == "" {

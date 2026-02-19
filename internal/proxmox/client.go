@@ -143,6 +143,25 @@ type NodeNetworkIface struct {
 	BridgeVIDs     string `json:"bridge_vids"`
 }
 
+// PCIDeviceInfo represents a PCI device from the Proxmox hardware API.
+type PCIDeviceInfo struct {
+	ID         string `json:"id"`          // "0000:61:00.0"
+	Class      string `json:"class"`       // "0x030000"
+	Vendor     string `json:"vendor"`      // "0x10de"
+	VendorName string `json:"vendor_name"` // "NVIDIA Corporation"
+	Device     string `json:"device"`      // "0x2486"
+	DeviceName string `json:"device_name"` // "GA104 [GeForce RTX 3060 Ti]"
+}
+
+// ListPCIDevices returns all PCI devices for this node.
+func (c *Client) ListPCIDevices(ctx context.Context) ([]PCIDeviceInfo, error) {
+	var devices []PCIDeviceInfo
+	if err := c.doRequest(ctx, "GET", "/nodes/"+c.node+"/hardware/pci", nil, &devices); err != nil {
+		return nil, fmt.Errorf("listing PCI devices: %w", err)
+	}
+	return devices, nil
+}
+
 // ListNodeNetworks returns all network interfaces for this node.
 func (c *Client) ListNodeNetworks(ctx context.Context) ([]NodeNetworkIface, error) {
 	var ifaces []NodeNetworkIface

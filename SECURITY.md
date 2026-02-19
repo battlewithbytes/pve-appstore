@@ -128,6 +128,7 @@ Downgrading to `ProtectSystem=full` would weaken security for the **entire servi
 | Container create/start/stop/destroy | `sudo pct ...` (11 sudoers entries) | REST API via token (0 sudoers entries) |
 | CTID allocation | `sudo pvesh get /cluster/nextid` | REST API `GET /cluster/nextid` |
 | Template listing | `sudo pveam list` | REST API `GET /nodes/{node}/storage/{storage}/content` |
+| GPU detection | `lspci` + `nvidia-smi` (shell parsing) | REST API `GET /nodes/{node}/hardware/pci` |
 | Container exec | `sudo pct exec` | `sudo pct exec` (no API equivalent) |
 | File push | `sudo pct push` | `sudo pct push` (no API equivalent) |
 | Device passthrough | `sudo pct set` | `sudo pct set` (API restricted to root@pam) |
@@ -154,6 +155,19 @@ Even if the service process is compromised:
 - **Manage containers outside the pool**: API token permissions are scoped to the configured pool.
 
 ## GPU Passthrough
+
+### GPU detection
+
+GPU hardware is detected by combining two sources:
+
+1. **Device node enumeration**: `/dev/dri/renderD*` (DRI render nodes) and `/dev/nvidia[0-9]*` (NVIDIA device nodes) are discovered via filesystem glob
+2. **PCI device identification**: The Proxmox REST API (`GET /nodes/{node}/hardware/pci`) provides vendor names, device names, PCI class codes, and IOMMU group info for accurate GPU identification
+
+The sysfs symlink at `/sys/class/drm/{node}/device` resolves each DRI render node to its PCI address (e.g. `0000:61:00.0`), which is then matched against the API response for rich device info. NVIDIA device nodes are matched via PCI addresses from `/sys/bus/pci/drivers/nvidia/`.
+
+The web server (running as `appstore` user) uses the Proxmox REST API via the existing API token. The TUI installer (running as root) falls back to `pvesh` for the same data. If the API is unavailable, device nodes still appear with generic names derived from sysfs vendor IDs.
+
+The API token requires `Sys.Audit` permission at the root path (`/`) for the PCI hardware endpoint. This is granted via the `PVEAuditor` role, which is read-only and cannot modify any system state.
 
 ### Device passthrough
 

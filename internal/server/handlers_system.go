@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"net/http"
 	"time"
 
@@ -58,7 +59,21 @@ func (s *Server) handleApplyUpdate(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleListGPUs(w http.ResponseWriter, r *http.Request) {
-	gpus := installer.DiscoverGPUs()
+	// Fetch PCI device info via Proxmox REST API (works as appstore user)
+	var pciDevices []installer.PCIGPUInfo
+	if s.engine != nil {
+		if devices, err := s.engine.ListPCIDevices(context.Background()); err == nil {
+			for _, d := range devices {
+				pciDevices = append(pciDevices, installer.PCIGPUInfo{
+					ID:         d.ID,
+					Vendor:     d.Vendor,
+					VendorName: d.VendorName,
+					DeviceName: d.DeviceName,
+				})
+			}
+		}
+	}
+	gpus := installer.DiscoverGPUs(pciDevices)
 
 	type gpuItem struct {
 		Path string `json:"path"`

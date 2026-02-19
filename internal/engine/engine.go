@@ -84,6 +84,16 @@ type ContainerManager interface {
 	MountHostPath(ctid int, mpIndex int, hostPath, containerPath string, readOnly bool) error
 	AppendLXCConfig(ctid int, lines []string) error
 	ListOSTemplates(ctx context.Context) ([]OSTemplate, error)
+	ListPCIDevices(ctx context.Context) ([]PCIDevice, error)
+}
+
+// PCIDevice represents a PCI device from the Proxmox hardware API.
+type PCIDevice struct {
+	ID         string // PCI address e.g. "0000:61:00.0"
+	Class      string // PCI class e.g. "0x030000"
+	Vendor     string // vendor hex ID e.g. "0x10de"
+	VendorName string // e.g. "NVIDIA Corporation"
+	DeviceName string // e.g. "GA104 [GeForce RTX 3060 Ti]"
 }
 
 // OSTemplate represents a downloadable container template from the Proxmox appliance list.
@@ -1459,6 +1469,11 @@ func (e *Engine) EditInstall(installID string, req EditRequest) (*Job, error) {
 		UpdatedAt:     now,
 	}
 
+	// If the request includes explicit device list, use it instead of the existing one
+	if req.Devices != nil {
+		job.Devices = *req.Devices
+	}
+
 	if err := e.store.CreateJob(job); err != nil {
 		return nil, fmt.Errorf("creating edit job: %w", err)
 	}
@@ -2485,6 +2500,11 @@ func (e *Engine) ListBridges(ctx context.Context) ([]BridgeInfo, error) {
 // ListOSTemplates returns available OS templates from the Proxmox appliance list.
 func (e *Engine) ListOSTemplates(ctx context.Context) ([]OSTemplate, error) {
 	return e.cm.ListOSTemplates(ctx)
+}
+
+// ListPCIDevices returns all PCI devices from the Proxmox hardware API.
+func (e *Engine) ListPCIDevices(ctx context.Context) ([]PCIDevice, error) {
+	return e.cm.ListPCIDevices(ctx)
 }
 
 // isNewerVersion returns true if catalog version is strictly greater than installed version.

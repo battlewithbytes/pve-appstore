@@ -156,6 +156,9 @@ func createAPIToken(answers *InstallerAnswers, res *DiscoveredResources) error {
 	// 5. Assign read on local node
 	exec.Command("pveum", "acl", "modify", "/nodes/"+node, "--roles", "PVEAuditor", "--users", "appstore@pve").CombinedOutput()
 
+	// 5b. Assign audit at root path — needed for /nodes/{node}/hardware/pci (GPU detection)
+	exec.Command("pveum", "acl", "modify", "/", "--roles", "PVEAuditor", "--users", "appstore@pve").CombinedOutput()
+
 	// 6. Assign SDN access for network bridges
 	exec.Command("pveum", "acl", "modify", "/sdn/zones", "--roles", "AppStoreRole", "--users", "appstore@pve").CombinedOutput()
 

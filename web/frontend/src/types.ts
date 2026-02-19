@@ -316,6 +316,7 @@ export interface EditRequest {
   disk_gb?: number;
   bridge?: string;
   inputs?: Record<string, string>;
+  devices?: DevicePassthrough[] | null;
 }
 
 export interface ReconfigureRequest {

@@ -306,3 +306,21 @@ func (m *Manager) GetStorageInfo(ctx context.Context, storageID string) (*engine
 
 	return info, nil
 }
+
+func (m *Manager) ListPCIDevices(ctx context.Context) ([]engine.PCIDevice, error) {
+	devices, err := m.client.ListPCIDevices(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var result []engine.PCIDevice
+	for _, d := range devices {
+		result = append(result, engine.PCIDevice{
+			ID:         d.ID,
+			Class:      d.Class,
+			Vendor:     d.Vendor,
+			VendorName: d.VendorName,
+			DeviceName: d.DeviceName,
+		})
+	}
+	return result, nil
+}

@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { api } from '../api'
-import type { InstallDetail, AppDetail, MountPoint, EditRequest, ReconfigureRequest, ConfigDefaultsResponse } from '../types'
+import type { InstallDetail, AppDetail, MountPoint, EditRequest, ReconfigureRequest, ConfigDefaultsResponse, DevicePassthrough } from '../types'
 import { Center, BackLink, Badge, StatusDot, ResourceCard, InfoCard, InfoRow } from '../components/ui'
 import { formatUptime, formatBytes, formatBytesShort } from '../lib/format'
 import { TerminalModal } from '../components/terminal'
@@ -16,10 +16,8 @@ export function InstallDetailView({ id, requireAuth }: { id: string; requireAuth
   const [showUninstallDialog, setShowUninstallDialog] = useState(false)
   const [showUpdateDialog, setShowUpdateDialog] = useState(false)
   const [updating, setUpdating] = useState(false)
-  const [showEditDialog, setShowEditDialog] = useState(false)
-  const [editing, setEditing] = useState(false)
-  const [showReconfigureDialog, setShowReconfigureDialog] = useState(false)
-  const [reconfiguring, setReconfiguring] = useState(false)
+  const [showConfigureDialog, setShowConfigureDialog] = useState(false)
+  const [configuring, setConfiguring] = useState(false)
 
   const fetchDetail = useCallback(() => {
     api.installDetail(id).then(d => {
@@ -93,33 +91,27 @@ export function InstallDetailView({ id, requireAuth }: { id: string; requireAuth
     })
   }
 
-  const handleEdit = (req: EditRequest) => {
+  const handleConfigure = (req: EditRequest, mode: 'live' | 'rebuild') => {
     requireAuth(async () => {
       if (!detail) return
-      setEditing(true)
-      setShowEditDialog(false)
+      setConfiguring(true)
+      setShowConfigureDialog(false)
       try {
-        const j = await api.editInstall(detail.id, req)
-        window.location.hash = `#/job/${j.id}`
+        if (mode === 'live') {
+          const reconfReq: ReconfigureRequest = {}
+          if (req.cores) reconfReq.cores = req.cores
+          if (req.memory_mb) reconfReq.memory_mb = req.memory_mb
+          if (req.inputs) reconfReq.inputs = req.inputs
+          await api.reconfigure(detail.id, reconfReq)
+          fetchDetail()
+        } else {
+          const j = await api.editInstall(detail.id, req)
+          window.location.hash = `#/job/${j.id}`
+        }
       } catch (e: unknown) {
-        alert(e instanceof Error ? e.message : 'Edit failed')
-        setEditing(false)
-      }
-    })
-  }
-
-  const handleReconfigure = (req: ReconfigureRequest) => {
-    requireAuth(async () => {
-      if (!detail) return
-      setReconfiguring(true)
-      setShowReconfigureDialog(false)
-      try {
-        await api.reconfigure(detail.id, req)
-        fetchDetail()
-      } catch (e: unknown) {
-        alert(e instanceof Error ? e.message : 'Reconfigure failed')
+        alert(e instanceof Error ? e.message : 'Configure failed')
       } finally {
-        setReconfiguring(false)
+        setConfiguring(false)
       }
     })
   }
@@ -183,13 +175,8 @@ export function InstallDetailView({ id, requireAuth }: { id: string; requireAuth
             </button>
           )}
           {!isUninstalled && (
-            <button onClick={() => setShowReconfigureDialog(true)} disabled={reconfiguring} className="px-4 py-2 text-sm font-mono border border-border rounded-lg cursor-pointer text-text-primary bg-transparent hover:border-primary hover:text-primary transition-colors disabled:opacity-50">
-              {reconfiguring ? 'Applying...' : 'Reconfigure'}
-            </button>
-          )}
-          {!isUninstalled && (
-            <button onClick={() => setShowEditDialog(true)} disabled={editing} className="px-4 py-2 text-sm font-mono border border-border rounded-lg cursor-pointer text-text-primary bg-transparent hover:border-primary hover:text-primary transition-colors disabled:opacity-50">
-              {editing ? 'Editing...' : 'Edit'}
+            <button onClick={() => setShowConfigureDialog(true)} disabled={configuring} className="px-4 py-2 text-sm font-mono border border-border rounded-lg cursor-pointer text-text-primary bg-transparent hover:border-primary hover:text-primary transition-colors disabled:opacity-50">
+              {configuring ? 'Applying...' : 'Configure'}
             </button>
           )}
           {isRunning && (
@@ -229,25 +216,14 @@ export function InstallDetailView({ id, requireAuth }: { id: string; requireAuth
         />
       )}
 
-      {/* Edit dialog */}
-      {showEditDialog && detail && (
-        <EditDialog
+      {/* Configure dialog (unified edit + reconfigure) */}
+      {showConfigureDialog && detail && (
+        <ConfigureDialog
           detail={detail}
           appInfo={appInfo}
-          bridges={[]}
           isRunning={isRunning}
-          onConfirm={handleEdit}
-          onCancel={() => setShowEditDialog(false)}
-        />
-      )}
-
-      {/* Reconfigure dialog */}
-      {showReconfigureDialog && detail && (
-        <ReconfigureDialog
-          detail={detail}
-          appInfo={appInfo}
-          onConfirm={handleReconfigure}
-          onCancel={() => setShowReconfigureDialog(false)}
+          onConfirm={handleConfigure}
+          onCancel={() => setShowConfigureDialog(false)}
         />
       )}
 
@@ -433,11 +409,11 @@ export function UpdateDialog({ appName, ctid, currentVersion, newVersion, isRunn
   )
 }
 
-// --- Edit Dialog ---
+// --- Configure Dialog (unified edit + reconfigure) ---
 
-export function EditDialog({ detail, appInfo, isRunning, onConfirm, onCancel }: {
-  detail: InstallDetail; appInfo: AppDetail | null; bridges: string[];
-  isRunning: boolean; onConfirm: (req: EditRequest) => void; onCancel: () => void;
+export function ConfigureDialog({ detail, appInfo, isRunning, onConfirm, onCancel }: {
+  detail: InstallDetail; appInfo: AppDetail | null;
+  isRunning: boolean; onConfirm: (req: EditRequest, mode: 'live' | 'rebuild') => void; onCancel: () => void;
 }) {
   useEscapeKey(onCancel)
   const [cores, setCores] = useState(String(detail.cores))
@@ -445,6 +421,7 @@ export function EditDialog({ detail, appInfo, isRunning, onConfirm, onCancel }: 
   const [diskGB, setDiskGB] = useState(String(detail.disk_gb))
   const [bridge, setBridge] = useState(detail.bridge)
   const [inputs, setInputs] = useState<Record<string, string>>({ ...(detail.inputs || {}) })
+  const [devices, setDevices] = useState<DevicePassthrough[]>(detail.devices || [])
   const [configDefaults, setConfigDefaults] = useState<ConfigDefaultsResponse | null>(null)
 
   useEffect(() => {
@@ -452,50 +429,86 @@ export function EditDialog({ detail, appInfo, isRunning, onConfirm, onCancel }: 
   }, [])
 
   const bridgeOptions = configDefaults?.bridges || [detail.bridge]
-
   const appInputs = appInfo?.inputs || []
+  const gpuSupported = appInfo?.gpu?.supported && appInfo.gpu.supported.length > 0
+  const gpuProfiles = appInfo?.gpu?.profiles || []
+  const origDevices = detail.devices || []
 
-  const hasChanges = () => {
-    if (Number(cores) !== detail.cores) return true
-    if (Number(memoryMB) !== detail.memory_mb) return true
-    if (Number(diskGB) !== detail.disk_gb) return true
-    if (bridge !== detail.bridge) return true
+  // Detect which fields changed
+  const coresChanged = Number(cores) !== detail.cores
+  const memChanged = Number(memoryMB) !== detail.memory_mb
+  const diskChanged = Number(diskGB) !== detail.disk_gb && Number(diskGB) > detail.disk_gb
+  const bridgeChanged = bridge !== detail.bridge
+
+  const devicesChanged = (() => {
+    const cur = devices.filter(d => d.path.trim())
+    if (cur.length !== origDevices.length) return true
+    return cur.some((d, i) => d.path !== origDevices[i]?.path)
+  })()
+
+  const inputChanges = (() => {
+    const changed: Record<string, string> = {}
     for (const key of Object.keys(inputs)) {
-      if (inputs[key] !== (detail.inputs?.[key] || '')) return true
+      if (inputs[key] !== (detail.inputs?.[key] || '')) changed[key] = inputs[key]
     }
-    return false
-  }
+    return changed
+  })()
+  const hasInputChanges = Object.keys(inputChanges).length > 0
+
+  // Check if any non-reconfigurable input changed
+  const hasNonReconfigurableInputChange = hasInputChanges && appInputs.some(
+    inp => !inp.reconfigurable && inputChanges[inp.key] !== undefined
+  )
+
+  const hasChanges = coresChanged || memChanged || diskChanged || bridgeChanged || hasInputChanges || devicesChanged
+
+  // Determine mode: live (reconfigure) vs rebuild (edit)
+  const needsRebuild = diskChanged || bridgeChanged || devicesChanged || hasNonReconfigurableInputChange
+  const mode: 'live' | 'rebuild' = needsRebuild ? 'rebuild' : 'live'
 
   const buildRequest = (): EditRequest => {
     const req: EditRequest = {}
-    if (Number(cores) !== detail.cores) req.cores = Number(cores)
-    if (Number(memoryMB) !== detail.memory_mb) req.memory_mb = Number(memoryMB)
-    if (Number(diskGB) !== detail.disk_gb) req.disk_gb = Number(diskGB)
-    if (bridge !== detail.bridge) req.bridge = bridge
-    const changedInputs: Record<string, string> = {}
-    let hasInputChanges = false
-    for (const key of Object.keys(inputs)) {
-      if (inputs[key] !== (detail.inputs?.[key] || '')) {
-        changedInputs[key] = inputs[key]
-        hasInputChanges = true
+    if (coresChanged) req.cores = Number(cores)
+    if (memChanged) req.memory_mb = Number(memoryMB)
+    if (diskChanged) req.disk_gb = Number(diskGB)
+    if (bridgeChanged) req.bridge = bridge
+    if (hasInputChanges) {
+      if (mode === 'live') {
+        // Only send reconfigurable inputs for live mode
+        const reconfInputs: Record<string, string> = {}
+        for (const inp of appInputs.filter(i => i.reconfigurable)) {
+          if (inputChanges[inp.key] !== undefined) reconfInputs[inp.key] = inputChanges[inp.key]
+        }
+        if (Object.keys(reconfInputs).length > 0) req.inputs = reconfInputs
+      } else {
+        req.inputs = inputChanges
       }
     }
-    if (hasInputChanges) req.inputs = changedInputs
+    if (devicesChanged) {
+      req.devices = devices.filter(d => d.path.trim())
+    }
     return req
   }
 
   return (
     <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-[100]" onClick={onCancel}>
       <div className="bg-bg-card border border-border rounded-xl p-8 w-full max-w-[520px] max-h-[80vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
-        <h2 className="text-lg font-bold text-text-primary mb-2 font-mono">Edit {detail.app_name}</h2>
+        <h2 className="text-lg font-bold text-text-primary mb-2 font-mono">Configure {detail.app_name}</h2>
         <p className="text-sm text-text-secondary mb-4">
-          Modify settings and recreate container CT {detail.ctid}.
+          Adjust resources, settings, and GPU passthrough for CT {detail.ctid}.
         </p>
 
-        {isRunning && (
-          <div className="mb-4 p-2.5 bg-status-warning/10 border border-status-warning/30 rounded text-status-warning text-xs font-mono">
-            Container is running and will be stopped during this operation.
-          </div>
+        {/* Dynamic mode banner */}
+        {hasChanges && (
+          needsRebuild ? (
+            <div className="mb-4 p-2.5 bg-status-warning/10 border border-status-warning/30 rounded text-status-warning text-xs font-mono">
+              Container will be rebuilt to apply these changes.{isRunning ? ' It will be stopped during this operation.' : ''} Data volumes and MAC address (IP) will be preserved.
+            </div>
+          ) : (
+            <div className="mb-4 p-2.5 bg-primary/10 border border-primary/30 rounded text-primary text-xs font-mono">
+              Changes will be applied live — no downtime.
+            </div>
+          )
         )}
 
         {/* Resource fields */}
@@ -511,12 +524,18 @@ export function EditDialog({ detail, appInfo, isRunning, onConfirm, onCancel }: 
               className="w-full bg-bg-secondary border border-border rounded-lg px-3 py-2 text-sm text-text-primary font-mono focus:border-primary outline-none" />
           </div>
           <div>
-            <label className="block text-xs text-text-muted font-mono mb-1">Disk (GB) — can only grow</label>
+            <label className="block text-xs text-text-muted font-mono mb-1">
+              Disk (GB) — can only grow
+              {diskChanged && <span className="ml-2 text-status-warning">(requires rebuild)</span>}
+            </label>
             <input type="number" min={detail.disk_gb} value={diskGB} onChange={e => setDiskGB(e.target.value)}
               className="w-full bg-bg-secondary border border-border rounded-lg px-3 py-2 text-sm text-text-primary font-mono focus:border-primary outline-none" />
           </div>
           <div>
-            <label className="block text-xs text-text-muted font-mono mb-1">Bridge</label>
+            <label className="block text-xs text-text-muted font-mono mb-1">
+              Bridge
+              {bridgeChanged && <span className="ml-2 text-status-warning">(requires rebuild)</span>}
+            </label>
             <select value={bridge} onChange={e => setBridge(e.target.value)}
               className="w-full bg-bg-secondary border border-border rounded-lg px-3 py-2 text-sm text-text-primary font-mono focus:border-primary outline-none">
               {bridgeOptions.map(b => <option key={b} value={b}>{b}</option>)}
@@ -529,152 +548,87 @@ export function EditDialog({ detail, appInfo, isRunning, onConfirm, onCancel }: 
           <div className="mb-4">
             <h3 className="text-xs font-semibold text-text-muted mb-2 uppercase tracking-wider font-mono">App Settings</h3>
             <div className="space-y-3">
-              {appInputs.map(inp => (
-                <div key={inp.key}>
-                  <label className="block text-xs text-text-muted font-mono mb-1">{inp.label || inp.key}</label>
-                  {inp.type === 'select' && inp.validation?.enum ? (
-                    <select value={inputs[inp.key] || ''} onChange={e => setInputs({ ...inputs, [inp.key]: e.target.value })}
-                      className="w-full bg-bg-secondary border border-border rounded-lg px-3 py-2 text-sm text-text-primary font-mono focus:border-primary outline-none">
-                      {inp.validation.enum.map(v => <option key={v} value={v}>{v}</option>)}
-                    </select>
-                  ) : inp.type === 'boolean' ? (
-                    <select value={inputs[inp.key] || 'false'} onChange={e => setInputs({ ...inputs, [inp.key]: e.target.value })}
-                      className="w-full bg-bg-secondary border border-border rounded-lg px-3 py-2 text-sm text-text-primary font-mono focus:border-primary outline-none">
-                      <option value="true">true</option>
-                      <option value="false">false</option>
-                    </select>
-                  ) : (
-                    <input
-                      type={inp.type === 'number' ? 'number' : inp.type === 'secret' ? 'password' : 'text'}
-                      value={inputs[inp.key] || ''}
-                      onChange={e => setInputs({ ...inputs, [inp.key]: e.target.value })}
-                      className="w-full bg-bg-secondary border border-border rounded-lg px-3 py-2 text-sm text-text-primary font-mono focus:border-primary outline-none"
-                    />
-                  )}
-                  {inp.help && <p className="text-xs text-text-muted mt-0.5">{inp.help}</p>}
-                </div>
-              ))}
+              {appInputs.map(inp => {
+                const changed = inputs[inp.key] !== (detail.inputs?.[inp.key] || '')
+                return (
+                  <div key={inp.key}>
+                    <label className="block text-xs text-text-muted font-mono mb-1">
+                      {inp.label || inp.key}
+                      {!inp.reconfigurable && changed && <span className="ml-2 text-status-warning">(requires rebuild)</span>}
+                    </label>
+                    {inp.type === 'select' && inp.validation?.enum ? (
+                      <select value={inputs[inp.key] || ''} onChange={e => setInputs({ ...inputs, [inp.key]: e.target.value })}
+                        className="w-full bg-bg-secondary border border-border rounded-lg px-3 py-2 text-sm text-text-primary font-mono focus:border-primary outline-none">
+                        {inp.validation.enum.map(v => <option key={v} value={v}>{v}</option>)}
+                      </select>
+                    ) : inp.type === 'boolean' ? (
+                      <select value={inputs[inp.key] || 'false'} onChange={e => setInputs({ ...inputs, [inp.key]: e.target.value })}
+                        className="w-full bg-bg-secondary border border-border rounded-lg px-3 py-2 text-sm text-text-primary font-mono focus:border-primary outline-none">
+                        <option value="true">true</option>
+                        <option value="false">false</option>
+                      </select>
+                    ) : (
+                      <input
+                        type={inp.type === 'number' ? 'number' : inp.type === 'secret' ? 'password' : 'text'}
+                        value={inputs[inp.key] || ''}
+                        onChange={e => setInputs({ ...inputs, [inp.key]: e.target.value })}
+                        className="w-full bg-bg-secondary border border-border rounded-lg px-3 py-2 text-sm text-text-primary font-mono focus:border-primary outline-none"
+                      />
+                    )}
+                    {inp.help && <p className="text-xs text-text-muted mt-0.5">{inp.help}</p>}
+                  </div>
+                )
+              })}
             </div>
           </div>
         )}
 
-        <p className="text-xs text-text-muted mb-4 font-mono">
-          Data volumes and MAC address (IP) will be preserved.
-        </p>
-
-        <div className="flex gap-3 justify-end">
-          <button onClick={onCancel} className="px-5 py-2.5 text-sm font-semibold border border-border rounded-lg cursor-pointer text-text-secondary bg-transparent hover:border-text-secondary transition-colors font-mono">Cancel</button>
-          <button onClick={() => onConfirm(buildRequest())} disabled={!hasChanges()} className="px-5 py-2.5 text-sm font-semibold border-none rounded-lg cursor-pointer bg-primary text-bg-primary hover:shadow-[0_0_20px_rgba(0,255,157,0.3)] transition-all font-mono disabled:opacity-50 disabled:cursor-not-allowed">
-            Apply Changes
-          </button>
-        </div>
-      </div>
-    </div>
-  )
-}
-
-// --- Reconfigure Dialog ---
-
-export function ReconfigureDialog({ detail, appInfo, onConfirm, onCancel }: {
-  detail: InstallDetail; appInfo: AppDetail | null;
-  onConfirm: (req: ReconfigureRequest) => void; onCancel: () => void;
-}) {
-  useEscapeKey(onCancel)
-  const [cores, setCores] = useState(String(detail.cores))
-  const [memoryMB, setMemoryMB] = useState(String(detail.memory_mb))
-  const [inputs, setInputs] = useState<Record<string, string>>({ ...(detail.inputs || {}) })
-
-  const reconfigurableInputs = (appInfo?.inputs || []).filter(inp => inp.reconfigurable)
-
-  const hasChanges = () => {
-    if (Number(cores) !== detail.cores) return true
-    if (Number(memoryMB) !== detail.memory_mb) return true
-    for (const inp of reconfigurableInputs) {
-      if (inputs[inp.key] !== (detail.inputs?.[inp.key] || '')) return true
-    }
-    return false
-  }
-
-  const buildRequest = (): ReconfigureRequest => {
-    const req: ReconfigureRequest = {}
-    if (Number(cores) !== detail.cores) req.cores = Number(cores)
-    if (Number(memoryMB) !== detail.memory_mb) req.memory_mb = Number(memoryMB)
-    const changedInputs: Record<string, string> = {}
-    let hasInputChanges = false
-    for (const inp of reconfigurableInputs) {
-      if (inputs[inp.key] !== (detail.inputs?.[inp.key] || '')) {
-        changedInputs[inp.key] = inputs[inp.key]
-        hasInputChanges = true
-      }
-    }
-    if (hasInputChanges) req.inputs = changedInputs
-    return req
-  }
-
-  return (
-    <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-[100]" onClick={onCancel}>
-      <div className="bg-bg-card border border-border rounded-xl p-8 w-full max-w-[520px] max-h-[80vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
-        <h2 className="text-lg font-bold text-text-primary mb-2 font-mono">Reconfigure {detail.app_name}</h2>
-        <p className="text-sm text-text-secondary mb-4">
-          Apply changes in-place without recreating the container.
-        </p>
-
-        <div className="mb-4 p-2.5 bg-primary/10 border border-primary/30 rounded text-primary text-xs font-mono">
-          Changes are applied live — no downtime or container rebuild required.
-        </div>
-
-        {/* Resource fields */}
-        <div className="space-y-3 mb-4">
-          <div>
-            <label className="block text-xs text-text-muted font-mono mb-1">CPU Cores</label>
-            <input type="number" min={1} value={cores} onChange={e => setCores(e.target.value)}
-              className="w-full bg-bg-secondary border border-border rounded-lg px-3 py-2 text-sm text-text-primary font-mono focus:border-primary outline-none" />
-          </div>
-          <div>
-            <label className="block text-xs text-text-muted font-mono mb-1">Memory (MB)</label>
-            <input type="number" min={128} step={128} value={memoryMB} onChange={e => setMemoryMB(e.target.value)}
-              className="w-full bg-bg-secondary border border-border rounded-lg px-3 py-2 text-sm text-text-primary font-mono focus:border-primary outline-none" />
-          </div>
-        </div>
-
-        {/* Reconfigurable app inputs */}
-        {reconfigurableInputs.length > 0 && (
+        {/* GPU / Device Passthrough */}
+        {gpuSupported && (
           <div className="mb-4">
-            <h3 className="text-xs font-semibold text-text-muted mb-2 uppercase tracking-wider font-mono">App Settings</h3>
-            <div className="space-y-3">
-              {reconfigurableInputs.map(inp => (
-                <div key={inp.key}>
-                  <label className="block text-xs text-text-muted font-mono mb-1">{inp.label || inp.key}</label>
-                  {inp.type === 'select' && inp.validation?.enum ? (
-                    <select value={inputs[inp.key] || ''} onChange={e => setInputs({ ...inputs, [inp.key]: e.target.value })}
-                      className="w-full bg-bg-secondary border border-border rounded-lg px-3 py-2 text-sm text-text-primary font-mono focus:border-primary outline-none">
-                      {inp.validation.enum.map(v => <option key={v} value={v}>{v}</option>)}
-                    </select>
-                  ) : inp.type === 'boolean' ? (
-                    <select value={inputs[inp.key] || 'false'} onChange={e => setInputs({ ...inputs, [inp.key]: e.target.value })}
-                      className="w-full bg-bg-secondary border border-border rounded-lg px-3 py-2 text-sm text-text-primary font-mono focus:border-primary outline-none">
-                      <option value="true">true</option>
-                      <option value="false">false</option>
-                    </select>
-                  ) : (
-                    <input
-                      type={inp.type === 'number' ? 'number' : inp.type === 'secret' ? 'password' : 'text'}
-                      value={inputs[inp.key] || ''}
-                      onChange={e => setInputs({ ...inputs, [inp.key]: e.target.value })}
-                      className="w-full bg-bg-secondary border border-border rounded-lg px-3 py-2 text-sm text-text-primary font-mono focus:border-primary outline-none"
-                    />
-                  )}
-                  {inp.help && <p className="text-xs text-text-muted mt-0.5">{inp.help}</p>}
-                </div>
-              ))}
-            </div>
+            <h3 className="text-xs font-semibold text-text-muted mb-2 uppercase tracking-wider font-mono">GPU Passthrough</h3>
+            {gpuProfiles.length > 0 && (
+              <div className="text-xs text-text-muted mb-2 font-mono">Profiles: {gpuProfiles.join(', ')}</div>
+            )}
+            <label className="flex items-center gap-2 text-xs text-text-muted cursor-pointer mb-2">
+              <input type="checkbox" checked={devices.length > 0}
+                onChange={e => {
+                  if (e.target.checked) {
+                    const profileDevs: DevicePassthrough[] = []
+                    for (const profile of gpuProfiles) {
+                      if (profile === 'dri-render') profileDevs.push({ path: '/dev/dri/renderD128', gid: 44, mode: '0666' })
+                      else if (profile === 'nvidia-basic') {
+                        profileDevs.push({ path: '/dev/nvidia0' }, { path: '/dev/nvidiactl' }, { path: '/dev/nvidia-uvm' })
+                      }
+                    }
+                    setDevices(profileDevs.length > 0 ? profileDevs : [{ path: '' }])
+                  } else setDevices([])
+                }}
+                className="w-3.5 h-3.5 accent-primary" />
+              Enable GPU/device passthrough
+              {devicesChanged && <span className="ml-2 text-status-warning text-[10px]">(requires rebuild)</span>}
+            </label>
+            {devices.map((dev, i) => (
+              <div key={i} className="flex gap-2 mb-1.5 items-center">
+                <input type="text" value={dev.path} onChange={e => setDevices(p => p.map((x, j) => j === i ? { ...x, path: e.target.value } : x))} placeholder="/dev/dri/renderD128"
+                  className="flex-1 px-3 py-2 bg-bg-secondary border border-border rounded-md text-text-primary text-sm outline-none focus:border-primary font-mono placeholder:text-text-muted" />
+                <button type="button" onClick={() => setDevices(p => p.filter((_, j) => j !== i))}
+                  className="text-status-stopped text-sm bg-transparent border-none cursor-pointer hover:text-status-stopped/80 leading-none px-1">&times;</button>
+              </div>
+            ))}
+            {devices.length > 0 && (
+              <button type="button" onClick={() => setDevices(p => [...p, { path: '' }])}
+                className="text-primary text-xs font-mono bg-transparent border-none cursor-pointer hover:underline p-0">
+                + Add Device
+              </button>
+            )}
           </div>
         )}
 
         <div className="flex gap-3 justify-end">
           <button onClick={onCancel} className="px-5 py-2.5 text-sm font-semibold border border-border rounded-lg cursor-pointer text-text-secondary bg-transparent hover:border-text-secondary transition-colors font-mono">Cancel</button>
-          <button onClick={() => onConfirm(buildRequest())} disabled={!hasChanges()} className="px-5 py-2.5 text-sm font-semibold border-none rounded-lg cursor-pointer bg-primary text-bg-primary hover:shadow-[0_0_20px_rgba(0,255,157,0.3)] transition-all font-mono disabled:opacity-50 disabled:cursor-not-allowed">
-            Apply
+          <button onClick={() => onConfirm(buildRequest(), mode)} disabled={!hasChanges} className="px-5 py-2.5 text-sm font-semibold border-none rounded-lg cursor-pointer bg-primary text-bg-primary hover:shadow-[0_0_20px_rgba(0,255,157,0.3)] transition-all font-mono disabled:opacity-50 disabled:cursor-not-allowed">
+            {needsRebuild ? 'Rebuild & Apply' : 'Apply Live'}
           </button>
         </div>
       </div>
