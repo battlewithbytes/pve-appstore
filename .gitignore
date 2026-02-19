@@ -1,5 +1,6 @@
-# Binary
+# Binaries
 /pve-appstore
+/pve-appstore-linux-*
 
 # Test/coverage
 *.out
