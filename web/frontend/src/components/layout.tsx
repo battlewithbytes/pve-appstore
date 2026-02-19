@@ -35,7 +35,7 @@ export function Header({ health, authed, authRequired, devMode, hash, onLogout, 
         {health && <>
           <span>node:{health.node}</span>
           <span className="inline-flex items-center gap-1.5">
-            v{health.version}
+            {health.version.startsWith('v') ? health.version : `v${health.version}`}
             {updateAvailable && (
               <a href="#/settings?tab=service" className="inline-flex items-center gap-1 bg-primary/15 border border-primary/40 text-primary rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider no-underline hover:bg-primary/25 transition-colors">
                 <span className="relative flex h-1.5 w-1.5">
