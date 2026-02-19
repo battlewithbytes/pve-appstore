@@ -519,7 +519,9 @@ Your app will be reviewed for:
 
 ## Developer Mode
 
-Instead of creating files manually, you can use **Developer Mode** in the web UI (Settings > Developer Mode):
+Instead of creating files manually, you can use **Developer Mode** in the web UI:
+
+**To enable:** Open the web UI → **Settings** → **Developer** tab → toggle **Developer Mode** on. A "Developer" link appears in the navigation bar.
 
 1. **Create** — Pick a starter template or import from a Dockerfile/Unraid XML
 2. **Edit** — Code editor with SDK autocompletions for the manifest and install script

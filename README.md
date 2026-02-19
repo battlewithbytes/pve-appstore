@@ -34,24 +34,9 @@ The installer will:
 
 Open **http://your-proxmox-ip:8088** to browse and install apps.
 
-## Available Apps
+## App Catalog
 
-| App | Category | GPU |
-|-----|----------|-----|
-| Crawl4AI | AI | — |
-| GitLab CE | Development | — |
-| Gluetun VPN Client | Networking | — |
-| Hello World (Nginx) | Demo | — |
-| Home Assistant | Automation | — |
-| Jellyfin | Media | Intel / NVIDIA |
-| Nginx | Web | — |
-| Ollama | AI | Intel / NVIDIA |
-| Plex Media Server | Media | Intel / NVIDIA |
-| qBittorrent | Media | — |
-| Resilio Sync | Utilities | — |
-| SWAG | Networking | — |
-
-See the [catalog repo](https://github.com/battlewithbytes/pve-appstore-catalog) for the full list and details.
+Apps live in a [separate catalog repo](https://github.com/battlewithbytes/pve-appstore-catalog) — browse it for the full list, manifest schema, SDK reference, and contribution guide.
 
 ## Screenshots
 
@@ -92,28 +77,28 @@ The catalog is a Git repository of app manifests (YAML + Python install scripts)
 
 ## Developer Mode
 
-Build custom apps directly from the web UI:
+Build custom apps directly from the web UI with a full IDE experience:
 
-1. **Create** a new app from a starter template or import a Dockerfile
-2. **Edit** the manifest (`app.yml`) and install script (`install.py`) in the built-in CodeMirror editor with SDK autocompletion
-3. **Validate** — checks both the manifest schema and Python script syntax
-4. **Deploy** to the local catalog for testing — installs appear alongside official apps
-5. **Export** as a zip for submission to the catalog repo
+![Developer IDE](docs/screenshots/devide.png)
 
-### Dockerfile Import
+**To enable:** Open the web UI → **Settings** → **Developer** tab → toggle **Developer Mode** on. A "Developer" link appears in the navigation bar.
 
-Developer mode can import a Dockerfile to generate a starting point for your app manifest and install script. It analyzes the Dockerfile's `FROM`, `RUN`, `COPY`, `ENV`, `EXPOSE`, and `ENTRYPOINT` instructions and translates them into SDK calls.
+1. **Create** a new app from a starter template, import a Dockerfile, or upload a ZIP
+2. **Edit** the manifest and install script in a CodeMirror editor with SDK autocompletion, hover docs, and file management
+3. **Validate** — checks manifest schema, Python syntax, permission consistency, and unknown SDK methods
+4. **Deploy** to the local catalog for testing — your app appears alongside official apps
+5. **Publish** to GitHub — connect your account, push to a fork of the catalog repo, and open a PR
 
-**Important:** Dockerfile import is a scaffolding tool, not a converter. The generated script gets you close but will almost always need manual editing. Docker images rely on init systems (s6-overlay, supervisord, tini), entrypoint scripts, and runtime behaviors that don't translate 1:1 to LXC. Expect to:
+### Import Sources
 
-- Replace Docker-specific init scripts with native service management (`create_service()`, `enable_service()`)
-- Move inline config strings to template files in the `provision/` directory
-- Add missing configuration that Docker init scripts would normally handle
-- Test and iterate — the scaffold is a starting point, not a finished product
+- **Starter templates** — Minimal, Web App, Database, Media Server, and more
+- **Dockerfile** — analyzes FROM, RUN, COPY, ENV, EXPOSE and generates SDK calls (scaffold, not a converter)
+- **Unraid XML** — converts Unraid Community App templates to PVE App Store format
+- **ZIP** — import a previously exported app
 
 ## Writing Your Own App
 
-App manifests are YAML files paired with a Python install script. The [App Development Tutorial](tutorial.md) walks through building one from scratch, and the [catalog repo](https://github.com/battlewithbytes/pve-appstore-catalog) has a quickstart guide.
+See the [catalog repo](https://github.com/battlewithbytes/pve-appstore-catalog) for the full manifest schema, SDK reference, platform support table, and contribution guide.
 
 ## Security
 
