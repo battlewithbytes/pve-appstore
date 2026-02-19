@@ -2,11 +2,18 @@ package server
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"os/exec"
 	"strings"
+	"time"
+
+	"golang.org/x/crypto/bcrypt"
+
+	"github.com/battlewithbytes/pve-appstore/internal/config"
 )
 
 // --- Settings handlers ---
@@ -49,6 +56,11 @@ type settingsGPU struct {
 	Policy  string `json:"policy"`
 }
 
+type settingsAuthUpdate struct {
+	Mode     string `json:"mode"`
+	Password string `json:"password,omitempty"`
+}
+
 func (s *Server) handleGetSettings(w http.ResponseWriter, r *http.Request) {
 	resp := settingsResponse{
 		Defaults: settingsDefaults{
@@ -71,12 +83,13 @@ func (s *Server) handleGetSettings(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Defaults  *settingsDefaults  `json:"defaults"`
-		Storages  *[]string          `json:"storages"`
-		Bridges   *[]string          `json:"bridges"`
-		Developer *settingsDeveloper `json:"developer"`
-		Catalog   *settingsCatalog   `json:"catalog"`
-		GPU       *settingsGPU       `json:"gpu"`
+		Defaults  *settingsDefaults    `json:"defaults"`
+		Storages  *[]string            `json:"storages"`
+		Bridges   *[]string            `json:"bridges"`
+		Developer *settingsDeveloper   `json:"developer"`
+		Catalog   *settingsCatalog     `json:"catalog"`
+		GPU       *settingsGPU         `json:"gpu"`
+		Auth      *settingsAuthUpdate  `json:"auth"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
@@ -143,6 +156,41 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 			s.cfg.GPU.Policy = req.GPU.Policy
 		}
 	}
+	if req.Auth != nil {
+		mode := req.Auth.Mode
+		if mode != config.AuthModeNone && mode != config.AuthModePassword {
+			writeError(w, http.StatusBadRequest, "auth mode must be \"none\" or \"password\"")
+			return
+		}
+		if mode == config.AuthModePassword {
+			if req.Auth.Password != "" {
+				if len(req.Auth.Password) < 8 {
+					writeError(w, http.StatusBadRequest, "password must be at least 8 characters")
+					return
+				}
+				hash, err := bcrypt.GenerateFromPassword([]byte(req.Auth.Password), bcrypt.DefaultCost)
+				if err != nil {
+					writeError(w, http.StatusInternalServerError, "failed to hash password")
+					return
+				}
+				s.cfg.Auth.PasswordHash = string(hash)
+			} else if s.cfg.Auth.Mode != config.AuthModePassword {
+				// Switching from none→password without providing a password
+				writeError(w, http.StatusBadRequest, "password is required when enabling authentication")
+				return
+			}
+			// Generate HMAC secret if not set
+			if s.cfg.Auth.HMACSecret == "" {
+				secret := make([]byte, 32)
+				if _, err := rand.Read(secret); err != nil {
+					writeError(w, http.StatusInternalServerError, "failed to generate session secret")
+					return
+				}
+				s.cfg.Auth.HMACSecret = hex.EncodeToString(secret)
+			}
+		}
+		s.cfg.Auth.Mode = mode
+	}
 
 	if err := s.cfg.Validate(); err != nil {
 		writeError(w, http.StatusBadRequest, fmt.Sprintf("invalid settings: %v", err))
@@ -157,6 +205,20 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 	// Re-resolve storage metadata if storages changed
 	if req.Storages != nil {
 		s.resolveStorageMetas()
+	}
+
+	// If auth mode is now password, issue a session cookie so the user stays logged in
+	if req.Auth != nil && s.cfg.Auth.Mode == config.AuthModePassword {
+		expires := time.Now().Add(sessionMaxAge)
+		token := signToken(s.cfg.Auth.HMACSecret, expires)
+		http.SetCookie(w, &http.Cookie{
+			Name:     sessionCookieName,
+			Value:    token,
+			Path:     "/",
+			MaxAge:   int(sessionMaxAge.Seconds()),
+			HttpOnly: true,
+			SameSite: http.SameSiteLaxMode,
+		})
 	}
 
 	s.handleGetSettings(w, r)

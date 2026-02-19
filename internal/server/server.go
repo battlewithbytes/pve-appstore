@@ -224,13 +224,13 @@ func New(cfg *config.Config, cat *catalog.Catalog, eng *engine.Engine, spaFS fs.
 
 	// API routes — install engine
 	mux.HandleFunc("POST /api/apps/{id}/install", s.withAuth(s.handleInstallApp))
-	mux.HandleFunc("GET /api/jobs", s.handleListJobs)
+	mux.HandleFunc("GET /api/jobs", s.withAuth(s.handleListJobs))
 	mux.HandleFunc("DELETE /api/jobs", s.withAuth(s.handleClearJobs))
-	mux.HandleFunc("GET /api/jobs/{id}", s.handleGetJob)
-	mux.HandleFunc("GET /api/jobs/{id}/logs", s.handleGetJobLogs)
+	mux.HandleFunc("GET /api/jobs/{id}", s.withAuth(s.handleGetJob))
+	mux.HandleFunc("GET /api/jobs/{id}/logs", s.withAuth(s.handleGetJobLogs))
 	mux.HandleFunc("POST /api/jobs/{id}/cancel", s.withAuth(s.handleCancelJob))
-	mux.HandleFunc("GET /api/installs", s.handleListInstalls)
-	mux.HandleFunc("GET /api/installs/{id}", s.handleGetInstall)
+	mux.HandleFunc("GET /api/installs", s.withAuth(s.handleListInstalls))
+	mux.HandleFunc("GET /api/installs/{id}", s.withAuth(s.handleGetInstall))
 	mux.HandleFunc("GET /api/installs/{id}/terminal", s.withAuth(s.handleTerminal))
 	mux.HandleFunc("GET /api/installs/{id}/logs", s.withAuth(s.handleJournalLogs))
 	mux.HandleFunc("POST /api/installs/{id}/start", s.withAuth(s.handleStartContainer))
@@ -250,8 +250,8 @@ func New(cfg *config.Config, cat *catalog.Catalog, eng *engine.Engine, spaFS fs.
 
 	// API routes — stacks (installed stacks)
 	mux.HandleFunc("POST /api/stacks", s.withAuth(s.handleCreateStack))
-	mux.HandleFunc("GET /api/stacks", s.handleListStacks)
-	mux.HandleFunc("GET /api/stacks/{id}", s.handleGetStack)
+	mux.HandleFunc("GET /api/stacks", s.withAuth(s.handleListStacks))
+	mux.HandleFunc("GET /api/stacks/{id}", s.withAuth(s.handleGetStack))
 	mux.HandleFunc("POST /api/stacks/{id}/start", s.withAuth(s.handleStartStack))
 	mux.HandleFunc("POST /api/stacks/{id}/stop", s.withAuth(s.handleStopStack))
 	mux.HandleFunc("POST /api/stacks/{id}/restart", s.withAuth(s.handleRestartStack))
@@ -261,13 +261,11 @@ func New(cfg *config.Config, cat *catalog.Catalog, eng *engine.Engine, spaFS fs.
 	mux.HandleFunc("GET /api/stacks/{id}/terminal", s.withAuth(s.handleStackTerminal))
 	mux.HandleFunc("GET /api/stacks/{id}/logs", s.withAuth(s.handleStackJournalLogs))
 
-	// Auth — check and terminal-token always registered; login/logout only in password mode
+	// Auth — always register all auth routes so they work after mode changes without restart
 	mux.HandleFunc("GET /api/auth/check", s.handleAuthCheck)
 	mux.HandleFunc("POST /api/auth/terminal-token", s.withAuth(s.handleTerminalToken))
-	if cfg.Auth.Mode == config.AuthModePassword {
-		mux.HandleFunc("POST /api/auth/login", s.handleLogin)
-		mux.HandleFunc("POST /api/auth/logout", s.handleLogout)
-	}
+	mux.HandleFunc("POST /api/auth/login", s.handleLogin)
+	mux.HandleFunc("POST /api/auth/logout", s.handleLogout)
 
 	// SPA fallback — serve index.html for all non-API routes
 	if spaFS != nil {

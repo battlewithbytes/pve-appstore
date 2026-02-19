@@ -4,8 +4,7 @@ import type { AppDetail } from '../types'
 import { FormInput } from './ui'
 import { useEscapeKey } from '../hooks/useEscapeKey'
 
-export function LoginModal({ onSuccess, onClose }: { onSuccess: () => void; onClose: () => void }) {
-  useEscapeKey(onClose)
+export function LoginForm({ onSuccess }: { onSuccess: () => void }) {
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
@@ -23,19 +22,31 @@ export function LoginModal({ onSuccess, onClose }: { onSuccess: () => void; onCl
   }
 
   return (
+    <form onSubmit={handleSubmit}>
+      <FormInput value={password} onChange={setPassword} type="password" placeholder="Password" />
+      {error && <div className="text-status-stopped text-sm mt-2 font-mono">{error}</div>}
+      <button type="submit" disabled={loading || !password} className="w-full mt-4 px-5 py-2.5 text-sm font-semibold border-none rounded-lg cursor-pointer bg-primary text-bg-primary hover:shadow-[0_0_20px_rgba(0,255,157,0.3)] transition-all disabled:opacity-50 font-mono">
+        {loading ? 'Logging in...' : 'Login'}
+      </button>
+    </form>
+  )
+}
+
+export function LoginModal({ onSuccess, onClose }: { onSuccess: () => void; onClose: () => void }) {
+  useEscapeKey(onClose)
+
+  return (
     <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-[200]">
-      <form onSubmit={handleSubmit} className="bg-bg-card border border-border rounded-xl p-8 w-full max-w-[380px]">
-        <h2 className="text-lg font-bold text-text-primary mb-2 font-mono">Login Required</h2>
-        <p className="text-sm text-text-muted mb-5">Enter your password to perform this action.</p>
-        <FormInput value={password} onChange={setPassword} type="password" />
-        {error && <div className="text-status-stopped text-sm mt-2 font-mono">{error}</div>}
-        <div className="flex gap-3 mt-5 justify-end">
-          <button type="button" onClick={onClose} className="px-5 py-2.5 text-sm font-semibold border border-border rounded-lg cursor-pointer text-text-secondary bg-transparent hover:border-text-secondary transition-colors font-mono">Cancel</button>
-          <button type="submit" disabled={loading || !password} className="px-5 py-2.5 text-sm font-semibold border-none rounded-lg cursor-pointer bg-primary text-bg-primary hover:shadow-[0_0_20px_rgba(0,255,157,0.3)] transition-all disabled:opacity-50 font-mono">
-            {loading ? 'Logging in...' : 'Login'}
-          </button>
+      <div className="w-full max-w-[380px]">
+        <div className="bg-bg-card border border-border rounded-xl p-8">
+          <h2 className="text-lg font-bold text-text-primary mb-2 font-mono">Login Required</h2>
+          <p className="text-sm text-text-muted mb-5">Enter your password to perform this action.</p>
+          <LoginForm onSuccess={onSuccess} />
+          <div className="flex justify-end mt-3">
+            <button type="button" onClick={onClose} className="px-5 py-2.5 text-sm font-semibold border border-border rounded-lg cursor-pointer text-text-secondary bg-transparent hover:border-text-secondary transition-colors font-mono">Cancel</button>
+          </div>
         </div>
-      </form>
+      </div>
     </div>
   )
 }

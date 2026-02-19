@@ -12,15 +12,18 @@ Container lifecycle operations (create, start, stop, shutdown, destroy, status) 
 
 ### Shell operations (fallback)
 
-Four operations have no REST API equivalent (or are restricted to `root@pam` in the API) and require `sudo` via a strict sudoers allowlist:
+Six operations have no REST API equivalent (or are restricted to `root@pam` in the API) and require `sudo` via a strict sudoers allowlist:
 
 - `pct exec` — run commands inside a container
 - `pct push` — copy files from the host into a container
 - `pct set` — configure device passthrough (GPU) on a container
+- `tee -a` — append raw LXC config lines (`extra_config`) to `/etc/pve/lxc/*.conf`
 - `mkdir -p` — create directories on host storage pools for bind mounts
 - `chown` — fix ownership on bind mount paths for unprivileged containers
 
 The Proxmox API restricts `dev*` parameters (device passthrough) to `root@pam` only — API tokens cannot set them. To work around this, containers are created via the API without device params, and `pct set` is used post-creation to apply device passthrough on the host.
+
+The `tee -a` command is needed because `/etc/pve/lxc/` is a FUSE-mounted cluster filesystem that requires root access. Apps with `extra_config` in their manifest (e.g. `lxc.cap.add: net_admin`) have these lines appended to the container config file after creation.
 
 The `mkdir` command is needed because bind mount target directories often live on storage pools (ZFS datasets, LVM, etc.) owned by root. The service process cannot write there due to `ProtectSystem=strict` and filesystem ownership. The file browser's "create directory" feature uses this to prepare host paths before container creation.
 
@@ -66,7 +69,7 @@ No other commands can be run as root by the `appstore` user.
 
 ### The solution
 
-The two remaining privileged commands are wrapped with `nsenter --mount=/proc/1/ns/mnt --` which re-enters PID 1's (host init) mount namespace before executing the command:
+All privileged commands are wrapped with `nsenter --mount=/proc/1/ns/mnt --` which re-enters PID 1's (host init) mount namespace before executing the command:
 
 ```
 sudo /usr/bin/nsenter --mount=/proc/1/ns/mnt -- /usr/sbin/pct exec 104 -- ...
@@ -75,7 +78,7 @@ sudo /usr/bin/nsenter --mount=/proc/1/ns/mnt -- /usr/sbin/pct exec 104 -- ...
 This means:
 
 - The **main service process stays fully sandboxed** — web server, API handlers, catalog parser, etc. all run under `ProtectSystem=strict`
-- Only `pct exec`, `pct push`, `pct set`, `tee`, and `mkdir` child processes escape to the host mount namespace
+- Only `pct exec`, `pct push`, `pct set`, `tee`, `mkdir`, and `chown` child processes escape to the host mount namespace
 - Only the mount namespace is affected — PID, network, user, and other namespaces remain unchanged
 
 ### Why not ProtectSystem=full?
@@ -100,6 +103,7 @@ Downgrading to `ProtectSystem=full` would weaken security for the **entire servi
 | Device passthrough | `sudo pct set` | `sudo pct set` (API restricted to root@pam) |
 | Host directory creation | N/A | `sudo mkdir -p` (for bind mount paths on storage pools) |
 | Bind mount ownership | N/A | `sudo chown` (UID shift for unprivileged containers) |
+| Extra LXC config | N/A | `sudo tee -a` (append to `/etc/pve/lxc/*.conf`) |
 
 The API approach:
 - **Reduces sudoers entries from 11 to 6**
@@ -111,7 +115,7 @@ The API approach:
 
 Even if the service process is compromised:
 
-- **Run arbitrary commands as root**: Sudoers only allows `nsenter --mount=/proc/1/ns/mnt --` with specific binaries (`pct exec/push/set`, `tee`, `mkdir`). Substituting a different binary (e.g., `nsenter -- /bin/bash`) is rejected.
+- **Run arbitrary commands as root**: Sudoers only allows `nsenter --mount=/proc/1/ns/mnt --` with specific binaries (`pct exec/push/set`, `tee`, `mkdir`, `chown`). Substituting a different binary (e.g., `nsenter -- /bin/bash`) is rejected.
 - **Escape other namespaces**: Only `--mount` is specified. PID, network, and user namespaces are unaffected.
 - **Run nsenter without sudo**: `/proc/1/ns/mnt` is owned by root and inaccessible to the `appstore` user directly.
 - **Modify the sudoers file**: `/etc/sudoers.d/` is protected by `ProtectSystem=strict` (read-only for the service).
@@ -253,9 +257,58 @@ Even if an app's `install.py` is compromised:
 - All managed containers are tagged `appstore;managed`
 - The service refuses to touch containers without this tag
 
+## Authentication
+
+### Session tokens
+
+The web UI authenticates with a password configured during setup. On successful login, the server issues an HMAC-SHA256 signed session token stored as an `HttpOnly`, `SameSite=Lax` cookie. Tokens include an expiration timestamp and are verified on every authenticated request.
+
+### Rate limiting
+
+Login attempts are rate-limited to **5 attempts per minute per IP address**. After the limit is exceeded, further attempts are rejected with HTTP 429. The rate limiter uses the client's direct connection IP (`RemoteAddr`). The `X-Forwarded-For` header is **not trusted** — since the service typically runs with direct access (not behind a reverse proxy), trusting XFF would allow trivial rate-limit bypass by rotating header values.
+
+### Terminal tokens
+
+WebSocket terminal connections use ephemeral one-time tokens with a **30-second TTL**. The token is generated via an authenticated API call, then exchanged during the WebSocket handshake. Each token can only be used once and expires immediately after use or after 30 seconds.
+
+## Developer Mode
+
+Developer mode is gated behind two checks:
+
+1. **Authentication** — all `/api/dev/*` endpoints require a valid session
+2. **Feature flag** — the `developer.enabled` config flag must be `true`; the `withDevMode()` middleware rejects requests with HTTP 403 if developer mode is disabled
+
+Developer mode allows creating, editing, and deploying custom apps but cannot modify the official catalog on disk — dev apps are stored separately in `/var/lib/pve-appstore/dev-apps/`.
+
+## HTTP Security
+
+### Request size limits
+
+- **API requests** (POST/PUT/DELETE): 1 MB maximum body size
+- **File uploads** (dev mode): 2 MB maximum body size
+
+### CORS
+
+The server validates `Origin` headers against allowed patterns:
+- The configured host address and port
+- `localhost` and `127.0.0.1` with any port (for local development)
+
+Cross-origin requests from other origins are rejected.
+
+### Path traversal protection
+
+- File operations in developer mode validate paths with `filepath.Clean()` and reject paths containing `..`
+- The filesystem browser restricts access to configured storage pool roots via prefix matching
+- App provision files are confined to the app's `provision/` directory
+
+### SQL injection
+
+All database queries use parameterized queries with placeholder binding — no string interpolation of user input into SQL.
+
 ## Secrets
 
 - API tokens and passwords are never logged
 - Secrets are passed to containers via environment variables or temporary config files, never via shell command strings
 - Configuration file (`/etc/pve-appstore/config.yml`) is owned `root:appstore` with mode `0640`
 - TLS: Proxmox self-signed certs are accepted by default (`tls_skip_verify: true`); custom CA can be configured via `tls_ca_cert`
+- Input values marked with `type: secret` in manifests are redacted from job logs when listed in `provisioning.redact_keys`

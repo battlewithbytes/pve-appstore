@@ -173,6 +173,11 @@ func (s *Server) withAuth(next http.HandlerFunc) http.HandlerFunc {
 }
 
 func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
+	if s.cfg.Auth.Mode != config.AuthModePassword {
+		writeError(w, http.StatusBadRequest, "authentication is not enabled")
+		return
+	}
+
 	// Rate limit by IP
 	ip := clientIP(r)
 	if !loginLimiter.allow(ip) {
@@ -266,13 +271,10 @@ func cleanupEphemeralTokens() {
 }
 
 // clientIP extracts the client's IP from the request (for rate limiting).
+// Only uses RemoteAddr — X-Forwarded-For is not trusted because the service
+// typically runs with direct access (not behind a reverse proxy), and trusting
+// XFF unconditionally allows trivial rate-limit bypass by rotating header values.
 func clientIP(r *http.Request) string {
-	// Check X-Forwarded-For for reverse proxy setups
-	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-		if ip := strings.SplitN(xff, ",", 2)[0]; ip != "" {
-			return strings.TrimSpace(ip)
-		}
-	}
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
 		return r.RemoteAddr

@@ -131,7 +131,7 @@ function RepoInfoCard() {
 
 // --- Settings View ---
 
-function SettingsView({ requireAuth, onDevModeChange }: { requireAuth: (cb: () => void) => void; onDevModeChange?: (enabled: boolean) => void }) {
+function SettingsView({ requireAuth, onDevModeChange, onAuthChange }: { requireAuth: (cb: () => void) => void; onDevModeChange?: (enabled: boolean) => void; onAuthChange?: () => void }) {
   const [settings, setSettings] = useState<Settings | null>(null)
   const [saving, setSaving] = useState(false)
   const [msg, setMsg] = useState('')
@@ -142,8 +142,13 @@ function SettingsView({ requireAuth, onDevModeChange }: { requireAuth: (cb: () =
   const [discovered, setDiscovered] = useState<DiscoverResponse | null>(null)
   const [showStorageAdd, setShowStorageAdd] = useState(false)
   const [showBridgeAdd, setShowBridgeAdd] = useState(false)
+  const [authMode, setAuthMode] = useState('')
+  const [authPass, setAuthPass] = useState('')
+  const [authPassConfirm, setAuthPassConfirm] = useState('')
+  const [authMsg, setAuthMsg] = useState('')
+  const [authSaving, setAuthSaving] = useState(false)
 
-  useEffect(() => { api.settings().then(setSettings).catch(() => {}) }, [])
+  useEffect(() => { api.settings().then(s => { setSettings(s); setAuthMode(s.auth.mode) }).catch(() => {}) }, [])
 
   // Fetch available storages/bridges when on general tab
   useEffect(() => {
@@ -490,13 +495,101 @@ function SettingsView({ requireAuth, onDevModeChange }: { requireAuth: (cb: () =
           )}
 
           {activeTab === 'service' && (
-            <InfoCard title="Service">
-              <div className="grid grid-cols-2 gap-4 text-sm font-mono">
-                <div><span className="text-text-muted">Port:</span> <span className="text-text-primary">{settings.service.port}</span></div>
-                <div><span className="text-text-muted">Auth:</span> <span className="text-text-primary">{settings.auth.mode}</span></div>
-              </div>
-              <p className="text-xs text-text-muted mt-3">Port and auth mode are configured via the TUI installer.</p>
-            </InfoCard>
+            <>
+              <InfoCard title="Port">
+                <div className="text-sm font-mono">
+                  <span className="text-text-muted">Port:</span> <span className="text-text-primary">{settings.service.port}</span>
+                </div>
+                <p className="text-xs text-text-muted mt-2">Port is configured via the TUI installer.</p>
+              </InfoCard>
+
+              <InfoCard title="Authentication">
+                <div className="space-y-4">
+                  <div className="flex items-center gap-4">
+                    <label className="text-xs text-text-muted font-mono uppercase w-20">Mode</label>
+                    <select
+                      value={authMode}
+                      onChange={(e) => { setAuthMode(e.target.value); setAuthMsg('') }}
+                      className="bg-bg-primary border border-border rounded px-3 py-1.5 text-sm font-mono text-text-primary"
+                    >
+                      <option value="none">None</option>
+                      <option value="password">Password</option>
+                    </select>
+                  </div>
+
+                  {authMode === 'password' && (
+                    <div className="space-y-3">
+                      {settings.auth.mode === 'password' && (
+                        <p className="text-xs text-text-muted">Leave password fields blank to keep the current password.</p>
+                      )}
+                      <div>
+                        <label className="text-xs text-text-muted font-mono uppercase block mb-1">New Password</label>
+                        <input
+                          type="password"
+                          value={authPass}
+                          onChange={(e) => { setAuthPass(e.target.value); setAuthMsg('') }}
+                          placeholder={settings.auth.mode === 'password' ? 'Leave blank to keep current' : 'Min 8 characters'}
+                          className="w-full bg-bg-primary border border-border rounded px-3 py-1.5 text-sm font-mono text-text-primary outline-none focus:border-primary"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-xs text-text-muted font-mono uppercase block mb-1">Confirm Password</label>
+                        <input
+                          type="password"
+                          value={authPassConfirm}
+                          onChange={(e) => { setAuthPassConfirm(e.target.value); setAuthMsg('') }}
+                          placeholder="Repeat password"
+                          className="w-full bg-bg-primary border border-border rounded px-3 py-1.5 text-sm font-mono text-text-primary outline-none focus:border-primary"
+                        />
+                      </div>
+                    </div>
+                  )}
+
+                  {authMsg && <p className={`text-sm font-mono ${authMsg.startsWith('Error') ? 'text-red-400' : 'text-primary'}`}>{authMsg}</p>}
+
+                  <button
+                    onClick={() => {
+                      // Validate
+                      if (authMode === 'password') {
+                        const needPassword = settings.auth.mode !== 'password' || authPass !== '' || authPassConfirm !== ''
+                        if (needPassword) {
+                          if (!authPass) { setAuthMsg('Error: Password is required'); return }
+                          if (authPass.length < 8) { setAuthMsg('Error: Password must be at least 8 characters'); return }
+                          if (authPass !== authPassConfirm) { setAuthMsg('Error: Passwords do not match'); return }
+                        }
+                      }
+
+                      const update: { mode: string; password?: string } = { mode: authMode }
+                      if (authMode === 'password' && authPass) {
+                        update.password = authPass
+                      }
+
+                      requireAuth(async () => {
+                        setAuthSaving(true)
+                        setAuthMsg('')
+                        try {
+                          const updated = await api.updateSettings({ auth: update })
+                          setSettings(updated)
+                          setAuthMode(updated.auth.mode)
+                          setAuthPass('')
+                          setAuthPassConfirm('')
+                          setAuthMsg('Authentication settings saved')
+                          onAuthChange?.()
+                          setTimeout(() => setAuthMsg(''), 3000)
+                        } catch (e: unknown) {
+                          setAuthMsg(`Error: ${e instanceof Error ? e.message : 'unknown'}`)
+                        }
+                        setAuthSaving(false)
+                      })
+                    }}
+                    disabled={authSaving || (authMode === settings.auth.mode && authMode === 'none')}
+                    className="bg-primary text-bg-primary rounded px-4 py-1.5 text-xs font-mono font-bold cursor-pointer hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {authSaving ? 'Saving...' : 'Save Auth'}
+                  </button>
+                </div>
+              </InfoCard>
+            </>
           )}
         </div>
       </div>

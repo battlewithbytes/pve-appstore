@@ -494,6 +494,7 @@ export interface SettingsUpdate {
   developer?: { enabled: boolean };
   catalog?: { refresh?: string };
   gpu?: { enabled?: boolean; policy?: string };
+  auth?: { mode: string; password?: string };
 }
 
 export interface DiscoverResponse {
