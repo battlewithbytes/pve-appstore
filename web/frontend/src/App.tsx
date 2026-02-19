@@ -91,7 +91,7 @@ function App() {
   else if (isCreateStack) content = <StackCreateWizard requireAuth={requireAuth} />
   else if (isJobs) content = <JobsList />
   else if (isConfig) content = <ConfigView requireAuth={requireAuth} />
-  else if (isSettings) content = <SettingsView requireAuth={requireAuth} onDevModeChange={setDevMode} onUpdateApplied={() => setUpdateAvailable(false)} onAuthChange={() => {
+  else if (isSettings) content = <SettingsView requireAuth={requireAuth} onDevModeChange={setDevMode} onUpdateApplied={() => { setUpdateAvailable(false); api.health().then(setHealth).catch(() => {}) }} onAuthChange={() => {
     api.authCheck().then(d => {
       setAuthed(d.authenticated)
       setAuthRequired(d.auth_required)
