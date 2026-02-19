@@ -135,7 +135,11 @@ function SettingsView({ requireAuth, onDevModeChange, onAuthChange }: { requireA
   const [settings, setSettings] = useState<Settings | null>(null)
   const [saving, setSaving] = useState(false)
   const [msg, setMsg] = useState('')
-  const [activeTab, setActiveTab] = useState('general')
+  const [activeTab, setActiveTab] = useState(() => {
+    const hash = window.location.hash
+    const tabMatch = hash.match(/[?&]tab=([^&]+)/)
+    return tabMatch ? tabMatch[1] : 'general'
+  })
   const [ghStatus, setGhStatus] = useState<GitHubStatus | null>(null)
   const [ghLoading, setGhLoading] = useState(false)
   const [ghToken, setGhToken] = useState('')

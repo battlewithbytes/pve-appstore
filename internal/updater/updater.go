@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
+	"syscall"
 	"strconv"
 	"strings"
 	"sync"
@@ -149,21 +150,28 @@ func DownloadBinary(downloadURL, destPath string) error {
 }
 
 // ApplyUpdateDirect replaces the binary and restarts the service (runs as root).
+// Uses remove+rename to avoid "text file busy" on running binaries.
 func ApplyUpdateDirect(newBinaryPath, targetPath string) error {
-	// Backup current binary
+	// Backup current binary (copy, not rename, so target inode stays until removed)
 	if err := copyFile(targetPath, targetPath+".bak"); err != nil {
 		return fmt.Errorf("backing up current binary: %w", err)
 	}
 
-	// Move new binary into place
-	data, err := os.ReadFile(newBinaryPath)
-	if err != nil {
-		return fmt.Errorf("reading new binary: %w", err)
+	// Remove the old binary first — Linux allows unlinking a running executable,
+	// the kernel keeps the inode alive until the process exits.
+	if err := os.Remove(targetPath); err != nil {
+		return fmt.Errorf("removing old binary: %w", err)
 	}
-	if err := os.WriteFile(targetPath, data, 0755); err != nil {
-		return fmt.Errorf("writing new binary: %w", err)
+
+	// Rename new binary into place (atomic on same filesystem)
+	if err := os.Rename(newBinaryPath, targetPath); err != nil {
+		// Fallback: copy if rename fails (cross-device)
+		if err2 := copyFile(newBinaryPath, targetPath); err2 != nil {
+			return fmt.Errorf("installing new binary: %w", err2)
+		}
+		os.Remove(newBinaryPath)
 	}
-	os.Remove(newBinaryPath)
+	os.Chmod(targetPath, 0755)
 
 	// Restart service
 	if err := exec.Command("systemctl", "restart", "pve-appstore").Run(); err != nil {
@@ -173,11 +181,14 @@ func ApplyUpdateDirect(newBinaryPath, targetPath string) error {
 }
 
 // ApplyUpdateSudo runs the update script via sudo (for web-triggered updates).
+// Uses setsid to detach the process so it survives the service restart.
 func ApplyUpdateSudo(newBinaryPath string) error {
-	cmd := exec.Command("sudo", UpdateScript, newBinaryPath)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("update script failed: %s: %w", string(out), err)
+	cmd := exec.Command("setsid", "sudo", UpdateScript, newBinaryPath)
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("starting update script: %w", err)
 	}
+	// Don't wait — the script will restart our process
 	return nil
 }
 
@@ -189,6 +200,7 @@ NEW="$1"
 TARGET="/opt/pve-appstore/pve-appstore"
 [ -f "$NEW" ] || { echo "new binary not found: $NEW"; exit 1; }
 cp "$TARGET" "${TARGET}.bak" 2>/dev/null || true
+rm -f "$TARGET"
 mv "$NEW" "$TARGET"
 chmod 0755 "$TARGET"
 systemctl restart pve-appstore

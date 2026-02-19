@@ -12,7 +12,7 @@ Container lifecycle operations (create, start, stop, shutdown, destroy, status) 
 
 ### Shell operations (fallback)
 
-Six operations have no REST API equivalent (or are restricted to `root@pam` in the API) and require `sudo` via a strict sudoers allowlist:
+Seven operations have no REST API equivalent (or are restricted to `root@pam` in the API) and require `sudo` via a strict sudoers allowlist:
 
 - `pct exec` — run commands inside a container
 - `pct push` — copy files from the host into a container
@@ -20,6 +20,7 @@ Six operations have no REST API equivalent (or are restricted to `root@pam` in t
 - `tee -a` — append raw LXC config lines (`extra_config`) to `/etc/pve/lxc/*.conf`
 - `mkdir -p` — create directories on host storage pools for bind mounts
 - `chown` — fix ownership on bind mount paths for unprivileged containers
+- `update.sh` — binary replacement and service restart for self-updates
 
 The Proxmox API restricts `dev*` parameters (device passthrough) to `root@pam` only — API tokens cannot set them. To work around this, containers are created via the API without device params, and `pct set` is used post-creation to apply device passthrough on the host.
 
@@ -29,7 +30,7 @@ The `mkdir` command is needed because bind mount target directories often live o
 
 The `chown` command is needed for unprivileged containers with bind mounts. In unprivileged containers, UID 0 maps to host UID 100000. Bind mount host directories are typically owned by host UID 0, so the container's root cannot chown files inside them (EPERM). Before starting the container, the engine chowns bind mount paths to `100000:100000` so the container's mapped root has ownership.
 
-These are the **only** commands permitted via `/etc/sudoers.d/pve-appstore`.
+These are the **only** commands permitted via `/etc/sudoers.d/pve-appstore`. The `update.sh` script is a static helper that only accepts one argument (the path to the new binary) and performs a fixed sequence: backup, remove, move, chmod, restart.
 
 ### Unprivileged service process
 
@@ -57,9 +58,38 @@ appstore ALL=(root) NOPASSWD: /usr/bin/nsenter --mount=/proc/1/ns/mnt -- /usr/sb
 appstore ALL=(root) NOPASSWD: /usr/bin/nsenter --mount=/proc/1/ns/mnt -- /usr/bin/tee -a /etc/pve/lxc/*
 appstore ALL=(root) NOPASSWD: /usr/bin/nsenter --mount=/proc/1/ns/mnt -- /usr/bin/mkdir -p *
 appstore ALL=(root) NOPASSWD: /usr/bin/nsenter --mount=/proc/1/ns/mnt -- /usr/bin/chown *
+appstore ALL=(root) NOPASSWD: /opt/pve-appstore/update.sh
 ```
 
 No other commands can be run as root by the `appstore` user.
+
+## Self-Update
+
+### CLI update (`pve-appstore self-update`)
+
+The CLI command runs as root directly. It:
+1. Checks the GitHub Releases API for the latest version
+2. Downloads the binary for the current architecture
+3. Removes the running binary (Linux keeps the inode alive for the running process)
+4. Moves the new binary into place at `/opt/pve-appstore/pve-appstore`
+5. Restarts the systemd service
+
+### Web update (`POST /api/system/update`)
+
+The web endpoint runs as the `appstore` user and cannot replace the binary directly. Instead:
+1. Downloads the new binary to `/var/lib/pve-appstore/pve-appstore.new`
+2. Delegates to `/opt/pve-appstore/update.sh` via `sudo`
+3. The script removes the old binary, moves the new one into place, and restarts the service
+4. Uses `setsid` to detach the update process so it survives the service restart
+
+The update script is added to the sudoers allowlist:
+```
+appstore ALL=(root) NOPASSWD: /opt/pve-appstore/update.sh
+```
+
+### Update check endpoint
+
+`GET /api/system/update-check` queries the GitHub Releases API (public, no auth needed) and compares the response with the running version using semver parsing. Results are cached in-memory for 1 hour to avoid rate limiting. The endpoint requires authentication (via `withAuth` middleware).
 
 ## Mount Namespace Escape (nsenter)
 
@@ -106,7 +136,7 @@ Downgrading to `ProtectSystem=full` would weaken security for the **entire servi
 | Extra LXC config | N/A | `sudo tee -a` (append to `/etc/pve/lxc/*.conf`) |
 
 The API approach:
-- **Reduces sudoers entries from 11 to 6**
+- **Reduces sudoers entries from 11 to 7** (6 for container ops + 1 for self-update)
 - **Eliminates `sudo` privilege escalation** for most operations
 - **Uses the API token** with scoped permissions (pool-limited, role-limited)
 - **Removes dependency** on `pvesh` and `pveam` binaries

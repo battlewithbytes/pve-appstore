@@ -37,9 +37,12 @@ export function Header({ health, authed, authRequired, devMode, hash, onLogout, 
           <span className="inline-flex items-center gap-1.5">
             v{health.version}
             {updateAvailable && (
-              <a href="#/settings" className="relative flex h-2 w-2" title="Update available">
-                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-primary opacity-75" />
-                <span className="relative inline-flex rounded-full h-2 w-2 bg-primary" />
+              <a href="#/settings?tab=service" className="inline-flex items-center gap-1 bg-primary/15 border border-primary/40 text-primary rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider no-underline hover:bg-primary/25 transition-colors">
+                <span className="relative flex h-1.5 w-1.5">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-primary opacity-75" />
+                  <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-primary" />
+                </span>
+                Update
               </a>
             )}
           </span>
