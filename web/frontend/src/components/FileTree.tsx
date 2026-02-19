@@ -80,15 +80,14 @@ export function FileTree({ files, activeFile, protectedFiles, onSelectFile, onDe
 
   // Build sorted file list: core files first, extras in middle, README + icon at end
   const coreFileSet = useMemo(() => new Set(['app.yml', 'provision/install.py', 'README.md', 'icon.png']), [])
-  const hasIcon = useMemo(() => files.some(f => f.path === 'icon.png'), [files])
   const allFiles = useMemo(() => {
     const core = ['app.yml', 'provision/install.py']
     const extra = files
       .filter(f => !f.is_dir && !coreFileSet.has(f.path) && !f.path.startsWith('.') && !f.path.endsWith('.png') && !f.path.endsWith('.jpg') && !f.path.endsWith('.ico'))
       .map(f => f.path)
       .sort()
-    return [...core, ...extra, 'README.md', ...(hasIcon ? ['icon.png'] : [])]
-  }, [files, coreFileSet, hasIcon])
+    return [...core, ...extra, 'README.md', 'icon.png']
+  }, [files, coreFileSet])
 
   return (
     <>

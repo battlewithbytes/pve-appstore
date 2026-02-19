@@ -160,11 +160,11 @@ func (s *Server) handleJournalLogsForCTID(w http.ResponseWriter, r *http.Request
 
 	ctx := r.Context()
 
-	// Detect OS to pick the right log command: journalctl (Debian) or logread (Alpine)
+	// Detect OS to pick the right log command: journalctl (Debian) or tail (Alpine)
 	logArgs := []string{"journalctl", "-f", "--no-pager", "-n", "100", "--output=short-iso"}
-	if result, err := pctpkg.Exec(ctid, []string{"test", "-x", "/sbin/logread"}); err == nil && result.ExitCode == 0 {
-		// Alpine/BusyBox: use logread -f (follows syslog ring buffer)
-		logArgs = []string{"logread", "-f"}
+	if result, err := pctpkg.Exec(ctid, []string{"test", "-f", "/etc/alpine-release"}); err == nil && result.ExitCode == 0 {
+		// Alpine/BusyBox: tail the syslog file (logread requires syslogd -C which isn't default)
+		logArgs = []string{"tail", "-n", "100", "-f", "/var/log/messages"}
 	}
 	pctArgs := append([]string{"exec", strconv.Itoa(ctid), "--"}, logArgs...)
 	cmd := pctpkg.SudoNsenterCmd("/usr/sbin/pct", pctArgs...)

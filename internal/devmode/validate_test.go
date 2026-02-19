@@ -2,6 +2,7 @@ package devmode
 
 import (
 	"os/exec"
+	"sort"
 	"strings"
 	"testing"
 )
@@ -1252,4 +1253,79 @@ func TestPipBaseName(t *testing.T) {
 			t.Errorf("pipBaseName(%q) = %q, want %q", tt.input, got, tt.want)
 		}
 	}
+}
+
+// TestSDKMethodsSyncWithValidator uses Python's AST module to extract all public
+// methods from base.py and verifies that extractSDKMethods() finds them all.
+// This prevents the validator from flagging valid SDK methods as unknown.
+func TestSDKMethodsSyncWithValidator(t *testing.T) {
+	requirePython3(t)
+
+	// Use Python AST to authoritatively extract all public instance methods
+	pyScript := `
+import ast, sys
+
+with open(sys.argv[1]) as f:
+    tree = ast.parse(f.read())
+
+for node in ast.walk(tree):
+    if isinstance(node, ast.ClassDef) and node.name == "BaseApp":
+        for item in node.body:
+            if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                if not item.name.startswith("_") and item.args.args and item.args.args[0].arg == "self":
+                    print(item.name)
+`
+	cmd := exec.Command("python3", "-c", pyScript, "../../sdk/python/appstore/base.py")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("Python AST extraction failed: %v\n%s", err, out)
+	}
+
+	var astMethods []string
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		line = strings.TrimSpace(line)
+		if line != "" {
+			astMethods = append(astMethods, line)
+		}
+	}
+	if len(astMethods) == 0 {
+		t.Fatal("Python AST found zero methods in BaseApp — check path to base.py")
+	}
+
+	// Get what the Go-side extractor finds (used by the validator at runtime)
+	goMethods := extractSDKMethods()
+
+	var missing []string
+	for _, m := range astMethods {
+		if !goMethods[m] {
+			missing = append(missing, m)
+		}
+	}
+	sort.Strings(missing)
+
+	if len(missing) > 0 {
+		t.Errorf("extractSDKMethods() is missing %d methods that exist in BaseApp:\n  %s\n"+
+			"The validator will incorrectly flag these as 'Unknown SDK method'.\n"+
+			"Fix extractSDKMethods() in validate.go to handle these method signatures.",
+			len(missing), strings.Join(missing, "\n  "))
+	}
+
+	// Also check for methods in Go that don't exist in Python (stale entries)
+	astSet := make(map[string]bool, len(astMethods))
+	for _, m := range astMethods {
+		astSet[m] = true
+	}
+	var extra []string
+	for m := range goMethods {
+		if !astSet[m] {
+			extra = append(extra, m)
+		}
+	}
+	sort.Strings(extra)
+	if len(extra) > 0 {
+		t.Errorf("extractSDKMethods() returns %d methods NOT in BaseApp (stale?):\n  %s",
+			len(extra), strings.Join(extra, "\n  "))
+	}
+
+	t.Logf("SDK sync OK: %d methods in BaseApp, %d found by Go extractor", len(astMethods), len(goMethods))
 }

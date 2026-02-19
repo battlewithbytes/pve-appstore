@@ -5,9 +5,13 @@ Helper methods enforce the app's declared permission allowlist before executing
 any system operations.
 """
 
+import base64
+import hashlib
 import json
 import os
+import secrets
 import shutil
+import string
 import subprocess
 import tempfile
 import time
@@ -30,6 +34,12 @@ class BaseApp(ABC):
         self.log = AppLogger()
         self._os = detect_os()
 
+        if self._os == "alpine":
+            from appstore import platform_alpine as _plat
+        else:
+            from appstore import platform_debian as _plat
+        self._platform = _plat
+
     # --- Lifecycle methods (subclasses implement these) ---
 
     @abstractmethod
@@ -49,7 +59,7 @@ class BaseApp(ABC):
         """Optional cleanup for uninstall."""
         pass
 
-    # --- Built-in helpers ---
+    # @sdk-group: Package Management
 
     def apt_install(self, *packages: str) -> None:
         """Install apt packages (deprecated — use pkg_install for OS-aware installs). Each package must be in permissions.packages."""
@@ -67,29 +77,120 @@ class BaseApp(ABC):
         """
         for pkg in packages:
             self.permissions.check_package(pkg)
+        self._platform.pkg_install(self, list(packages))
 
-        if self._os == "alpine":
-            self.log.info(f"Installing packages (apk): {', '.join(packages)}")
-            self._run(["apk", "add", "--no-cache"] + list(packages))
-        else:
-            self.log.info(f"Installing packages (apt): {', '.join(packages)}")
-            result = self._run(["apt-get", "update", "-qq"], check=False)
-            if result.returncode != 0:
-                output = result.stdout or ""
-                hint = ""
-                if "NO_PUBKEY" in output or "not signed" in output:
-                    hint = (
-                        "\n\nHint: A GPG key is missing or invalid. Check that add_apt_key() "
-                        "downloaded the key correctly and the keyring path matches the "
-                        "signed-by= path in the apt repo line. Use .asc extension for "
-                        "ASCII-armored keys, .gpg for binary keys."
+    def pip_install(self, *packages: str, venv: str = None) -> None:
+        """Install pip packages in a virtual environment.
+
+        Uses /opt/venv by default to comply with PEP 668 (externally-managed
+        Python environments on modern distros). Pass venv= to override.
+        """
+        for pkg in packages:
+            self.permissions.check_pip_package(pkg)
+
+        venv_path = venv or self._default_venv
+        if not os.path.isfile(f"{venv_path}/bin/pip"):
+            self.log.info(f"Creating venv: {venv_path}")
+            self._run(["python3", "-m", "venv", venv_path])
+
+        pip_bin = f"{venv_path}/bin/pip"
+        self.log.info(f"Installing pip packages: {', '.join(packages)}")
+        self._run([pip_bin, "install", "--progress-bar", "off"] + list(packages))
+
+    _default_venv = "/opt/venv"
+
+    def create_venv(self, path: str) -> None:
+        """Create a Python virtual environment."""
+        self.permissions.check_path(path)
+        self.log.info(f"Creating venv: {path}")
+        self._run(["python3", "-m", "venv", path])
+        # Upgrade pip in the new venv
+        self._run([f"{path}/bin/pip", "install", "--progress-bar", "off", "-U", "pip"])
+
+    def enable_repo(self, repo_name: str) -> None:
+        """Enable a named repository. Alpine: uncomments in /etc/apk/repositories.
+        Debian: no-op (use add_apt_repository instead)."""
+        self._platform.enable_repo(self, repo_name)
+
+    def add_apt_key(self, url: str, keyring_path: str) -> None:
+        """Add an APT signing key from a URL.
+
+        If keyring_path ends with .gpg, the key is dearmored (binary format).
+        If keyring_path ends with .asc or anything else, the key is saved as-is.
+        Modern apt handles both formats with signed-by=.
+        """
+        if not hasattr(self._platform, "add_apt_key"):
+            raise RuntimeError("apt methods are only available on Debian/Ubuntu")
+        self.permissions.check_url(url)
+        self.permissions.check_path(keyring_path)
+        self._platform.add_apt_key(self, url, keyring_path)
+
+    def add_apt_repo(self, repo_line: str, filename: str) -> None:
+        """Add an APT repository source file."""
+        if not hasattr(self._platform, "add_apt_repo"):
+            raise RuntimeError("apt methods are only available on Debian/Ubuntu")
+        self.permissions.check_apt_repo(repo_line)
+        self._platform.add_apt_repo(self, repo_line, filename)
+
+    def add_apt_repository(self, repo_url: str, key_url: str, name: str = "",
+                           suite: str = "", components: str = "main") -> None:
+        """Add an APT repository with its signing key in one call.
+
+        This is the recommended high-level method. It:
+        1. Downloads and installs the GPG signing key
+        2. Detects the distro codename (e.g. "noble") if suite is not given
+        3. Writes the sources list entry with signed-by
+
+        Args:
+            repo_url: Base URL of the repository (e.g. "https://downloads.plex.tv/repo/deb").
+            key_url: URL to the GPG signing key.
+            name: Short name for the repo (used for filenames). Auto-derived from URL if blank.
+            suite: Distribution suite/codename (e.g. "noble", "stable", "public").
+                   If blank, auto-detected from /etc/os-release VERSION_CODENAME.
+            components: Space-separated components (default: "main").
+        """
+        if not hasattr(self._platform, "add_apt_repository"):
+            raise RuntimeError("apt methods are only available on Debian/Ubuntu")
+        self.permissions.check_url(repo_url)
+        self.permissions.check_url(key_url)
+        self._platform.add_apt_repository(self, repo_url, key_url, name=name,
+                                          suite=suite, components=components)
+
+    def pull_oci_binary(self, image: str, dest: str, tag: str = "latest") -> None:
+        """Download a binary from a Docker/OCI image without Docker.
+
+        Args:
+            image: Docker image name (e.g., "qmcgaw/gluetun").
+            dest: Destination path for the extracted binary.
+            tag: Image tag (default "latest").
+        """
+        self.permissions.check_url("https://auth.docker.io/*")
+        self.permissions.check_url("https://registry-1.docker.io/*")
+        self.permissions.check_path(dest)
+
+        from appstore.oci import OCIClient
+        client = OCIClient(log=self.log)
+        client.pull_binary(image, dest, tag=tag)
+
+        # Post-extraction validation: check for missing shared libraries
+        try:
+            result = subprocess.run(
+                ["ldd", dest], capture_output=True, text=True
+            )
+            if result.returncode == 0:
+                missing = [
+                    line.strip() for line in result.stdout.splitlines()
+                    if "not found" in line
+                ]
+                if missing:
+                    self.log.warn(
+                        f"Binary at {dest} has missing shared libraries:\n"
+                        + "\n".join(f"  {m}" for m in missing)
                     )
-                elif "Could not resolve" in output:
-                    hint = "\n\nHint: DNS resolution failed. Check the repository URL."
-                raise RuntimeError(
-                    f"apt-get update failed (exit {result.returncode}): {output}{hint}"
-                )
-            self._run(["apt-get", "install", "-y", "-qq"] + list(packages))
+        except FileNotFoundError:
+            pass  # ldd not available
+
+    # @sdk-group: File Operations
 
     def write_config(self, path: str, template_str: str, **kwargs) -> str:
         """Write a config file using template substitution.
@@ -140,27 +241,87 @@ class BaseApp(ABC):
             template_str = f.read()
         return self.write_config(dest_path, template_str, **kwargs)
 
-    def enable_service(self, name: str) -> None:
-        """Enable and start a service (systemd on Debian, OpenRC on Alpine)."""
-        self.permissions.check_service(name)
-        self.log.info(f"Enabling service: {name}")
-        if self._os == "alpine":
-            self._run(["rc-update", "add", name, "default"])
-            self._run(["rc-service", name, "start"])
-        else:
-            self._run(["systemctl", "daemon-reload"])
-            self._run(["systemctl", "enable", name])
-            self._run(["systemctl", "start", name])
+    def provision_file(self, name: str) -> str:
+        """Read a file from the provision directory and return its contents.
 
-    def restart_service(self, name: str) -> None:
-        """Restart a service (systemd on Debian, OpenRC on Alpine)."""
-        self.permissions.check_service(name)
-        self.log.info(f"Restarting service: {name}")
-        if self._os == "alpine":
-            self._run(["rc-service", name, "restart"])
-        else:
-            self._run(["systemctl", "daemon-reload"])
-            self._run(["systemctl", "restart", name])
+        Use this to keep templates, configs, and scripts as real files in the
+        provision/ directory instead of embedding them as string constants.
+
+        Args:
+            name: Filename (e.g., "server.py", "config.ini").
+
+        Returns:
+            File contents as a string.
+        """
+        path = os.path.join(self._provision_dir(), name)
+        with open(path) as f:
+            return f.read()
+
+    def deploy_provision_file(self, name: str, dest: str, mode: str = None) -> None:
+        """Copy a file from the provision directory to a destination path.
+
+        Args:
+            name: Filename in the provision directory.
+            dest: Destination path in the container.
+            mode: Optional file permissions (octal string, e.g. "0755").
+        """
+        self.permissions.check_path(dest)
+        src = os.path.join(self._provision_dir(), name)
+        os.makedirs(os.path.dirname(dest) or ".", exist_ok=True)
+        shutil.copy2(src, dest)
+        if mode:
+            os.chmod(dest, int(mode, 8))
+        self.log.info(f"Deployed {name} -> {dest}")
+
+    def write_env_file(self, path: str, env_dict: dict, mode: str = "0644") -> None:
+        """Write a KEY=VALUE environment file, skipping None/empty values.
+
+        Args:
+            path: Destination path.
+            env_dict: Dict of environment variables. Keys with None or empty
+                     string values are skipped.
+            mode: File permissions (octal string).
+        """
+        self.permissions.check_path(path)
+        lines = []
+        for key, value in env_dict.items():
+            if value is None or value == "":
+                continue
+            lines.append(f"{key}={value}")
+        content = "\n".join(lines) + "\n" if lines else ""
+        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+        with open(path, "w") as f:
+            f.write(content)
+        os.chmod(path, int(mode, 8))
+        self.log.info(f"Wrote env file: {path} ({len(lines)} vars)")
+
+    def create_dir(self, path: str, owner: str = None, mode: str = "0755") -> None:
+        """Create a directory with optional ownership."""
+        self.permissions.check_path(path)
+        os.makedirs(path, exist_ok=True)
+        os.chmod(path, int(mode, 8))
+        if owner:
+            self._run(["chown", owner, path])
+        self.log.info(f"Created directory: {path}")
+
+    def chown(self, path: str, owner: str, recursive: bool = False) -> None:
+        """Change file/directory ownership."""
+        self.permissions.check_path(path)
+        cmd = ["chown"]
+        if recursive:
+            cmd.append("-R")
+        cmd.extend([owner, path])
+        self._run(cmd)
+
+    def download(self, url: str, dest: str) -> None:
+        """Download a URL to a file."""
+        self.permissions.check_url(url)
+        self.permissions.check_path(dest)
+        self.log.info(f"Downloading {url} -> {dest}")
+        os.makedirs(os.path.dirname(dest) or ".", exist_ok=True)
+        self._run(["curl", "-fsSL", "-o", dest, url])
+
+    # @sdk-group: Service Management
 
     def create_service(
         self,
@@ -198,61 +359,28 @@ class BaseApp(ABC):
             extra_service: Extra lines for [Service] section.
         """
         self.permissions.check_service(name)
+        self._platform.create_service(
+            self, name, exec_start, description=description,
+            after=after, user=user, working_directory=working_directory,
+            environment=environment, environment_file=environment_file,
+            restart=restart, restart_sec=restart_sec, type=type,
+            capabilities=capabilities, extra_unit=extra_unit,
+            extra_service=extra_service,
+        )
 
-        if self._os == "alpine":
-            from appstore.openrc import generate_init_script
-            script = generate_init_script(
-                name=name, exec_start=exec_start, description=description,
-                after=after, user=user, working_directory=working_directory,
-                environment=environment, environment_file=environment_file,
-                restart=restart, capabilities=capabilities,
-                extra_service=extra_service,
-            )
-            script_path = f"/etc/init.d/{name}"
-            self.permissions.check_path(script_path)
-            os.makedirs("/etc/init.d", exist_ok=True)
-            with open(script_path, "w") as f:
-                f.write(script)
-            os.chmod(script_path, 0o755)
-            self.log.info(f"Created OpenRC service: {name}")
-            self._run(["rc-update", "add", name, "default"])
-            self._run(["rc-service", name, "start"])
-        else:
-            from appstore.systemd import generate_service_unit
-            unit = generate_service_unit(
-                name=name, exec_start=exec_start, description=description,
-                after=after, user=user, working_directory=working_directory,
-                environment=environment, environment_file=environment_file,
-                restart=restart, restart_sec=restart_sec, type=type,
-                capabilities=capabilities, extra_unit=extra_unit,
-                extra_service=extra_service,
-            )
-            unit_path = f"/etc/systemd/system/{name}.service"
-            self.permissions.check_path(unit_path)
-            os.makedirs("/etc/systemd/system", exist_ok=True)
-            with open(unit_path, "w") as f:
-                f.write(unit)
-            self.log.info(f"Created systemd service: {name}")
-            self._run(["systemctl", "daemon-reload"])
-            self._run(["systemctl", "enable", name])
-            self._run(["systemctl", "start", name])
+    def enable_service(self, name: str) -> None:
+        """Enable and start a service (systemd on Debian, OpenRC on Alpine)."""
+        self.permissions.check_service(name)
+        self.log.info(f"Enabling service: {name}")
+        self._platform.enable_service(self, name)
 
-    def create_dir(self, path: str, owner: str = None, mode: str = "0755") -> None:
-        """Create a directory with optional ownership."""
-        self.permissions.check_path(path)
-        os.makedirs(path, exist_ok=True)
-        os.chmod(path, int(mode, 8))
-        if owner:
-            self._run(["chown", owner, path])
-        self.log.info(f"Created directory: {path}")
+    def restart_service(self, name: str) -> None:
+        """Restart a service (systemd on Debian, OpenRC on Alpine)."""
+        self.permissions.check_service(name)
+        self.log.info(f"Restarting service: {name}")
+        self._platform.restart_service(self, name)
 
-    def download(self, url: str, dest: str) -> None:
-        """Download a URL to a file."""
-        self.permissions.check_url(url)
-        self.permissions.check_path(dest)
-        self.log.info(f"Downloading {url} -> {dest}")
-        os.makedirs(os.path.dirname(dest) or ".", exist_ok=True)
-        self._run(["curl", "-fsSL", "-o", dest, url])
+    # @sdk-group: User Management
 
     def create_user(
         self,
@@ -264,165 +392,9 @@ class BaseApp(ABC):
         """Create a system user. Uses useradd on Debian, adduser on Alpine."""
         self.permissions.check_user(name)
         self.log.info(f"Creating user: {name}")
+        self._platform.create_user(self, name, system=system, home=home, shell=shell)
 
-        if self._os == "alpine":
-            nologin = "/sbin/nologin" if shell == "/bin/false" else shell
-            cmd = ["adduser", "-D"]
-            if system:
-                cmd.append("-S")
-            if home:
-                cmd.extend(["-h", home])
-            else:
-                cmd.extend(["-h", "/dev/null", "-H"])
-            cmd.extend(["-s", nologin, name])
-            result = subprocess.run(cmd, capture_output=True)
-            if result.returncode != 0 and b"already exists" not in result.stderr:
-                raise RuntimeError(
-                    f"adduser failed: {result.stderr.decode().strip()}"
-                )
-        else:
-            cmd = ["useradd"]
-            if system:
-                cmd.append("--system")
-            if home:
-                cmd.extend(["-m", "-d", home])
-            else:
-                cmd.append("--no-create-home")
-            cmd.extend(["--shell", shell, name])
-            result = subprocess.run(cmd, capture_output=True)
-            if result.returncode != 0 and b"already exists" not in result.stderr:
-                raise RuntimeError(
-                    f"useradd failed: {result.stderr.decode().strip()}"
-                )
-
-    _default_venv = "/opt/venv"
-
-    def pip_install(self, *packages: str, venv: str = None) -> None:
-        """Install pip packages in a virtual environment.
-
-        Uses /opt/venv by default to comply with PEP 668 (externally-managed
-        Python environments on modern distros). Pass venv= to override.
-        """
-        for pkg in packages:
-            self.permissions.check_pip_package(pkg)
-
-        venv_path = venv or self._default_venv
-        if not os.path.isfile(f"{venv_path}/bin/pip"):
-            self.log.info(f"Creating venv: {venv_path}")
-            self._run(["python3", "-m", "venv", venv_path])
-
-        pip_bin = f"{venv_path}/bin/pip"
-        self.log.info(f"Installing pip packages: {', '.join(packages)}")
-        self._run([pip_bin, "install", "--progress-bar", "off"] + list(packages))
-
-    def create_venv(self, path: str) -> None:
-        """Create a Python virtual environment."""
-        self.permissions.check_path(path)
-        self.log.info(f"Creating venv: {path}")
-        self._run(["python3", "-m", "venv", path])
-        # Upgrade pip in the new venv
-        self._run([f"{path}/bin/pip", "install", "--progress-bar", "off", "-U", "pip"])
-
-    def add_apt_key(self, url: str, keyring_path: str) -> None:
-        """Add an APT signing key from a URL.
-
-        If keyring_path ends with .gpg, the key is dearmored (binary format).
-        If keyring_path ends with .asc or anything else, the key is saved as-is.
-        Modern apt handles both formats with signed-by=.
-        """
-        self.permissions.check_url(url)
-        self.permissions.check_path(keyring_path)
-        self.log.info(f"Adding APT key from {url}")
-        os.makedirs(os.path.dirname(keyring_path) or ".", exist_ok=True)
-        # Download key
-        dl = subprocess.run(
-            ["curl", "-fsSL", url], capture_output=True
-        )
-        if dl.returncode != 0:
-            raise RuntimeError(
-                f"Failed to download APT key from {url}: {dl.stderr.decode().strip()}"
-            )
-        if not dl.stdout:
-            raise RuntimeError(f"APT key download returned empty response from {url}")
-
-        if keyring_path.endswith(".gpg"):
-            # Dearmor (convert ASCII armor → binary GPG format)
-            with open(keyring_path, "wb") as f:
-                result = subprocess.run(
-                    ["gpg", "--dearmor"],
-                    input=dl.stdout,
-                    stdout=f,
-                    stderr=subprocess.PIPE,
-                )
-                if result.returncode != 0:
-                    raise RuntimeError(
-                        f"gpg --dearmor failed: {result.stderr.decode().strip()}"
-                    )
-        else:
-            # Save as-is (ASCII armored) — works with .asc paths
-            with open(keyring_path, "wb") as f:
-                f.write(dl.stdout)
-
-    def add_apt_repo(self, repo_line: str, filename: str) -> None:
-        """Add an APT repository source file."""
-        self.permissions.check_apt_repo(repo_line)
-        dest = f"/etc/apt/sources.list.d/{filename}"
-        self.permissions.check_path(dest)
-        self.log.info(f"Adding APT repo: {filename}")
-        os.makedirs(os.path.dirname(dest), exist_ok=True)
-        with open(dest, "w") as f:
-            f.write(repo_line + "\n")
-
-    def add_apt_repository(self, repo_url: str, key_url: str, name: str = "",
-                           suite: str = "", components: str = "main") -> None:
-        """Add an APT repository with its signing key in one call.
-
-        This is the recommended high-level method. It:
-        1. Downloads and installs the GPG signing key
-        2. Detects the distro codename (e.g. "noble") if suite is not given
-        3. Writes the sources list entry with signed-by
-
-        Args:
-            repo_url: Base URL of the repository (e.g. "https://downloads.plex.tv/repo/deb").
-            key_url: URL to the GPG signing key.
-            name: Short name for the repo (used for filenames). Auto-derived from URL if blank.
-            suite: Distribution suite/codename (e.g. "noble", "stable", "public").
-                   If blank, auto-detected from /etc/os-release VERSION_CODENAME.
-            components: Space-separated components (default: "main").
-        """
-        import re
-        from urllib.parse import urlparse
-
-        # Derive name from URL if not provided
-        if not name:
-            # Use last path segment or hostname
-            parsed = urlparse(repo_url)
-            segments = [s for s in parsed.path.strip("/").split("/") if s]
-            name = segments[-1] if segments else parsed.hostname.replace(".", "-")
-            # Clean to safe filename chars
-            name = re.sub(r"[^a-zA-Z0-9_-]", "-", name)
-
-        # Auto-detect suite from os-release
-        if not suite:
-            suite = self._detect_codename()
-
-        keyring_path = f"/usr/share/keyrings/{name}.gpg"
-        self.add_apt_key(key_url, keyring_path)
-
-        repo_line = f"deb [signed-by={keyring_path}] {repo_url} {suite} {components}"
-        self.add_apt_repo(repo_line, f"{name}.list")
-
-    @staticmethod
-    def _detect_codename() -> str:
-        """Detect distro codename from /etc/os-release."""
-        try:
-            with open("/etc/os-release") as f:
-                for line in f:
-                    if line.startswith("VERSION_CODENAME="):
-                        return line.strip().split("=", 1)[1].strip('"')
-        except FileNotFoundError:
-            pass
-        return "stable"  # safe fallback for Debian-based
+    # @sdk-group: Commands & System
 
     def run_command(self, cmd, check: bool = True, input_text: str = None,
                     cwd: str = None, env: dict = None) -> subprocess.CompletedProcess:
@@ -473,62 +445,31 @@ class BaseApp(ABC):
         finally:
             os.unlink(tmp_path)
 
-    def chown(self, path: str, owner: str, recursive: bool = False) -> None:
-        """Change file/directory ownership."""
-        self.permissions.check_path(path)
-        cmd = ["chown"]
-        if recursive:
-            cmd.append("-R")
-        cmd.extend([owner, path])
-        self._run(cmd)
-
-    # --- Provision file helpers ---
-
-    def _provision_dir(self) -> str:
-        """Return the provision directory (where install.py lives inside the container)."""
-        # The engine pushes provision/ files to /opt/appstore/provision/
-        # __file__ for the install.py lives there at runtime.
-        # For subclasses imported from install.py, we look at the runner's module path.
-        import sys
-        runner_mod = sys.modules.get("app_module")
-        if runner_mod and hasattr(runner_mod, "__file__"):
-            return os.path.dirname(os.path.abspath(runner_mod.__file__))
-        # Fallback to the standard provision target
-        return "/opt/appstore/provision"
-
-    def provision_file(self, name: str) -> str:
-        """Read a file from the provision directory and return its contents.
-
-        Use this to keep templates, configs, and scripts as real files in the
-        provision/ directory instead of embedding them as string constants.
+    def sysctl(self, settings: dict) -> None:
+        """Apply sysctl settings persistently.
 
         Args:
-            name: Filename (e.g., "server.py", "config.ini").
-
-        Returns:
-            File contents as a string.
+            settings: Dict of sysctl key-value pairs.
         """
-        path = os.path.join(self._provision_dir(), name)
-        with open(path) as f:
-            return f.read()
+        conf_path = "/etc/sysctl.d/99-appstore.conf"
+        self.permissions.check_path(conf_path)
 
-    def deploy_provision_file(self, name: str, dest: str, mode: str = None) -> None:
-        """Copy a file from the provision directory to a destination path.
+        lines = [f"{key} = {value}" for key, value in settings.items()]
+        content = "\n".join(lines) + "\n"
 
-        Args:
-            name: Filename in the provision directory.
-            dest: Destination path in the container.
-            mode: Optional file permissions (octal string, e.g. "0755").
-        """
-        self.permissions.check_path(dest)
-        src = os.path.join(self._provision_dir(), name)
-        os.makedirs(os.path.dirname(dest) or ".", exist_ok=True)
-        shutil.copy2(src, dest)
-        if mode:
-            os.chmod(dest, int(mode, 8))
-        self.log.info(f"Deployed {name} -> {dest}")
+        os.makedirs(os.path.dirname(conf_path), exist_ok=True)
+        with open(conf_path, "w") as f:
+            f.write(content)
+        self.log.info(f"Wrote sysctl config: {conf_path}")
+        self._run(["sysctl", "--system"], check=False)
 
-    # --- SDK v2 high-level helpers ---
+    def disable_ipv6(self) -> None:
+        """Disable IPv6 system-wide via sysctl."""
+        self.log.info("Disabling IPv6...")
+        self.sysctl({
+            "net.ipv6.conf.all.disable_ipv6": 1,
+            "net.ipv6.conf.default.disable_ipv6": 1,
+        })
 
     def wait_for_http(self, url: str, timeout: int = 60, interval: int = 3) -> bool:
         """Poll an HTTP endpoint until it responds 200.
@@ -557,27 +498,49 @@ class BaseApp(ABC):
         self.log.warn(f"Timeout waiting for HTTP 200 at {url}")
         return False
 
-    def write_env_file(self, path: str, env_dict: dict, mode: str = "0644") -> None:
-        """Write a KEY=VALUE environment file, skipping None/empty values.
+    # @sdk-group: Password & Crypto
+
+    def random_password(self, length: int = 16) -> str:
+        """Generate a cryptographically secure random password.
 
         Args:
-            path: Destination path.
-            env_dict: Dict of environment variables. Keys with None or empty
-                     string values are skipped.
-            mode: File permissions (octal string).
+            length: Password length (default 16, minimum 8).
+
+        Returns:
+            Random password string containing letters, digits, and punctuation.
         """
-        self.permissions.check_path(path)
-        lines = []
-        for key, value in env_dict.items():
-            if value is None or value == "":
-                continue
-            lines.append(f"{key}={value}")
-        content = "\n".join(lines) + "\n" if lines else ""
-        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-        with open(path, "w") as f:
-            f.write(content)
-        os.chmod(path, int(mode, 8))
-        self.log.info(f"Wrote env file: {path} ({len(lines)} vars)")
+        length = max(length, 8)
+        alphabet = string.ascii_letters + string.digits + "!@#$%&*-_=+"
+        return "".join(secrets.choice(alphabet) for _ in range(length))
+
+    def pbkdf2_hash(
+        self,
+        password: str,
+        algo: str = "sha512",
+        iterations: int = 100000,
+        salt_bytes: int = 16,
+    ) -> dict:
+        """Hash a password using PBKDF2 and return salt + hash as base64.
+
+        Args:
+            password: The plaintext password to hash.
+            algo: Hash algorithm (default "sha512").
+            iterations: Number of PBKDF2 iterations (default 100000).
+            salt_bytes: Length of random salt in bytes (default 16).
+
+        Returns:
+            Dict with keys "salt" (base64), "hash" (base64), "algo", "iterations".
+        """
+        salt = os.urandom(salt_bytes)
+        dk = hashlib.pbkdf2_hmac(algo, password.encode(), salt, iterations)
+        return {
+            "salt": base64.b64encode(salt).decode(),
+            "hash": base64.b64encode(dk).decode(),
+            "algo": algo,
+            "iterations": iterations,
+        }
+
+    # @sdk-group: Advanced
 
     def status_page(
         self,
@@ -638,67 +601,19 @@ class BaseApp(ABC):
             after=f"{svc_name}.service",
         )
 
-    def pull_oci_binary(self, image: str, dest: str, tag: str = "latest") -> None:
-        """Download a binary from a Docker/OCI image without Docker.
-
-        Args:
-            image: Docker image name (e.g., "qmcgaw/gluetun").
-            dest: Destination path for the extracted binary.
-            tag: Image tag (default "latest").
-        """
-        self.permissions.check_url("https://auth.docker.io/*")
-        self.permissions.check_url("https://registry-1.docker.io/*")
-        self.permissions.check_path(dest)
-
-        from appstore.oci import OCIClient
-        client = OCIClient(log=self.log)
-        client.pull_binary(image, dest, tag=tag)
-
-        # Post-extraction validation: check for missing shared libraries
-        try:
-            result = subprocess.run(
-                ["ldd", dest], capture_output=True, text=True
-            )
-            if result.returncode == 0:
-                missing = [
-                    line.strip() for line in result.stdout.splitlines()
-                    if "not found" in line
-                ]
-                if missing:
-                    self.log.warn(
-                        f"Binary at {dest} has missing shared libraries:\n"
-                        + "\n".join(f"  {m}" for m in missing)
-                    )
-        except FileNotFoundError:
-            pass  # ldd not available
-
-    def sysctl(self, settings: dict) -> None:
-        """Apply sysctl settings persistently.
-
-        Args:
-            settings: Dict of sysctl key-value pairs.
-        """
-        conf_path = "/etc/sysctl.d/99-appstore.conf"
-        self.permissions.check_path(conf_path)
-
-        lines = [f"{key} = {value}" for key, value in settings.items()]
-        content = "\n".join(lines) + "\n"
-
-        os.makedirs(os.path.dirname(conf_path), exist_ok=True)
-        with open(conf_path, "w") as f:
-            f.write(content)
-        self.log.info(f"Wrote sysctl config: {conf_path}")
-        self._run(["sysctl", "--system"], check=False)
-
-    def disable_ipv6(self) -> None:
-        """Disable IPv6 system-wide via sysctl."""
-        self.log.info("Disabling IPv6...")
-        self.sysctl({
-            "net.ipv6.conf.all.disable_ipv6": 1,
-            "net.ipv6.conf.default.disable_ipv6": 1,
-        })
-
     # --- Internal ---
+
+    def _provision_dir(self) -> str:
+        """Return the provision directory (where install.py lives inside the container)."""
+        # The engine pushes provision/ files to /opt/appstore/provision/
+        # __file__ for the install.py lives there at runtime.
+        # For subclasses imported from install.py, we look at the runner's module path.
+        import sys
+        runner_mod = sys.modules.get("app_module")
+        if runner_mod and hasattr(runner_mod, "__file__"):
+            return os.path.dirname(os.path.abspath(runner_mod.__file__))
+        # Fallback to the standard provision target
+        return "/opt/appstore/provision"
 
     @staticmethod
     def _is_progress_line(line: str) -> bool:

@@ -104,6 +104,7 @@ func (s *Server) handleDevForkApp(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleDevGetApp(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
+	s.devSvc.EnsureIcon(id)
 	app, err := s.devSvc.Get(id)
 	if err != nil {
 		writeError(w, http.StatusNotFound, err.Error())

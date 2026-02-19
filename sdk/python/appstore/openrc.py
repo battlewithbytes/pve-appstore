@@ -36,12 +36,21 @@ def generate_init_script(
 
     lines = ["#!/sbin/openrc-run", ""]
     lines.append(f'description="{desc}"')
-    lines.append(f"command={exec_start}")
+
+    # Split exec_start into command + command_args for OpenRC
+    parts = exec_start.split(None, 1)
+    lines.append(f"command={parts[0]}")
+    if len(parts) > 1:
+        lines.append(f'command_args="{parts[1]}"')
     lines.append("command_background=true")
     lines.append(f"pidfile=/run/{name}.pid")
 
     if user:
         lines.append(f"command_user={user}")
+
+    # Route stdout/stderr to syslog so `tail -f /var/log/messages` shows app logs
+    lines.append(f'output_logger="logger -t {name} -p daemon.info"')
+    lines.append(f'error_logger="logger -t {name} -p daemon.err"')
 
     # Dependencies
     deps = ["net"]

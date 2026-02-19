@@ -71,12 +71,18 @@ func (s *Server) handleDevSetIcon(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := os.WriteFile(filepath.Join(appDir, "icon.png"), iconData, 0644); err != nil {
+	processed, resized, err := processIcon(iconData)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("icon processing failed: %v", err))
+		return
+	}
+
+	if err := os.WriteFile(filepath.Join(appDir, "icon.png"), processed, 0644); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to save icon")
 		return
 	}
 
-	writeJSON(w, http.StatusOK, map[string]string{"status": "saved"})
+	writeJSON(w, http.StatusOK, map[string]interface{}{"status": "saved", "resized": resized})
 }
 
 // syncDevIcon checks the manifest for an icon URL and downloads it if present.
@@ -106,8 +112,13 @@ func (s *Server) syncDevIcon(id string, manifestData []byte) {
 		return
 	}
 
+	processed, _, err := processIcon(iconData)
+	if err != nil {
+		return
+	}
+
 	appDir := s.devSvc.AppDir(id)
-	os.WriteFile(filepath.Join(appDir, "icon.png"), iconData, 0644)
+	os.WriteFile(filepath.Join(appDir, "icon.png"), processed, 0644)
 }
 
 func (s *Server) handleDevListTemplates(w http.ResponseWriter, r *http.Request) {

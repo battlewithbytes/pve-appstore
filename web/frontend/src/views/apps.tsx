@@ -42,11 +42,36 @@ export function AppList() {
           {categories.map(c => <option key={c} value={c}>{c}</option>)}
         </select>
       </div>
-      {loading ? <Center>Loading...</Center> : apps.length === 0 ? <Center>No apps found</Center> : (
-        <div className="grid grid-cols-[repeat(auto-fill,minmax(300px,1fr))] gap-4">
-          {apps.map(app => <AppCard key={app.id} app={app} />)}
-        </div>
-      )}
+      {loading ? <Center>Loading...</Center> : apps.length === 0 ? <Center>No apps found</Center> : (() => {
+        const devApps = apps.filter(a => a.source === 'developer')
+        const catalogApps = apps.filter(a => a.source !== 'developer')
+        return <>
+          {devApps.length > 0 && (
+            <div className="mb-6">
+              <div className="flex items-center gap-2 mb-3">
+                <h2 className="text-xs font-semibold text-yellow-400 uppercase tracking-wider font-mono">Developer Apps</h2>
+                <span className="text-xs text-text-muted font-mono">({devApps.length})</span>
+              </div>
+              <div className="grid grid-cols-[repeat(auto-fill,minmax(300px,1fr))] gap-4">
+                {devApps.map(app => <AppCard key={app.id} app={app} />)}
+              </div>
+            </div>
+          )}
+          {catalogApps.length > 0 && (
+            <div>
+              {devApps.length > 0 && (
+                <div className="flex items-center gap-2 mb-3">
+                  <h2 className="text-xs font-semibold text-text-muted uppercase tracking-wider font-mono">Catalog</h2>
+                  <span className="text-xs text-text-muted font-mono">({catalogApps.length})</span>
+                </div>
+              )}
+              <div className="grid grid-cols-[repeat(auto-fill,minmax(300px,1fr))] gap-4">
+                {catalogApps.map(app => <AppCard key={app.id} app={app} />)}
+              </div>
+            </div>
+          )}
+        </>
+      })()}
     </div>
   )
 }

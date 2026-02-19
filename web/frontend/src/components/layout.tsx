@@ -1,6 +1,18 @@
 import type { HealthResponse } from '../types'
 
-export function Header({ health, authed, authRequired, devMode, onLogout, onLogin }: { health: HealthResponse | null; authed: boolean; authRequired: boolean; devMode: boolean; onLogout: () => void; onLogin: () => void }) {
+function NavLink({ href, hash, label, isDev }: { href: string; hash: string; label: string; isDev?: boolean }) {
+  // Match active: exact match, or prefix match for sub-routes (e.g. #/app/foo matches #/)
+  const isActive = href === '#/'
+    ? (hash === '#/' || hash === '' || hash === '#' || hash.startsWith('#/app/'))
+    : hash === href || hash.startsWith(href + '/')
+  const base = 'no-underline text-sm font-mono uppercase tracking-wider transition-colors'
+  const color = isActive
+    ? (isDev ? 'text-yellow-300 border-b-2 border-yellow-400 pb-0.5' : 'text-primary border-b-2 border-primary pb-0.5')
+    : (isDev ? 'text-yellow-400/60 hover:text-yellow-300' : 'text-text-secondary hover:text-primary')
+  return <a href={href} className={`${base} ${color}`}>{label}</a>
+}
+
+export function Header({ health, authed, authRequired, devMode, hash, onLogout, onLogin }: { health: HealthResponse | null; authed: boolean; authRequired: boolean; devMode: boolean; hash: string; onLogout: () => void; onLogin: () => void }) {
   return (
     <header className="bg-bg-primary border-b border-border px-6 py-3 flex items-center justify-between">
       <div className="flex items-center gap-6">
@@ -8,15 +20,15 @@ export function Header({ health, authed, authRequired, devMode, onLogout, onLogi
           <span className="text-primary text-2xl font-mono font-bold">&gt;_</span>
           <span className="text-lg font-bold text-text-primary font-mono tracking-tight">PVE App Store</span>
         </a>
-        <nav className="flex gap-4">
-          <a href="#/" className="text-text-secondary hover:text-primary no-underline text-sm font-mono uppercase tracking-wider transition-colors">Apps</a>
-          <a href="#/installs" className="text-text-secondary hover:text-primary no-underline text-sm font-mono uppercase tracking-wider transition-colors">Installed</a>
-          <a href="#/stacks" className="text-text-secondary hover:text-primary no-underline text-sm font-mono uppercase tracking-wider transition-colors">Stacks</a>
-          <a href="#/catalog-stacks" className="text-text-secondary hover:text-primary no-underline text-sm font-mono uppercase tracking-wider transition-colors">Stack Templates</a>
-          <a href="#/jobs" className="text-text-secondary hover:text-primary no-underline text-sm font-mono uppercase tracking-wider transition-colors">Jobs</a>
-          {devMode && <a href="#/developer" className="text-yellow-400 hover:text-yellow-300 no-underline text-sm font-mono uppercase tracking-wider transition-colors">Developer</a>}
-          <a href="#/backup" className="text-text-secondary hover:text-primary no-underline text-sm font-mono uppercase tracking-wider transition-colors">Backup</a>
-          <a href="#/settings" className="text-text-secondary hover:text-primary no-underline text-sm font-mono uppercase tracking-wider transition-colors">Settings</a>
+        <nav className="flex gap-4 items-center">
+          <NavLink href="#/" hash={hash} label="Apps" />
+          <NavLink href="#/installs" hash={hash} label="Installed" />
+          <NavLink href="#/stacks" hash={hash} label="Stacks" />
+          <NavLink href="#/catalog-stacks" hash={hash} label="Stack Templates" />
+          <NavLink href="#/jobs" hash={hash} label="Jobs" />
+          {devMode && <NavLink href="#/developer" hash={hash} label="Developer" isDev />}
+          <NavLink href="#/backup" hash={hash} label="Backup" />
+          <NavLink href="#/settings" hash={hash} label="Settings" />
         </nav>
       </div>
       <div className="flex items-center gap-4 text-xs text-text-muted font-mono">

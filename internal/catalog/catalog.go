@@ -71,6 +71,11 @@ func (c *Catalog) Refresh() error {
 
 	// Restore dev apps and stacks (overwrite re-indexed entries)
 	for _, app := range savedApps {
+		// If the fresh catalog now has this app (e.g. PR was merged),
+		// shadow it so RemoveDevApp can restore the catalog version.
+		if fresh, ok := c.apps[app.ID]; ok && fresh.Source != "developer" {
+			c.shadowed[app.ID] = fresh
+		}
 		c.apps[app.ID] = app
 	}
 	for _, stack := range savedStacks {

@@ -13,6 +13,7 @@ Output: JSON array to stdout.  Each entry has:
 import ast
 import json
 import os
+import re
 import textwrap
 
 
@@ -137,6 +138,32 @@ def extract_docstring(node):
     return "\n\n".join(result)
 
 
+def scan_sdk_groups(source):
+    """Scan base.py source for '# @sdk-group: <Name>' section markers.
+
+    Each marker applies to all following 'def method_name(self' lines until
+    the next marker or '# --- Internal ---'.  Returns {method_name: group}.
+    """
+    groups = {}
+    current_group = None
+    marker_re = re.compile(r"^\s*#\s*@sdk-group:\s*(.+)$")
+    internal_re = re.compile(r"^\s*#\s*---\s*Internal\s*---")
+    def_re = re.compile(r"^\s+def\s+(\w+)\(")
+    for line in source.splitlines():
+        m = marker_re.match(line)
+        if m:
+            current_group = m.group(1).strip()
+            continue
+        if internal_re.match(line):
+            current_group = None
+            continue
+        if current_group:
+            m = def_re.match(line)
+            if m:
+                groups[m.group(1)] = current_group
+    return groups
+
+
 def extract_class_methods(source, class_name, skip=None,
                           name_prefix="", sig_prefix="self",
                           groups=None, default_group="Other"):
@@ -167,43 +194,16 @@ def main():
     sdk_dir = os.path.dirname(os.path.abspath(__file__))
     methods = []
 
-    # Group mapping for BaseApp methods
-    base_groups = {
-        "apt_install": "Package Management",
-        "pkg_install": "Package Management",
-        "pip_install": "Package Management",
-        "create_venv": "Package Management",
-        "add_apt_key": "Package Management",
-        "add_apt_repo": "Package Management",
-        "add_apt_repository": "Package Management",
-        "pull_oci_binary": "Package Management",
-        "write_config": "File Operations",
-        "render_template": "File Operations",
-        "provision_file": "File Operations",
-        "deploy_provision_file": "File Operations",
-        "write_env_file": "File Operations",
-        "create_dir": "File Operations",
-        "chown": "File Operations",
-        "download": "File Operations",
-        "create_service": "Service Management",
-        "enable_service": "Service Management",
-        "restart_service": "Service Management",
-        "run_command": "Commands & System",
-        "run_shell": "Commands & System",
-        "run_installer_script": "Commands & System",
-        "sysctl": "Commands & System",
-        "disable_ipv6": "Commands & System",
-        "wait_for_http": "Commands & System",
-        "create_user": "User Management",
-        "status_page": "Advanced",
-    }
-
+    # Auto-derive groups from @sdk-group section markers in base.py
     with open(os.path.join(sdk_dir, "base.py")) as f:
-        methods.extend(extract_class_methods(
-            f.read(), "BaseApp",
-            skip={"install", "configure", "healthcheck", "uninstall"},
-            groups=base_groups,
-        ))
+        base_source = f.read()
+    base_groups = scan_sdk_groups(base_source)
+
+    methods.extend(extract_class_methods(
+        base_source, "BaseApp",
+        skip={"install", "configure", "healthcheck", "uninstall"},
+        groups=base_groups,
+    ))
 
     with open(os.path.join(sdk_dir, "inputs.py")) as f:
         methods.extend(extract_class_methods(

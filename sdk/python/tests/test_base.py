@@ -33,7 +33,7 @@ class DummyApp(BaseApp):
 
 def make_app(packages=None, pip=None, urls=None, paths=None, services=None,
              users=None, commands=None, installer_scripts=None, apt_repos=None,
-             inputs=None):
+             inputs=None, os_type="debian"):
     perms = AppPermissions(
         packages=packages or [],
         pip=pip or [],
@@ -45,7 +45,8 @@ def make_app(packages=None, pip=None, urls=None, paths=None, services=None,
         installer_scripts=installer_scripts or [],
         apt_repos=apt_repos or [],
     )
-    return DummyApp(AppInputs(inputs or {}), perms)
+    with patch("appstore.base.detect_os", return_value=os_type):
+        return DummyApp(AppInputs(inputs or {}), perms)
 
 
 class TestAptInstall:
@@ -285,3 +286,62 @@ class TestPipInstall:
         app = make_app(pip=["crawl4ai"])
         with pytest.raises(PermissionDeniedError, match="pip package 'evil'"):
             app.pip_install("evil")
+
+
+class TestPasswordHelpers:
+    def test_random_password_default_length(self):
+        app = make_app()
+        pw = app.random_password()
+        assert len(pw) == 16
+        assert isinstance(pw, str)
+
+    def test_random_password_custom_length(self):
+        app = make_app()
+        pw = app.random_password(32)
+        assert len(pw) == 32
+
+    def test_random_password_minimum_length(self):
+        app = make_app()
+        pw = app.random_password(3)
+        assert len(pw) == 8  # enforced minimum
+
+    def test_random_password_unique(self):
+        app = make_app()
+        passwords = {app.random_password() for _ in range(20)}
+        assert len(passwords) == 20  # all unique
+
+    def test_pbkdf2_hash_returns_dict(self):
+        app = make_app()
+        result = app.pbkdf2_hash("testpass")
+        assert "salt" in result
+        assert "hash" in result
+        assert "algo" in result
+        assert "iterations" in result
+        assert result["algo"] == "sha512"
+        assert result["iterations"] == 100000
+
+    def test_pbkdf2_hash_base64_decodable(self):
+        import base64
+        app = make_app()
+        result = app.pbkdf2_hash("testpass")
+        salt = base64.b64decode(result["salt"])
+        dk = base64.b64decode(result["hash"])
+        assert len(salt) == 16
+        assert len(dk) > 0
+
+    def test_pbkdf2_hash_custom_params(self):
+        app = make_app()
+        result = app.pbkdf2_hash("pw", algo="sha256", iterations=50000, salt_bytes=32)
+        assert result["algo"] == "sha256"
+        assert result["iterations"] == 50000
+        import base64
+        salt = base64.b64decode(result["salt"])
+        assert len(salt) == 32
+
+    def test_pbkdf2_hash_deterministic_with_same_salt(self):
+        import hashlib, base64
+        app = make_app()
+        result = app.pbkdf2_hash("mypassword")
+        salt = base64.b64decode(result["salt"])
+        expected = hashlib.pbkdf2_hmac("sha512", b"mypassword", salt, 100000)
+        assert base64.b64decode(result["hash"]) == expected

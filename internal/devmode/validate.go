@@ -661,12 +661,13 @@ func extractSDKMethods() map[string]bool {
 		return map[string]bool{}
 	}
 	methods := make(map[string]bool)
-	for _, line := range strings.Split(string(data), "\n") {
+	lines := strings.Split(string(data), "\n")
+	for i, line := range lines {
 		trimmed := strings.TrimSpace(line)
 		if !strings.HasPrefix(trimmed, "def ") {
 			continue
 		}
-		// Extract method name from "def method_name(self..."
+		// Extract method name from "def method_name(self..." or multiline "def method_name(\n    self,"
 		rest := trimmed[4:]
 		idx := strings.Index(rest, "(")
 		if idx <= 0 {
@@ -677,10 +678,16 @@ func extractSDKMethods() map[string]bool {
 		if strings.HasPrefix(name, "_") {
 			continue
 		}
-		// Verify it takes self as first parameter
+		// Check for self on same line or next line (multiline signature)
 		params := rest[idx+1:]
 		if strings.HasPrefix(params, "self") {
 			methods[name] = true
+		} else if strings.TrimSpace(params) == "" && i+1 < len(lines) {
+			// Multiline: "def method_name(\n    self, ..."
+			nextLine := strings.TrimSpace(lines[i+1])
+			if strings.HasPrefix(nextLine, "self") {
+				methods[name] = true
+			}
 		}
 	}
 	return methods
