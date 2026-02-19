@@ -131,7 +131,7 @@ function RepoInfoCard() {
 
 // --- Settings View ---
 
-function SettingsView({ requireAuth, onDevModeChange, onAuthChange }: { requireAuth: (cb: () => void) => void; onDevModeChange?: (enabled: boolean) => void; onAuthChange?: () => void }) {
+function SettingsView({ requireAuth, onDevModeChange, onUpdateApplied, onAuthChange }: { requireAuth: (cb: () => void) => void; onDevModeChange?: (enabled: boolean) => void; onUpdateApplied?: () => void; onAuthChange?: () => void }) {
   const [settings, setSettings] = useState<Settings | null>(null)
   const [saving, setSaving] = useState(false)
   const [msg, setMsg] = useState('')
@@ -522,15 +522,15 @@ function SettingsView({ requireAuth, onDevModeChange, onAuthChange }: { requireA
                     <div className="flex items-center gap-4">
                       <div>
                         <span className="text-xs text-text-muted font-mono uppercase">Current</span>
-                        <p className="text-sm font-mono text-text-primary">v{updateStatus.current}</p>
+                        <p className="text-sm font-mono text-text-primary">v{updateStatus.current.replace(/^v/, '')}</p>
                       </div>
                       <div>
                         <span className="text-xs text-text-muted font-mono uppercase">Latest</span>
-                        <p className="text-sm font-mono text-text-primary">v{updateStatus.latest}</p>
+                        <p className="text-sm font-mono text-text-primary">v{updateStatus.latest.replace(/^v/, '')}</p>
                       </div>
                       {updateStatus.available && (
                         <span className="text-xs font-mono font-bold text-bg-primary bg-primary rounded-full px-2.5 py-0.5">
-                          v{updateStatus.latest} available
+                          v{updateStatus.latest.replace(/^v/, '')} available
                         </span>
                       )}
                     </div>
@@ -557,8 +557,9 @@ function SettingsView({ requireAuth, onDevModeChange, onAuthChange }: { requireA
                                     if (h.version !== updateStatus.current) {
                                       clearInterval(poll)
                                       setUpdateApplying(false)
-                                      setUpdateMsg(`Updated to v${h.version}!`)
+                                      setUpdateMsg(`Updated to v${h.version.replace(/^v/, '')}!`)
                                       setUpdateStatus(prev => prev ? { ...prev, current: h.version, available: false, release: undefined } : null)
+                                      onUpdateApplied?.()
                                     }
                                   } catch { /* server restarting */ }
                                 }, 2000)

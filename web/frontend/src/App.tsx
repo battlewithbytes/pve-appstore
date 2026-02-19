@@ -74,7 +74,7 @@ function App() {
   const isCreateStack = hash === '#/create-stack'
   const isJobs = hash === '#/jobs'
   const isConfig = hash === '#/backup'
-  const isSettings = hash === '#/settings'
+  const isSettings = hash === '#/settings' || hash.startsWith('#/settings?')
   const isDeveloper = hash === '#/developer' || hash.startsWith('#/dev/')
   const devAppMatch = hash.match(/^#\/dev\/(.+)$/)
   const devStackMatch = hash.match(/^#\/dev\/stack\/(.+)$/)
@@ -91,7 +91,7 @@ function App() {
   else if (isCreateStack) content = <StackCreateWizard requireAuth={requireAuth} />
   else if (isJobs) content = <JobsList />
   else if (isConfig) content = <ConfigView requireAuth={requireAuth} />
-  else if (isSettings) content = <SettingsView requireAuth={requireAuth} onDevModeChange={setDevMode} onAuthChange={() => {
+  else if (isSettings) content = <SettingsView requireAuth={requireAuth} onDevModeChange={setDevMode} onUpdateApplied={() => setUpdateAvailable(false)} onAuthChange={() => {
     api.authCheck().then(d => {
       setAuthed(d.authenticated)
       setAuthRequired(d.auth_required)
