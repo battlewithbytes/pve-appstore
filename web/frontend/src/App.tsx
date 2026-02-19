@@ -29,6 +29,7 @@ function App() {
   const [showLogin, setShowLogin] = useState(false)
   const [loginCallback, setLoginCallback] = useState<(() => void) | null>(null)
   const [devMode, setDevMode] = useState(false)
+  const [updateAvailable, setUpdateAvailable] = useState(false)
 
   useEffect(() => { api.health().then(setHealth).catch(() => {}) }, [])
   useEffect(() => { api.settings().then(s => setDevMode(s.developer.enabled)).catch(() => {}) }, [])
@@ -39,6 +40,13 @@ function App() {
       setAuthChecked(true)
     }).catch(() => { setAuthChecked(true) })
   }, [])
+
+  // Check for updates once authenticated (or when no auth required)
+  useEffect(() => {
+    if (!authChecked) return
+    if (authRequired && !authed) return
+    api.checkUpdate().then(s => setUpdateAvailable(s.available)).catch(() => {})
+  }, [authChecked, authed, authRequired])
 
   const requireAuth = useCallback((onSuccess: () => void) => {
     if (authed || !authRequired) { onSuccess(); return }
@@ -100,7 +108,7 @@ function App() {
   if (authChecked && authRequired && !authed) {
     return (
       <div className="min-h-screen flex flex-col bg-bg-primary">
-        <Header health={health} authed={authed} authRequired={authRequired} devMode={devMode} hash={hash} onLogout={handleLogout} onLogin={() => {}} />
+        <Header health={health} authed={authed} authRequired={authRequired} devMode={devMode} hash={hash} onLogout={handleLogout} onLogin={() => {}} updateAvailable={updateAvailable} />
         <main className="flex-1 flex items-center justify-center px-4">
           <div className="w-full max-w-[400px]">
             <div className="text-center mb-8">
@@ -123,7 +131,7 @@ function App() {
 
   return (
     <div className="min-h-screen flex flex-col bg-bg-primary">
-      <Header health={health} authed={authed} authRequired={authRequired} devMode={devMode} hash={hash} onLogout={handleLogout} onLogin={() => setShowLogin(true)} />
+      <Header health={health} authed={authed} authRequired={authRequired} devMode={devMode} hash={hash} onLogout={handleLogout} onLogin={() => setShowLogin(true)} updateAvailable={updateAvailable} />
       <main className={`flex-1 mx-auto px-4 py-6 w-full ${devAppMatch || devStackMatch ? 'max-w-[1800px]' : 'max-w-[1200px]'}`}>
         {content}
       </main>

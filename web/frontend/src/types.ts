@@ -647,6 +647,21 @@ export interface ZipImportResponse {
   stack?: DevStack;
 }
 
+// --- System Updates ---
+
+export interface UpdateStatus {
+  current: string;
+  latest: string;
+  available: boolean;
+  release?: {
+    version: string;
+    published_at: string;
+    url: string;
+    download_url: string;
+  };
+  checked_at: string;
+}
+
 // --- Dockerfile Chain Resolution ---
 
 export interface DockerfileChainEvent {

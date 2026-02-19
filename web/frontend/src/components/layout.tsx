@@ -12,7 +12,7 @@ function NavLink({ href, hash, label, isDev }: { href: string; hash: string; lab
   return <a href={href} className={`${base} ${color}`}>{label}</a>
 }
 
-export function Header({ health, authed, authRequired, devMode, hash, onLogout, onLogin }: { health: HealthResponse | null; authed: boolean; authRequired: boolean; devMode: boolean; hash: string; onLogout: () => void; onLogin: () => void }) {
+export function Header({ health, authed, authRequired, devMode, hash, onLogout, onLogin, updateAvailable }: { health: HealthResponse | null; authed: boolean; authRequired: boolean; devMode: boolean; hash: string; onLogout: () => void; onLogin: () => void; updateAvailable?: boolean }) {
   return (
     <header className="bg-bg-primary border-b border-border px-6 py-3 flex items-center justify-between">
       <div className="flex items-center gap-6">
@@ -34,7 +34,15 @@ export function Header({ health, authed, authRequired, devMode, hash, onLogout, 
       <div className="flex items-center gap-4 text-xs text-text-muted font-mono">
         {health && <>
           <span>node:{health.node}</span>
-          <span>v{health.version}</span>
+          <span className="inline-flex items-center gap-1.5">
+            v{health.version}
+            {updateAvailable && (
+              <a href="#/settings" className="relative flex h-2 w-2" title="Update available">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-primary opacity-75" />
+                <span className="relative inline-flex rounded-full h-2 w-2 bg-primary" />
+              </a>
+            )}
+          </span>
         </>}
         {authRequired && (authed ? (
           <button onClick={onLogout} className="bg-transparent border border-border rounded px-3 py-1 text-text-muted text-xs font-mono cursor-pointer hover:border-primary hover:text-primary transition-colors">logout</button>

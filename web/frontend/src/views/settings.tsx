@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { api } from '../api'
-import type { Settings, SettingsUpdate, DiscoverResponse, GitHubStatus, GitHubRepoInfo } from '../types'
+import type { Settings, SettingsUpdate, DiscoverResponse, GitHubStatus, GitHubRepoInfo, UpdateStatus } from '../types'
 import { Center, InfoCard } from '../components/ui'
 
 function RepoInfoCard() {
@@ -147,6 +147,10 @@ function SettingsView({ requireAuth, onDevModeChange, onAuthChange }: { requireA
   const [authPassConfirm, setAuthPassConfirm] = useState('')
   const [authMsg, setAuthMsg] = useState('')
   const [authSaving, setAuthSaving] = useState(false)
+  const [updateStatus, setUpdateStatus] = useState<UpdateStatus | null>(null)
+  const [updateChecking, setUpdateChecking] = useState(false)
+  const [updateApplying, setUpdateApplying] = useState(false)
+  const [updateMsg, setUpdateMsg] = useState('')
 
   useEffect(() => { api.settings().then(s => { setSettings(s); setAuthMode(s.auth.mode) }).catch(() => {}) }, [])
 
@@ -154,6 +158,16 @@ function SettingsView({ requireAuth, onDevModeChange, onAuthChange }: { requireA
   useEffect(() => {
     if (activeTab === 'general') {
       api.discoverResources().then(setDiscovered).catch(() => {})
+    }
+  }, [activeTab])
+
+  // Fetch update status when on service tab
+  useEffect(() => {
+    if (activeTab === 'service') {
+      setUpdateChecking(true)
+      api.checkUpdate()
+        .then(s => { setUpdateStatus(s); setUpdateChecking(false) })
+        .catch(() => setUpdateChecking(false))
     }
   }, [activeTab])
 
@@ -496,6 +510,93 @@ function SettingsView({ requireAuth, onDevModeChange, onAuthChange }: { requireA
 
           {activeTab === 'service' && (
             <>
+              <InfoCard title="Updates">
+                {updateChecking ? (
+                  <p className="text-sm text-text-muted font-mono">Checking for updates...</p>
+                ) : updateStatus ? (
+                  <div className="space-y-3">
+                    <div className="flex items-center gap-4">
+                      <div>
+                        <span className="text-xs text-text-muted font-mono uppercase">Current</span>
+                        <p className="text-sm font-mono text-text-primary">v{updateStatus.current}</p>
+                      </div>
+                      <div>
+                        <span className="text-xs text-text-muted font-mono uppercase">Latest</span>
+                        <p className="text-sm font-mono text-text-primary">v{updateStatus.latest}</p>
+                      </div>
+                      {updateStatus.available && (
+                        <span className="text-xs font-mono font-bold text-bg-primary bg-primary rounded-full px-2.5 py-0.5">
+                          v{updateStatus.latest} available
+                        </span>
+                      )}
+                    </div>
+                    {updateStatus.checked_at && (
+                      <p className="text-xs text-text-muted font-mono">Checked: {new Date(updateStatus.checked_at).toLocaleString()}</p>
+                    )}
+                    {updateMsg && (
+                      <p className={`text-sm font-mono ${updateMsg.startsWith('Error') ? 'text-red-400' : 'text-primary'}`}>{updateMsg}</p>
+                    )}
+                    {updateStatus.available ? (
+                      <div className="flex items-center gap-3">
+                        <button
+                          onClick={() => {
+                            requireAuth(async () => {
+                              setUpdateApplying(true)
+                              setUpdateMsg('')
+                              try {
+                                await api.applyUpdate()
+                                setUpdateMsg('Updating... waiting for restart')
+                                // Poll health endpoint to detect restart
+                                const poll = setInterval(async () => {
+                                  try {
+                                    const h = await api.health()
+                                    if (h.version !== updateStatus.current) {
+                                      clearInterval(poll)
+                                      setUpdateApplying(false)
+                                      setUpdateMsg(`Updated to v${h.version}!`)
+                                      setUpdateStatus(prev => prev ? { ...prev, current: h.version, available: false, release: undefined } : null)
+                                    }
+                                  } catch { /* server restarting */ }
+                                }, 2000)
+                                // Timeout after 60s
+                                setTimeout(() => {
+                                  clearInterval(poll)
+                                  setUpdateApplying(false)
+                                  if (updateMsg === 'Updating... waiting for restart') {
+                                    setUpdateMsg('Update may have succeeded. Refresh the page.')
+                                  }
+                                }, 60000)
+                              } catch (e: unknown) {
+                                const msg = e instanceof Error ? e.message : 'unknown error'
+                                if (msg.includes('update script') || msg.includes('self-update')) {
+                                  setUpdateMsg(`Error: ${msg}`)
+                                } else {
+                                  setUpdateMsg(`Error: ${msg}`)
+                                }
+                                setUpdateApplying(false)
+                              }
+                            })
+                          }}
+                          disabled={updateApplying}
+                          className="bg-primary text-bg-primary rounded px-4 py-1.5 text-xs font-mono font-bold cursor-pointer hover:opacity-90 disabled:opacity-50"
+                        >
+                          {updateApplying ? 'Updating...' : 'Update Now'}
+                        </button>
+                        {updateStatus.release?.url && (
+                          <a href={updateStatus.release.url} target="_blank" rel="noreferrer" className="text-xs font-mono text-primary hover:underline">
+                            Release Notes
+                          </a>
+                        )}
+                      </div>
+                    ) : (
+                      <p className="text-sm text-text-muted font-mono">Running the latest version.</p>
+                    )}
+                  </div>
+                ) : (
+                  <p className="text-sm text-text-muted font-mono">Could not check for updates.</p>
+                )}
+              </InfoCard>
+
               <InfoCard title="Port">
                 <div className="text-sm font-mono">
                   <span className="text-text-muted">Port:</span> <span className="text-text-primary">{settings.service.port}</span>

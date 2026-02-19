@@ -14,6 +14,7 @@ import (
 
 	"github.com/battlewithbytes/pve-appstore/internal/config"
 	"github.com/battlewithbytes/pve-appstore/internal/ui"
+	"github.com/battlewithbytes/pve-appstore/internal/updater"
 )
 
 const sudoersContent = `# PVE App Store — managed sudoers file
@@ -33,6 +34,7 @@ appstore ALL=(root) NOPASSWD: /usr/bin/nsenter --mount=/proc/1/ns/mnt -- /usr/sb
 appstore ALL=(root) NOPASSWD: /usr/bin/nsenter --mount=/proc/1/ns/mnt -- /usr/bin/tee -a /etc/pve/lxc/*
 appstore ALL=(root) NOPASSWD: /usr/bin/nsenter --mount=/proc/1/ns/mnt -- /usr/bin/mkdir -p *
 appstore ALL=(root) NOPASSWD: /usr/bin/nsenter --mount=/proc/1/ns/mnt -- /usr/bin/chown *
+appstore ALL=(root) NOPASSWD: /opt/pve-appstore/update.sh
 `
 
 const systemdUnit = `[Unit]
@@ -76,6 +78,7 @@ func ApplySystem(answers *InstallerAnswers, res *DiscoveredResources, port int) 
 		{"Creating directories", createDirectories},
 		{"Writing configuration", func() error { return writeConfig(answers, port, res) }},
 		{"Installing sudoers", installSudoers},
+		{"Installing update script", func() error { return updater.DeployUpdateScript() }},
 		{"Installing systemd unit", installSystemdUnit},
 		{"Starting service", startService},
 	}
