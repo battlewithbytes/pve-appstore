@@ -52,8 +52,9 @@ type settingsCatalog struct {
 }
 
 type settingsGPU struct {
-	Enabled bool   `json:"enabled"`
-	Policy  string `json:"policy"`
+	Enabled        bool     `json:"enabled"`
+	Policy         string   `json:"policy"`
+	AllowedDevices []string `json:"allowed_devices,omitempty"`
 }
 
 type settingsAuthUpdate struct {
@@ -76,7 +77,7 @@ func (s *Server) handleGetSettings(w http.ResponseWriter, r *http.Request) {
 		Service:   settingsService{Port: s.cfg.Service.Port},
 		Auth:      settingsAuth{Mode: s.cfg.Auth.Mode},
 		Catalog:   settingsCatalog{Refresh: s.cfg.Catalog.Refresh},
-		GPU:       settingsGPU{Enabled: s.cfg.GPU.Enabled, Policy: s.cfg.GPU.Policy},
+		GPU:       settingsGPU{Enabled: s.cfg.GPU.Enabled, Policy: s.cfg.GPU.Policy, AllowedDevices: s.cfg.GPU.AllowedDevices},
 	}
 	writeJSON(w, http.StatusOK, resp)
 }
@@ -154,6 +155,9 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 		s.cfg.GPU.Enabled = req.GPU.Enabled
 		if req.GPU.Policy != "" {
 			s.cfg.GPU.Policy = req.GPU.Policy
+		}
+		if req.GPU.AllowedDevices != nil {
+			s.cfg.GPU.AllowedDevices = req.GPU.AllowedDevices
 		}
 	}
 	if req.Auth != nil {

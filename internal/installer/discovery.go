@@ -51,7 +51,7 @@ func Discover() (*DiscoveredResources, error) {
 	res.Bridges = discoverBridges()
 
 	// GPUs
-	res.GPUs = discoverGPUs()
+	res.GPUs = DiscoverGPUs()
 
 	return res, nil
 }
@@ -121,7 +121,7 @@ func discoverBridges() []string {
 	return bridges
 }
 
-func discoverGPUs() []GPUInfo {
+func DiscoverGPUs() []GPUInfo {
 	var gpus []GPUInfo
 
 	// Intel/AMD DRI render nodes

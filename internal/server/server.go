@@ -219,7 +219,8 @@ func New(cfg *config.Config, cat *catalog.Catalog, eng *engine.Engine, spaFS fs.
 	mux.HandleFunc("GET /api/dev/apps/{id}/publish-status", s.withDevMode(s.withAuth(s.handleDevPublishStatus)))
 	mux.HandleFunc("POST /api/dev/apps/{id}/publish", s.withDevMode(s.withAuth(s.handleDevPublish)))
 
-	// API routes — system updates
+	// API routes — system
+	mux.HandleFunc("GET /api/system/gpus", s.withAuth(s.handleListGPUs))
 	mux.HandleFunc("GET /api/system/update-check", s.withAuth(s.handleUpdateCheck))
 	mux.HandleFunc("POST /api/system/update", s.withAuth(s.handleApplyUpdate))
 

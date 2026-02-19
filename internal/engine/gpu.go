@@ -67,6 +67,25 @@ func validateGPUDevices(devices []DevicePassthrough) (available []DevicePassthro
 	return
 }
 
+// filterAllowedDevices returns only the devices whose Path is in the allowed list.
+// If allowed is empty, no devices are returned.
+func filterAllowedDevices(devices []DevicePassthrough, allowed []string) []DevicePassthrough {
+	if len(allowed) == 0 {
+		return nil
+	}
+	set := make(map[string]bool, len(allowed))
+	for _, a := range allowed {
+		set[a] = true
+	}
+	var out []DevicePassthrough
+	for _, d := range devices {
+		if set[d.Path] {
+			out = append(out, d)
+		}
+	}
+	return out
+}
+
 // resolveNvidiaLibPath returns the host path to bind-mount for NVIDIA libraries.
 // It prefers the curated nvidia/current directory, falling back to a staging directory.
 // Returns empty string if no NVIDIA libraries are found.

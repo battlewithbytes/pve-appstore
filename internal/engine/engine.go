@@ -476,6 +476,11 @@ func (e *Engine) StartInstall(req InstallRequest) (*Job, error) {
 		}
 	}
 
+	// Filter devices against allowed list when policy is allowlist
+	if len(job.Devices) > 0 && e.cfg.GPU.Policy == config.GPUPolicyAllowlist {
+		job.Devices = filterAllowedDevices(job.Devices, e.cfg.GPU.AllowedDevices)
+	}
+
 	if job.Inputs == nil {
 		job.Inputs = make(map[string]string)
 	}
@@ -2252,6 +2257,11 @@ func (e *Engine) runStackInstallWithHWAddr(bgCtx context.Context, job *Job, stac
 		}
 	}
 	job.Devices = allStackDevices // Update job's devices
+
+	// Filter devices against allowed list when policy is allowlist
+	if len(job.Devices) > 0 && e.cfg.GPU.Policy == config.GPUPolicyAllowlist {
+		job.Devices = filterAllowedDevices(job.Devices, e.cfg.GPU.AllowedDevices)
+	}
 
 	// Configure devices
 	if len(job.Devices) > 0 {

@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/battlewithbytes/pve-appstore/internal/installer"
 	"github.com/battlewithbytes/pve-appstore/internal/updater"
 	"github.com/battlewithbytes/pve-appstore/internal/version"
 )
@@ -54,4 +55,82 @@ func (s *Server) handleApplyUpdate(w http.ResponseWriter, r *http.Request) {
 		time.Sleep(100 * time.Millisecond)
 		updater.ApplyUpdateSudo(updater.TempBinary)
 	}()
+}
+
+func (s *Server) handleListGPUs(w http.ResponseWriter, r *http.Request) {
+	gpus := installer.DiscoverGPUs()
+
+	type gpuItem struct {
+		Path string `json:"path"`
+		Type string `json:"type"`
+		Name string `json:"name"`
+	}
+	type gpuDeviceRef struct {
+		Path string `json:"path"`
+	}
+	type gpuInstallItem struct {
+		ID      string         `json:"id"`
+		AppName string         `json:"app_name"`
+		CTID    int            `json:"ctid"`
+		Devices []gpuDeviceRef `json:"devices"`
+	}
+	type gpuStackItem struct {
+		ID      string         `json:"id"`
+		Name    string         `json:"name"`
+		CTID    int            `json:"ctid"`
+		Devices []gpuDeviceRef `json:"devices"`
+	}
+
+	var items []gpuItem
+	for _, g := range gpus {
+		items = append(items, gpuItem{Path: g.Path, Type: g.Type, Name: g.Name})
+	}
+	if items == nil {
+		items = []gpuItem{}
+	}
+
+	var gpuInstalls []gpuInstallItem
+	var gpuStacks []gpuStackItem
+
+	if s.engine != nil {
+		if installs, err := s.engine.ListInstalls(); err == nil {
+			for _, inst := range installs {
+				if len(inst.Devices) > 0 && inst.Status != "uninstalled" {
+					var devs []gpuDeviceRef
+					for _, d := range inst.Devices {
+						devs = append(devs, gpuDeviceRef{Path: d.Path})
+					}
+					gpuInstalls = append(gpuInstalls, gpuInstallItem{
+						ID: inst.ID, AppName: inst.AppName, CTID: inst.CTID, Devices: devs,
+					})
+				}
+			}
+		}
+		if stacks, err := s.engine.ListStacks(); err == nil {
+			for _, st := range stacks {
+				if len(st.Devices) > 0 && st.Status != "uninstalled" {
+					var devs []gpuDeviceRef
+					for _, d := range st.Devices {
+						devs = append(devs, gpuDeviceRef{Path: d.Path})
+					}
+					gpuStacks = append(gpuStacks, gpuStackItem{
+						ID: st.ID, Name: st.Name, CTID: st.CTID, Devices: devs,
+					})
+				}
+			}
+		}
+	}
+
+	if gpuInstalls == nil {
+		gpuInstalls = []gpuInstallItem{}
+	}
+	if gpuStacks == nil {
+		gpuStacks = []gpuStackItem{}
+	}
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"gpus":         items,
+		"gpu_installs": gpuInstalls,
+		"gpu_stacks":   gpuStacks,
+	})
 }

@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { api } from '../api'
-import type { Settings, SettingsUpdate, DiscoverResponse, GitHubStatus, GitHubRepoInfo, UpdateStatus } from '../types'
+import type { Settings, SettingsUpdate, DiscoverResponse, GitHubStatus, GitHubRepoInfo, UpdateStatus, GPUsResponse } from '../types'
 import { Center, InfoCard } from '../components/ui'
 
 function RepoInfoCard() {
@@ -155,6 +155,7 @@ function SettingsView({ requireAuth, onDevModeChange, onUpdateApplied, onAuthCha
   const [updateChecking, setUpdateChecking] = useState(false)
   const [updateApplying, setUpdateApplying] = useState(false)
   const [updateMsg, setUpdateMsg] = useState('')
+  const [gpuData, setGpuData] = useState<GPUsResponse | null>(null)
 
   useEffect(() => { api.settings().then(s => { setSettings(s); setAuthMode(s.auth.mode) }).catch(() => {}) }, [])
 
@@ -172,6 +173,13 @@ function SettingsView({ requireAuth, onDevModeChange, onUpdateApplied, onAuthCha
       api.checkUpdate()
         .then(s => { setUpdateStatus(s); setUpdateChecking(false) })
         .catch(() => setUpdateChecking(false))
+    }
+  }, [activeTab])
+
+  // Fetch GPU data when on GPU tab
+  useEffect(() => {
+    if (activeTab === 'gpu') {
+      api.listGPUs().then(setGpuData).catch(() => {})
     }
   }, [activeTab])
 
@@ -482,34 +490,147 @@ function SettingsView({ requireAuth, onDevModeChange, onUpdateApplied, onAuthCha
           )}
 
           {activeTab === 'gpu' && (
-            <InfoCard title="GPU Passthrough">
-              <div className="flex items-center justify-between mb-3">
-                <div>
-                  <p className="text-sm text-text-secondary">Enable GPU passthrough for containers.</p>
-                </div>
-                <button
-                  onClick={() => save({ gpu: { enabled: !settings.gpu.enabled, policy: settings.gpu.policy } })}
-                  disabled={saving}
-                  className={`relative w-12 h-6 rounded-full transition-colors ${settings.gpu.enabled ? 'bg-primary' : 'bg-border'} cursor-pointer`}
-                >
-                  <span className={`absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white transition-transform ${settings.gpu.enabled ? 'translate-x-6' : ''}`} />
-                </button>
-              </div>
-              {settings.gpu.enabled && (
-                <div className="flex items-center gap-4">
-                  <label className="text-xs text-text-muted font-mono uppercase w-20">Policy</label>
-                  <select
-                    value={settings.gpu.policy}
-                    onChange={(e) => save({ gpu: { enabled: settings.gpu.enabled, policy: e.target.value } })}
-                    className="bg-bg-primary border border-border rounded px-3 py-1.5 text-sm font-mono text-text-primary"
+            <>
+              <InfoCard title="GPU Passthrough">
+                <div className="flex items-center justify-between mb-3">
+                  <div>
+                    <p className="text-sm text-text-secondary">Enable GPU passthrough for containers.</p>
+                  </div>
+                  <button
+                    onClick={() => save({ gpu: { enabled: !settings.gpu.enabled, policy: settings.gpu.policy } })}
+                    disabled={saving}
+                    className={`relative w-12 h-6 rounded-full transition-colors ${settings.gpu.enabled ? 'bg-primary' : 'bg-border'} cursor-pointer`}
                   >
-                    <option value="none">None</option>
-                    <option value="allow">Allow</option>
-                    <option value="allowlist">Allowlist</option>
-                  </select>
+                    <span className={`absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white transition-transform ${settings.gpu.enabled ? 'translate-x-6' : ''}`} />
+                  </button>
                 </div>
-              )}
-            </InfoCard>
+                {settings.gpu.enabled && (
+                  <div className="space-y-4">
+                    <div className="flex items-center gap-4">
+                      <label className="text-xs text-text-muted font-mono uppercase w-20">Policy</label>
+                      <select
+                        value={settings.gpu.policy}
+                        onChange={(e) => save({ gpu: { enabled: settings.gpu.enabled, policy: e.target.value } })}
+                        className="bg-bg-primary border border-border rounded px-3 py-1.5 text-sm font-mono text-text-primary"
+                      >
+                        <option value="none">None</option>
+                        <option value="allow">Allow</option>
+                        <option value="allowlist">Allowlist</option>
+                      </select>
+                    </div>
+                    {settings.gpu.policy === 'allowlist' && gpuData && (
+                      <div>
+                        <label className="text-xs text-text-muted font-mono uppercase block mb-2">Allowed Devices</label>
+                        {gpuData.gpus.length === 0 ? (
+                          <p className="text-sm text-text-muted">No GPUs detected — nothing to allow.</p>
+                        ) : (
+                          <div className="space-y-2">
+                            {gpuData.gpus.map(gpu => {
+                              const checked = (settings.gpu.allowed_devices || []).includes(gpu.path)
+                              return (
+                                <label key={gpu.path} className="flex items-center gap-3 cursor-pointer group">
+                                  <input
+                                    type="checkbox"
+                                    checked={checked}
+                                    onChange={() => {
+                                      const current = settings.gpu.allowed_devices || []
+                                      const next = checked ? current.filter(p => p !== gpu.path) : [...current, gpu.path]
+                                      save({ gpu: { enabled: settings.gpu.enabled, policy: settings.gpu.policy, allowed_devices: next } })
+                                    }}
+                                    className="w-4 h-4 accent-primary"
+                                  />
+                                  <span className="text-sm font-mono text-text-primary group-hover:text-primary transition-colors">{gpu.name}</span>
+                                  <span className="text-xs font-mono text-text-muted">{gpu.path}</span>
+                                </label>
+                              )
+                            })}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </InfoCard>
+
+              <InfoCard title="Detected GPUs">
+                {!gpuData ? (
+                  <p className="text-sm text-text-muted font-mono">Loading...</p>
+                ) : gpuData.gpus.length === 0 ? (
+                  <p className="text-sm text-text-muted">No GPUs detected on this system.</p>
+                ) : (
+                  <div className="border border-border rounded overflow-hidden">
+                    <table className="w-full text-sm font-mono">
+                      <thead>
+                        <tr className="border-b border-border bg-white/5">
+                          <th className="text-left px-3 py-2 text-xs text-text-muted uppercase">Name</th>
+                          <th className="text-left px-3 py-2 text-xs text-text-muted uppercase">Type</th>
+                          <th className="text-left px-3 py-2 text-xs text-text-muted uppercase">Device Path</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {gpuData.gpus.map(gpu => (
+                          <tr key={gpu.path} className="border-b border-border last:border-b-0">
+                            <td className="px-3 py-2 text-text-primary">{gpu.name}</td>
+                            <td className="px-3 py-2">
+                              <span className={`inline-block px-2 py-0.5 rounded text-xs font-bold uppercase ${
+                                gpu.type === 'nvidia' ? 'bg-green-500/20 text-green-400' :
+                                gpu.type === 'intel' ? 'bg-blue-500/20 text-blue-400' :
+                                gpu.type === 'amd' ? 'bg-red-500/20 text-red-400' :
+                                'bg-gray-500/20 text-gray-400'
+                              }`}>{gpu.type}</span>
+                            </td>
+                            <td className="px-3 py-2 text-text-muted">{gpu.path}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </InfoCard>
+
+              <InfoCard title="GPU Usage">
+                {!gpuData ? (
+                  <p className="text-sm text-text-muted font-mono">Loading...</p>
+                ) : gpuData.gpu_installs.length === 0 && gpuData.gpu_stacks.length === 0 ? (
+                  <p className="text-sm text-text-muted">No containers currently using GPU passthrough.</p>
+                ) : (
+                  <div className="border border-border rounded overflow-hidden">
+                    <table className="w-full text-sm font-mono">
+                      <thead>
+                        <tr className="border-b border-border bg-white/5">
+                          <th className="text-left px-3 py-2 text-xs text-text-muted uppercase">Name</th>
+                          <th className="text-left px-3 py-2 text-xs text-text-muted uppercase">Type</th>
+                          <th className="text-left px-3 py-2 text-xs text-text-muted uppercase">CTID</th>
+                          <th className="text-left px-3 py-2 text-xs text-text-muted uppercase">Devices</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {gpuData.gpu_installs.map(inst => (
+                          <tr key={inst.id} className="border-b border-border last:border-b-0 hover:bg-white/5">
+                            <td className="px-3 py-2">
+                              <a href={`#/install/${inst.id}`} className="text-primary hover:underline">{inst.app_name}</a>
+                            </td>
+                            <td className="px-3 py-2 text-text-muted">App</td>
+                            <td className="px-3 py-2 text-text-muted">{inst.ctid}</td>
+                            <td className="px-3 py-2 text-text-muted">{inst.devices.map(d => d.path).join(', ')}</td>
+                          </tr>
+                        ))}
+                        {gpuData.gpu_stacks.map(st => (
+                          <tr key={st.id} className="border-b border-border last:border-b-0 hover:bg-white/5">
+                            <td className="px-3 py-2">
+                              <a href={`#/stack/${st.id}`} className="text-primary hover:underline">{st.name}</a>
+                            </td>
+                            <td className="px-3 py-2 text-text-muted">Stack</td>
+                            <td className="px-3 py-2 text-text-muted">{st.ctid}</td>
+                            <td className="px-3 py-2 text-text-muted">{st.devices.map(d => d.path).join(', ')}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </InfoCard>
+            </>
           )}
 
           {activeTab === 'service' && (

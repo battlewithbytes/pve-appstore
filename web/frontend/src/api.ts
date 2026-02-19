@@ -1,4 +1,4 @@
-import type { AppsResponse, AppDetail, CategoriesResponse, HealthResponse, JobsResponse, LogsResponse, InstallsResponse, InstallRequest, InstallDetail, Install, Job, ConfigDefaultsResponse, BrowseResponse, MountInfo, ExportResponse, ApplyResponse, ApplyPreviewResponse, AppStatusResponse, StacksResponse, StackDetail, StackCreateRequest, StackValidateResponse, EditRequest, ReconfigureRequest, Settings, SettingsUpdate, DiscoverResponse, DevAppsResponse, DevApp, DevTemplate, ValidationResult, DockerfileChainEvent, GitHubStatus, GitHubRepoInfo, PublishStatus, DevStacksResponse, DevStack, CatalogStacksResponse, CatalogStack, ZipImportResponse, UpdateStatus } from './types';
+import type { AppsResponse, AppDetail, CategoriesResponse, HealthResponse, JobsResponse, LogsResponse, InstallsResponse, InstallRequest, InstallDetail, Install, Job, ConfigDefaultsResponse, BrowseResponse, MountInfo, ExportResponse, ApplyResponse, ApplyPreviewResponse, AppStatusResponse, StacksResponse, StackDetail, StackCreateRequest, StackValidateResponse, EditRequest, ReconfigureRequest, Settings, SettingsUpdate, DiscoverResponse, DevAppsResponse, DevApp, DevTemplate, ValidationResult, DockerfileChainEvent, GitHubStatus, GitHubRepoInfo, PublishStatus, DevStacksResponse, DevStack, CatalogStacksResponse, CatalogStack, ZipImportResponse, UpdateStatus, GPUsResponse } from './types';
 
 const BASE = '/api';
 
@@ -486,7 +486,9 @@ export const api = {
       body: JSON.stringify(overrides || {}),
     }),
 
-  // --- System Updates ---
+  // --- System ---
+
+  listGPUs: () => fetchJSON<GPUsResponse>(`${BASE}/system/gpus`),
 
   checkUpdate: () => fetchJSON<UpdateStatus>(`${BASE}/system/update-check`),
 

@@ -484,7 +484,7 @@ export interface Settings {
   service: { port: number };
   auth: { mode: string };
   catalog: { refresh: string };
-  gpu: { enabled: boolean; policy: string };
+  gpu: { enabled: boolean; policy: string; allowed_devices?: string[] };
 }
 
 export interface SettingsUpdate {
@@ -493,7 +493,7 @@ export interface SettingsUpdate {
   bridges?: string[];
   developer?: { enabled: boolean };
   catalog?: { refresh?: string };
-  gpu?: { enabled?: boolean; policy?: string };
+  gpu?: { enabled?: boolean; policy?: string; allowed_devices?: string[] };
   auth?: { mode: string; password?: string };
 }
 
@@ -645,6 +645,28 @@ export interface ZipImportResponse {
   id: string;
   app?: DevApp;
   stack?: DevStack;
+}
+
+// --- GPU Discovery ---
+
+export interface GPUInfo {
+  path: string;
+  type: string;
+  name: string;
+}
+
+export interface GPUInstallInfo {
+  id: string;
+  app_name?: string;
+  name?: string;
+  ctid: number;
+  devices: { path: string }[];
+}
+
+export interface GPUsResponse {
+  gpus: GPUInfo[];
+  gpu_installs: GPUInstallInfo[];
+  gpu_stacks: GPUInstallInfo[];
 }
 
 // --- System Updates ---
