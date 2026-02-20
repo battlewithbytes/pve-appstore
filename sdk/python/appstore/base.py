@@ -192,7 +192,7 @@ class BaseApp(ABC):
 
     # @sdk-group: File Operations
 
-    def write_config(self, path: str, template_str: str, **kwargs) -> str:
+    def write_config(self, path: str, template_str: str, preserve_existing: bool = False, **kwargs) -> str:
         """Write a config file using template substitution.
 
         Pass the template as an inline string (use render_template to read
@@ -203,12 +203,20 @@ class BaseApp(ABC):
             path: Destination path (must be under an allowed path prefix).
             template_str: Template string using $variable syntax and
                           {{#key}}...{{/key}} conditional blocks.
+            preserve_existing: If True and the file already exists, skip
+                writing and preserve the existing file. Useful for config
+                files on persistent volumes during reinstalls.
             **kwargs: Variables to substitute.
 
         Returns:
-            The rendered content.
+            The rendered content (or existing content if preserved).
         """
         self.permissions.check_path(path)
+
+        if preserve_existing and os.path.exists(path):
+            self.log.info(f"Preserving existing config: {path}")
+            with open(path) as f:
+                return f.read()
 
         content = render(template_str, **kwargs)
         os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
@@ -217,7 +225,7 @@ class BaseApp(ABC):
         self.log.info(f"Wrote config: {path}")
         return content
 
-    def render_template(self, template_name: str, dest_path: str, **kwargs) -> str:
+    def render_template(self, template_name: str, dest_path: str, preserve_existing: bool = False, **kwargs) -> str:
         """Read a template file from the app's provision directory and write it to dest_path.
 
         Template files support:
@@ -230,16 +238,18 @@ class BaseApp(ABC):
             template_name: Filename relative to the provision directory
                            (e.g. "gitlab.rb.tmpl").
             dest_path: Where to write the rendered output.
+            preserve_existing: If True and dest_path already exists, skip
+                writing and preserve the existing file.
             **kwargs: Template variables.
 
         Returns:
-            The rendered content.
+            The rendered content (or existing content if preserved).
         """
         # Templates are pushed to /opt/appstore/provision/ alongside install.py
         tmpl_path = os.path.join("/opt/appstore/provision", template_name)
         with open(tmpl_path) as f:
             template_str = f.read()
-        return self.write_config(dest_path, template_str, **kwargs)
+        return self.write_config(dest_path, template_str, preserve_existing=preserve_existing, **kwargs)
 
     def provision_file(self, name: str) -> str:
         """Read a file from the provision directory and return its contents.
@@ -257,15 +267,19 @@ class BaseApp(ABC):
         with open(path) as f:
             return f.read()
 
-    def deploy_provision_file(self, name: str, dest: str, mode: str = None) -> None:
+    def deploy_provision_file(self, name: str, dest: str, mode: str = None, preserve_existing: bool = False) -> None:
         """Copy a file from the provision directory to a destination path.
 
         Args:
             name: Filename in the provision directory.
             dest: Destination path in the container.
             mode: Optional file permissions (octal string, e.g. "0755").
+            preserve_existing: If True and dest already exists, skip the copy.
         """
         self.permissions.check_path(dest)
+        if preserve_existing and os.path.exists(dest):
+            self.log.info(f"Preserving existing file: {dest}")
+            return
         src = os.path.join(self._provision_dir(), name)
         os.makedirs(os.path.dirname(dest) or ".", exist_ok=True)
         shutil.copy2(src, dest)

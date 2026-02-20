@@ -261,14 +261,6 @@ func (m *AppManifest) Validate() error {
 		}
 	}
 
-	// GPU supported types
-	validGPUTypes := map[string]bool{"intel": true, "amd": true, "nvidia": true}
-	for _, t := range m.GPU.Supported {
-		if !validGPUTypes[strings.ToLower(t)] {
-			return fmt.Errorf("manifest %s: gpu.supported type %q is invalid", m.ID, t)
-		}
-	}
-
 	// Volumes
 	for i := range m.Volumes {
 		vol := &m.Volumes[i]

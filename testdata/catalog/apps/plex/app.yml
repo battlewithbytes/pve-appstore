@@ -7,7 +7,7 @@ overview: |
   Plex supports movies, TV shows, music, photos, podcasts, and even live TV with DVR when paired with a tuner. The server transcodes media on-the-fly for devices that can't play the original format, and with Plex Pass, you can enable hardware-accelerated transcoding using Intel QSV or NVIDIA NVENC.
 
   After installation, access the web UI to sign in with your Plex account and add your media libraries. If you have a claim token, the server will automatically link to your account during setup.
-version: 1.41.0
+version: 1.41.1
 categories:
   - media
   - entertainment
@@ -38,16 +38,22 @@ volumes:
     type: volume
     mount_path: /var/lib/plexmediaserver
     size_gb: 5
-    label: Plex Data
+    label: Config & Metadata
     required: true
     description: Plex configuration, metadata, and database
   - name: media
     type: bind
     mount_path: /mnt/media
     label: Media Library
-    default_host_path: /mnt/storage/media
     required: false
     description: Map your media library folder (movies, TV, music)
+  - name: transcode
+    type: bind
+    mount_path: /mnt/transcode
+    label: Transcode Cache
+    default_host_path: /tmp/plex-transcode
+    required: false
+    description: Temporary transcoding cache. Map to SSD-backed host storage for best performance. Contents can be safely deleted.
 
 inputs:
   - key: claim_token
@@ -65,22 +71,6 @@ inputs:
     group: General
     description: A friendly name for this Plex server that appears in your Plex apps and account settings.
     help: Can be changed later in Plex settings
-  - key: media_path
-    label: Media Directory
-    type: string
-    default: /mnt/media
-    required: false
-    group: Storage
-    description: Root directory where your media files are stored. Use a bind mount from your Proxmox host or NFS share. You can add additional library paths in Plex's UI after setup.
-    help: "Example: /mnt/media or /mnt/nfs/shared"
-  - key: transcode_path
-    label: Transcode Directory
-    type: string
-    default: /tmp/plex-transcode
-    required: false
-    group: Storage
-    description: Temporary directory used for transcoding cache. Place this on fast storage (SSD) for best performance. Contents are temporary and can be safely deleted.
-    help: Use SSD-backed storage for best transcoding performance
   - key: http_port
     label: HTTP Port
     type: number
@@ -96,7 +86,7 @@ inputs:
 permissions:
   packages: [curl, plexmediaserver]
   urls: ["https://downloads.plex.tv/*"]
-  paths: ["/mnt/media", "/tmp/plex-transcode", "/var/lib/plexmediaserver/", "/usr/share/keyrings/", "/etc/apt/sources.list.d/"]
+  paths: ["/mnt/media", "/mnt/transcode", "/var/lib/plexmediaserver/", "/usr/share/keyrings/", "/etc/apt/sources.list.d/"]
   services: [plexmediaserver]
   apt_repos: ["deb [signed-by=/usr/share/keyrings/plex-archive-keyring.gpg] https://downloads.plex.tv/repo/deb public main"]
 
@@ -110,11 +100,5 @@ outputs:
     value: "http://{{ip}}:{{http_port}}/web"
 
 gpu:
-  supported:
-    - intel
-    - nvidia
   required: false
-  profiles:
-    - dri-render
-    - nvidia-basic
   notes: Hardware transcoding requires Plex Pass and a supported GPU.

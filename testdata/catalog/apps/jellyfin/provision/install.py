@@ -5,10 +5,10 @@ from appstore import BaseApp, run
 
 class JellyfinApp(BaseApp):
     def install(self):
-        media_path = self.inputs.string("media_path", "/mnt/media")
         http_port = self.inputs.integer("http_port", 8096)
-        cache_path = self.inputs.string("cache_path", "/var/cache/jellyfin")
+        cache_path = "/var/cache/jellyfin"  # Set by bind mount in manifest
         transcode_threads = self.inputs.integer("transcode_threads", 0)
+        media_path = "/mnt/media"  # Set by bind mount in manifest
         hw_accel = self.inputs.string("hw_accel", "none")
 
         # Install system dependencies
@@ -43,14 +43,6 @@ class JellyfinApp(BaseApp):
             self.deploy_provision_file("encoding-nvenc.xml", f"{config_dir}/encoding.xml")
             self.chown(f"{config_dir}/encoding.xml", "jellyfin:jellyfin")
             self.log.info("NVIDIA NVENC hardware acceleration configured")
-
-        # Configure cache directory override
-        if cache_path != "/var/cache/jellyfin":
-            self.create_dir("/etc/systemd/system/jellyfin.service.d")
-            self.render_template("systemd-override.conf",
-                "/etc/systemd/system/jellyfin.service.d/override.conf",
-                cache_path=cache_path,
-            )
 
         self.enable_service("jellyfin")
         self.log.info("Jellyfin installed successfully")

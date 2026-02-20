@@ -57,9 +57,9 @@ const yamlReference = [
   ]},
   { group: 'gpu', fields: [
     { name: 'required', type: 'bool', desc: 'true = fail if no GPU; false = optional' },
-    { name: 'supported', type: 'string[]', desc: 'GPU vendors: nvidia, intel, amd' },
-    { name: 'profiles', type: 'string[]', desc: 'Device profiles: nvidia-basic, dri-render' },
     { name: 'notes', type: 'string', desc: 'Shown to user in install form' },
+    { name: 'supported', type: 'string[]', desc: '(deprecated) GPU vendors — auto-detected now' },
+    { name: 'profiles', type: 'string[]', desc: '(deprecated) Device profiles — auto-detected now' },
   ]},
   { group: 'provisioning', fields: [
     { name: 'script', type: 'string', desc: 'Path to install script (e.g. provision/install.py)' },

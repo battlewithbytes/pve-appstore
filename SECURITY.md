@@ -169,9 +169,24 @@ The web server (running as `appstore` user) uses the Proxmox REST API via the ex
 
 The API token requires `Sys.Audit` permission at the root path (`/`) for the PCI hardware endpoint. This is granted via the `PVEAuditor` role, which is read-only and cannot modify any system state.
 
+### Driver status detection
+
+The GPU API endpoint (`GET /api/system/gpus`) includes a `driver_status` object that reports the state of GPU kernel drivers and userspace libraries on the host:
+
+- **NVIDIA**: Checks `/sys/module/nvidia` for kernel module presence, reads `/sys/module/nvidia/version` for the driver version, and probes for userspace libraries in well-known host paths
+- **Intel**: Checks `/sys/module/i915` or `/sys/module/xe` (newer Intel GPUs)
+- **AMD**: Checks `/sys/module/amdgpu`
+
+The install form and settings page display driver warnings when hardware is detected but drivers are missing, helping users resolve issues before installing GPU-enabled apps.
+
 ### Device passthrough
 
-GPU-enabled apps declare profiles in their manifest (e.g. `nvidia-basic`, `dri-render`). At install time, the engine:
+The install form auto-detects GPUs on the system and presents each as a selectable checkbox. The user selects which GPUs to pass through, and the engine maps each GPU type to the correct device nodes:
+
+- **Intel/AMD**: The render node (e.g. `/dev/dri/renderD128`) with GID 44 and mode `0666`
+- **NVIDIA**: The device node (e.g. `/dev/nvidia0`) plus shared control nodes (`/dev/nvidiactl`, `/dev/nvidia-uvm`)
+
+At install time, the engine:
 
 1. **Validates device nodes exist** on the host (e.g. `/dev/nvidia0`) before adding them to the job
 2. If `gpu.required: false` and no GPU hardware is found, the install proceeds in CPU-only mode — no devices are passed through

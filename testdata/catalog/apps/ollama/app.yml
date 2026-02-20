@@ -119,11 +119,5 @@ outputs:
     value: "ollama run {{model}}"
 
 gpu:
-  supported:
-    - intel
-    - nvidia
   required: false
-  profiles:
-    - dri-render
-    - nvidia-basic
   notes: GPU acceleration significantly improves inference speed. NVIDIA GPUs require host drivers.
