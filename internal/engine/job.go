@@ -80,6 +80,7 @@ type Job struct {
 	MountPoints  []MountPoint       `json:"mount_points,omitempty"`
 	Devices      []DevicePassthrough `json:"devices,omitempty"`
 	EnvVars      map[string]string  `json:"env_vars,omitempty"`
+	CPUPin       string             `json:"cpu_pin,omitempty"`
 	ExtraTags    string             `json:"extra_tags,omitempty"`
 	StackID      string             `json:"stack_id,omitempty"`
 	AppSource    string             `json:"app_source,omitempty"` // "developer", "official", etc.
@@ -121,6 +122,7 @@ type Install struct {
 	MountPoints  []MountPoint        `json:"mount_points,omitempty"`
 	Devices      []DevicePassthrough `json:"devices,omitempty"`
 	EnvVars      map[string]string   `json:"env_vars,omitempty"`
+	CPUPin       string              `json:"cpu_pin,omitempty"`
 	AppSource    string              `json:"app_source,omitempty"` // "developer", "official", etc.
 	Status       string              `json:"status"`               // running, stopped, uninstalled
 	CreatedAt    time.Time           `json:"created_at"`
@@ -147,6 +149,7 @@ type InstallRequest struct {
 	Devices        []DevicePassthrough  `json:"devices,omitempty"`
 	EnvVars        map[string]string    `json:"env_vars,omitempty"`
 	ExtraTags      string               `json:"extra_tags,omitempty"`
+	CPUPin         string               `json:"cpu_pin,omitempty"`          // CPU pinning (e.g. "0-3" or "0,2,4,6")
 	GPUProfile     string               `json:"gpu_profile,omitempty"`      // GPU passthrough profile
 	ReplaceExisting bool                `json:"replace_existing,omitempty"` // uninstall existing before installing
 	KeepVolumes     []string            `json:"keep_volumes,omitempty"`      // volume names to preserve when replacing
@@ -178,6 +181,7 @@ type EditRequest struct {
 	Bridge   string               `json:"bridge,omitempty"`
 	Inputs   map[string]string    `json:"inputs,omitempty"`
 	Devices  *[]DevicePassthrough `json:"devices,omitempty"` // nil=keep existing, non-nil=replace
+	CPUPin   *string              `json:"cpu_pin,omitempty"` // nil=keep existing, non-nil=replace
 }
 
 // ReconfigureRequest is the input for in-place reconfiguration of an active install.
@@ -247,6 +251,7 @@ type StackCreateRequest struct {
 	VolumeStorages map[string]string  `json:"volume_storages,omitempty"`
 	Devices      []DevicePassthrough  `json:"devices,omitempty"`
 	EnvVars      map[string]string    `json:"env_vars,omitempty"`
+	CPUPin       string               `json:"cpu_pin,omitempty"`
 }
 
 // StackAppRequest defines per-app configuration in a stack creation request.

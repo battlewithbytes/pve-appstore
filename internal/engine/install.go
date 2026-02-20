@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -197,6 +198,7 @@ func (e *Engine) runInstall(bgCtx context.Context, job *Job) {
 		MountPoints:  ctx.job.MountPoints,
 		Devices:      ctx.job.Devices,
 		EnvVars:      ctx.job.EnvVars,
+		CPUPin:       ctx.job.CPUPin,
 		AppSource:    ctx.job.AppSource,
 		Status:       "running",
 		CreatedAt:    now,
@@ -213,6 +215,13 @@ func stepValidateRequest(ctx *installContext) error {
 	// Validate user inputs against manifest rules
 	if err := validateInputs(ctx.manifest, ctx.job.Inputs); err != nil {
 		return err
+	}
+
+	// Validate CPU pinning if specified
+	if ctx.job.CPUPin != "" {
+		if err := ValidateCPUPin(ctx.job.CPUPin); err != nil {
+			return err
+		}
 	}
 
 	ctx.info("Request validated for app %s", ctx.job.AppID)
@@ -286,6 +295,59 @@ func validateInputs(manifest *catalog.AppManifest, inputs map[string]string) err
 			}
 			if !found {
 				return fmt.Errorf("input %q: value %q is not one of the allowed options", inp.Key, val)
+			}
+		}
+	}
+	return nil
+}
+
+// ValidateCPUPin validates a CPU pinning specification string.
+// Accepted formats: single CPUs ("0,2,4"), ranges ("0-3"), or a mix ("0-3,8-11").
+// All CPU IDs must be >= 0 and < runtime.NumCPU(). Ranges must be ascending.
+func ValidateCPUPin(pin string) error {
+	pin = strings.TrimSpace(pin)
+	if pin == "" {
+		return nil
+	}
+	numCPUs := runtime.NumCPU()
+	tokens := strings.Split(pin, ",")
+	for _, tok := range tokens {
+		tok = strings.TrimSpace(tok)
+		if tok == "" {
+			return fmt.Errorf("cpu_pin: empty token in %q", pin)
+		}
+		if strings.Contains(tok, "-") {
+			parts := strings.SplitN(tok, "-", 2)
+			if len(parts) != 2 {
+				return fmt.Errorf("cpu_pin: invalid range %q", tok)
+			}
+			lo, err := strconv.Atoi(strings.TrimSpace(parts[0]))
+			if err != nil {
+				return fmt.Errorf("cpu_pin: invalid number in range %q", tok)
+			}
+			hi, err := strconv.Atoi(strings.TrimSpace(parts[1]))
+			if err != nil {
+				return fmt.Errorf("cpu_pin: invalid number in range %q", tok)
+			}
+			if lo < 0 || hi < 0 {
+				return fmt.Errorf("cpu_pin: negative CPU ID in %q", tok)
+			}
+			if lo > hi {
+				return fmt.Errorf("cpu_pin: range %q is not ascending (low=%d > high=%d)", tok, lo, hi)
+			}
+			if hi >= numCPUs {
+				return fmt.Errorf("cpu_pin: CPU %d exceeds host CPU count (%d)", hi, numCPUs)
+			}
+		} else {
+			cpuID, err := strconv.Atoi(tok)
+			if err != nil {
+				return fmt.Errorf("cpu_pin: invalid CPU ID %q", tok)
+			}
+			if cpuID < 0 {
+				return fmt.Errorf("cpu_pin: negative CPU ID %d", cpuID)
+			}
+			if cpuID >= numCPUs {
+				return fmt.Errorf("cpu_pin: CPU %d exceeds host CPU count (%d)", cpuID, numCPUs)
 			}
 		}
 	}
@@ -511,6 +573,17 @@ func stepConfigureContainer(ctx *installContext) error {
 		ctx.info("Applying %d extra LXC config line(s)...", len(ctx.manifest.LXC.ExtraConfig))
 		if err := ctx.engine.cm.AppendLXCConfig(ctx.job.CTID, ctx.manifest.LXC.ExtraConfig); err != nil {
 			return fmt.Errorf("applying extra LXC config: %w", err)
+		}
+	}
+
+	// Apply CPU pinning if specified
+	if ctx.job.CPUPin != "" {
+		ctx.info("Applying CPU pinning: cpuset.cpus = %s", ctx.job.CPUPin)
+		lines := []string{
+			fmt.Sprintf("lxc.cgroup2.cpuset.cpus: %s", ctx.job.CPUPin),
+		}
+		if err := ctx.engine.cm.AppendLXCConfig(ctx.job.CTID, lines); err != nil {
+			return fmt.Errorf("applying CPU pinning: %w", err)
 		}
 	}
 

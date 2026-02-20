@@ -205,6 +205,7 @@ export interface Job {
   inputs?: Record<string, string>;
   outputs?: Record<string, string>;
   mount_points?: MountPoint[];
+  cpu_pin?: string;
   error?: string;
   created_at: string;
   updated_at: string;
@@ -241,6 +242,7 @@ export interface Install {
   mount_points?: MountPoint[];
   devices?: DevicePassthrough[];
   env_vars?: Record<string, string>;
+  cpu_pin?: string;
   status: string;
   created_at: string;
 }
@@ -306,6 +308,7 @@ export interface InstallRequest {
   volume_storages?: Record<string, string>;
   devices?: DevicePassthrough[];
   env_vars?: Record<string, string>;
+  cpu_pin?: string;
   replace_existing?: boolean;
   keep_volumes?: string[];
 }
@@ -317,6 +320,7 @@ export interface EditRequest {
   bridge?: string;
   inputs?: Record<string, string>;
   devices?: DevicePassthrough[] | null;
+  cpu_pin?: string | null;
 }
 
 export interface ReconfigureRequest {
@@ -484,7 +488,14 @@ export interface Settings {
   developer: { enabled: boolean };
   service: { port: number };
   auth: { mode: string };
-  catalog: { refresh: string };
+  catalog: {
+    refresh: string;
+    url: string;
+    branch: string;
+    app_count: number;
+    stack_count: number;
+    last_refresh?: string;
+  };
   gpu: { enabled: boolean; policy: string; allowed_devices?: string[] };
 }
 
@@ -664,10 +675,19 @@ export interface GPUInstallInfo {
   devices: { path: string }[];
 }
 
+export interface GPUDriverStatus {
+  nvidia_driver_loaded: boolean;
+  nvidia_version?: string;
+  nvidia_libs_found: boolean;
+  intel_driver_loaded: boolean;
+  amd_driver_loaded: boolean;
+}
+
 export interface GPUsResponse {
   gpus: GPUInfo[];
   gpu_installs: GPUInstallInfo[];
   gpu_stacks: GPUInstallInfo[];
+  driver_status: GPUDriverStatus;
 }
 
 // --- System Updates ---

@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo } from 'react'
 import { api } from '../api'
-import type { AppDetail, AppInput, ConfigDefaultsResponse, InstallRequest, DevicePassthrough, Install } from '../types'
+import type { AppDetail, AppInput, ConfigDefaultsResponse, InstallRequest, DevicePassthrough, Install, GPUInfo, GPUDriverStatus } from '../types'
 import { Badge, SectionTitle, FormRow, FormInput } from '../components/ui'
 import { DirectoryBrowser } from '../components/DirectoryBrowser'
 import { useEscapeKey } from '../hooks/useEscapeKey'
@@ -17,6 +17,7 @@ export function InstallWizard({ app, onClose, replaceExisting, keepVolumes, exis
   const [cores, setCores] = useState(prev ? String(prev.cores) : String(app.lxc.defaults.cores))
   const [memory, setMemory] = useState(prev ? String(prev.memory_mb) : String(app.lxc.defaults.memory_mb))
   const [disk, setDisk] = useState(prev ? String(prev.disk_gb) : String(app.lxc.defaults.disk_gb))
+  const [cpuPin, setCpuPin] = useState(prev?.cpu_pin || '')
   const [storage, setStorage] = useState(prev?.storage || '')
   const [bridge, setBridge] = useState(prev?.bridge || '')
   const [hostname, setHostname] = useState(prev?.hostname || '')
@@ -61,6 +62,11 @@ export function InstallWizard({ app, onClose, replaceExisting, keepVolumes, exis
   const [envVarList, setEnvVarList] = useState<{key: string; value: string}[]>([])
   const [browseTarget, setBrowseTarget] = useState<string | null>(null)
   const [browseInitPath, setBrowseInitPath] = useState('/')
+  const [availableGPUs, setAvailableGPUs] = useState<GPUInfo[]>([])
+  const [driverStatus, setDriverStatus] = useState<GPUDriverStatus | null>(null)
+  const [selectedGPUs, setSelectedGPUs] = useState<Set<string>>(new Set(
+    (prev?.devices || []).map(d => d.path).filter(p => !p.includes('nvidiactl') && !p.includes('nvidia-uvm'))
+  ))
 
   useEffect(() => {
     api.configDefaults().then(d => {
@@ -70,6 +76,17 @@ export function InstallWizard({ app, onClose, replaceExisting, keepVolumes, exis
       if (!prev?.bridge) setBridge(b => b || d.bridges[0] || '')
     }).catch(() => {})
   }, [])
+
+  // Fetch detected GPUs when the app has a gpu section
+  const hasGPUSection = !!(app.gpu && (app.gpu.required !== undefined || app.gpu.supported?.length || app.gpu.profiles?.length || app.gpu.notes))
+  useEffect(() => {
+    if (hasGPUSection) {
+      api.listGPUs().then(data => {
+        setAvailableGPUs(data.gpus)
+        setDriverStatus(data.driver_status)
+      }).catch(() => {})
+    }
+  }, [hasGPUSection])
 
   const volumeVolumes = (app.volumes || []).filter(v => (v.type || 'volume') === 'volume')
   const bindVolumes = (app.volumes || []).filter(v => v.type === 'bind')
@@ -278,6 +295,7 @@ export function InstallWizard({ app, onClose, replaceExisting, keepVolumes, exis
         if (ev.key.trim()) allEnv[ev.key.trim()] = ev.value
       }
       if (Object.keys(allEnv).length > 0) req.env_vars = allEnv
+      if (cpuPin.trim()) req.cpu_pin = cpuPin.trim()
       if (replaceExisting) req.replace_existing = true
       if (keepVolumes && keepVolumes.length > 0) req.keep_volumes = keepVolumes
       const job = await api.installApp(app.id, req as InstallRequest)
@@ -320,6 +338,7 @@ export function InstallWizard({ app, onClose, replaceExisting, keepVolumes, exis
         <FormRow label="CPU Cores"><FormInput value={cores} onChange={setCores} type="number" /></FormRow>
         <FormRow label="Memory (MB)"><FormInput value={memory} onChange={setMemory} type="number" /></FormRow>
         <FormRow label="Disk (GB)" help="Root filesystem only — app data lives on separate volumes"><FormInput value={disk} onChange={setDisk} type="number" /></FormRow>
+        <FormRow label="CPU Pinning" help="Pin container to specific cores (e.g. 0-3 or 0,2,4,6). Leave empty for automatic scheduling."><FormInput value={cpuPin} onChange={setCpuPin} placeholder="e.g. 0-3" /></FormRow>
 
         <SectionTitle>Networking & Storage</SectionTitle>
         <FormRow label="Storage Pool" description="Proxmox storage where the container's virtual disk will be created." help={`Disk size: ${disk} GB`}>
@@ -579,45 +598,87 @@ export function InstallWizard({ app, onClose, replaceExisting, keepVolumes, exis
           Ports: LXC containers get their own IP — all ports are directly accessible.
         </div>
 
-        {/* Device Passthrough */}
-        {(app.gpu.supported && app.gpu.supported.length > 0) && (
+        {/* Device Passthrough — detected GPUs */}
+        {hasGPUSection && (
           <>
-            <SectionTitle>Device Passthrough</SectionTitle>
-            {app.gpu.profiles && app.gpu.profiles.length > 0 && (
-              <div className="text-xs text-text-muted mb-2 font-mono">GPU profiles: {app.gpu.profiles.join(', ')}</div>
+            <SectionTitle>GPU / Device Passthrough</SectionTitle>
+            {app.gpu.notes && <div className="text-xs text-text-muted mb-2 font-mono border-l-2 border-primary/30 pl-2">{app.gpu.notes}</div>}
+            {app.gpu.required && availableGPUs.length === 0 && (
+              <div className="mb-2 p-2 bg-status-stopped/10 border border-status-stopped/30 rounded text-status-stopped text-xs font-mono">
+                This app requires a GPU but none were detected on this system.
+              </div>
             )}
-            <label className="flex items-center gap-2 text-xs text-text-muted cursor-pointer mb-2">
-              <input type="checkbox" checked={devices.length > 0}
-                onChange={e => {
-                  if (e.target.checked) {
-                    // Auto-populate from GPU profiles
-                    const profileDevs: DevicePassthrough[] = []
-                    for (const profile of (app.gpu.profiles || [])) {
-                      if (profile === 'dri-render') profileDevs.push({ path: '/dev/dri/renderD128', gid: 44, mode: '0666' })
-                      else if (profile === 'nvidia-basic') {
-                        profileDevs.push({ path: '/dev/nvidia0' }, { path: '/dev/nvidiactl' }, { path: '/dev/nvidia-uvm' })
-                      }
-                    }
-                    setDevices(profileDevs.length > 0 ? profileDevs : [{ path: '' }])
-                  } else setDevices([])
-                }}
-                className="w-3.5 h-3.5 accent-primary" />
-              Enable GPU/device passthrough
-            </label>
+            {/* Driver warnings */}
+            {driverStatus && availableGPUs.some(g => g.type === 'nvidia') && !driverStatus.nvidia_driver_loaded && (
+              <div className="mb-2 p-2 bg-status-stopped/10 border border-status-stopped/30 rounded text-status-stopped text-xs font-mono">
+                NVIDIA kernel driver not loaded. Install nvidia-driver on the host.
+              </div>
+            )}
+            {driverStatus && availableGPUs.some(g => g.type === 'nvidia') && driverStatus.nvidia_driver_loaded && !driverStatus.nvidia_libs_found && (
+              <div className="mb-2 p-2 bg-status-warning/10 border border-status-warning/30 rounded text-status-warning text-xs font-mono">
+                NVIDIA userspace libraries not found on host.
+              </div>
+            )}
+            {availableGPUs.length > 0 ? (
+              <div className="space-y-1.5 mb-2">
+                {availableGPUs.map(gpu => {
+                  const checked = selectedGPUs.has(gpu.path)
+                  return (
+                    <label key={gpu.path} className="flex items-center gap-2 text-xs text-text-primary cursor-pointer group">
+                      <input type="checkbox" checked={checked}
+                        onChange={() => {
+                          const next = new Set(selectedGPUs)
+                          if (checked) next.delete(gpu.path); else next.add(gpu.path)
+                          setSelectedGPUs(next)
+                          // Rebuild devices from selected GPUs
+                          const devs: DevicePassthrough[] = []
+                          const seen = new Set<string>()
+                          for (const path of next) {
+                            const g = availableGPUs.find(x => x.path === path)
+                            if (!g) continue
+                            if (g.type === 'intel' || g.type === 'amd') {
+                              if (!seen.has(path)) { devs.push({ path, gid: 44, mode: '0666' }); seen.add(path) }
+                            } else if (g.type === 'nvidia') {
+                              if (!seen.has(path)) { devs.push({ path }); seen.add(path) }
+                              if (!seen.has('/dev/nvidiactl')) { devs.push({ path: '/dev/nvidiactl' }); seen.add('/dev/nvidiactl') }
+                              if (!seen.has('/dev/nvidia-uvm')) { devs.push({ path: '/dev/nvidia-uvm' }); seen.add('/dev/nvidia-uvm') }
+                            } else {
+                              if (!seen.has(path)) { devs.push({ path }); seen.add(path) }
+                            }
+                          }
+                          setDevices(devs)
+                        }}
+                        className="w-3.5 h-3.5 accent-primary" />
+                      <span className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-bold uppercase ${
+                        gpu.type === 'nvidia' ? 'bg-green-500/20 text-green-400' :
+                        gpu.type === 'intel' ? 'bg-blue-500/20 text-blue-400' :
+                        gpu.type === 'amd' ? 'bg-red-500/20 text-red-400' :
+                        'bg-gray-500/20 text-gray-400'
+                      }`}>{gpu.type}</span>
+                      <span className="font-mono group-hover:text-primary transition-colors">{gpu.name}</span>
+                      <span className="text-text-muted font-mono">({gpu.path})</span>
+                    </label>
+                  )
+                })}
+              </div>
+            ) : (
+              <p className="text-xs text-text-muted mb-2">No GPUs detected. You can add custom device paths below.</p>
+            )}
+            {/* Manual device entries */}
             {devices.map((dev, i) => (
               <div key={i} className="flex gap-2 mb-1.5 items-center">
                 <input type="text" value={dev.path} onChange={e => setDevices(p => p.map((x, j) => j === i ? { ...x, path: e.target.value } : x))} placeholder="/dev/dri/renderD128"
-                  className="flex-1 px-3 py-2 bg-bg-secondary border border-border rounded-md text-text-primary text-sm outline-none focus:border-primary font-mono placeholder:text-text-muted" />
-                <button type="button" onClick={() => setDevices(p => p.filter((_, j) => j !== i))}
-                  className="text-status-stopped text-sm bg-transparent border-none cursor-pointer hover:text-status-stopped/80 leading-none px-1">&times;</button>
+                  className="flex-1 px-3 py-2 bg-bg-secondary border border-border rounded-md text-text-primary text-sm outline-none focus:border-primary font-mono placeholder:text-text-muted" readOnly={availableGPUs.some(g => g.path === dev.path || dev.path === '/dev/nvidiactl' || dev.path === '/dev/nvidia-uvm')} />
+                {!availableGPUs.some(g => g.path === dev.path) && dev.path !== '/dev/nvidiactl' && dev.path !== '/dev/nvidia-uvm' && (
+                  <button type="button" onClick={() => setDevices(p => p.filter((_, j) => j !== i))}
+                    className="text-status-stopped text-sm bg-transparent border-none cursor-pointer hover:text-status-stopped/80 leading-none px-1">&times;</button>
+                )}
               </div>
             ))}
-            {devices.length > 0 && (
-              <button type="button" onClick={() => setDevices(p => [...p, { path: '' }])}
-                className="text-primary text-xs font-mono bg-transparent border-none cursor-pointer hover:underline p-0">
-                + Add Device
-              </button>
-            )}
+            <button type="button" onClick={() => setDevices(p => [...p, { path: '' }])}
+              className="text-primary text-xs font-mono bg-transparent border-none cursor-pointer hover:underline p-0">
+              + Add Device
+            </button>
           </>
         )}
 

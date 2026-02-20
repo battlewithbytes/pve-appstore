@@ -448,6 +448,7 @@ func (e *Engine) StartInstall(req InstallRequest) (*Job, error) {
 		OnBoot:       onboot,
 		Unprivileged: unprivileged,
 		ExtraTags:    req.ExtraTags,
+		CPUPin:       req.CPUPin,
 		AppSource:    app.Source,
 		Inputs:       inputs,
 		Outputs:      make(map[string]string),
@@ -711,11 +712,24 @@ func (e *Engine) syncUninstall(inst *Install, keepVolumeNames []string) ([]Mount
 }
 
 // If keepVolumes is true, mount point volumes are detached before destroy and preserved.
-func (e *Engine) Uninstall(installID string, keepVolumes bool) (*Job, error) {
+func (e *Engine) Uninstall(installID string, keepVolumeNames []string, deleteBindPaths []string) (*Job, error) {
 	// Find the install
 	inst, err := e.store.GetInstall(installID)
 	if err != nil {
 		return nil, fmt.Errorf("install %q not found", installID)
+	}
+
+	// Validate deleteBindPaths — only allow paths that are actual bind mount host paths on this install
+	validBindPaths := make(map[string]bool)
+	for _, mp := range inst.MountPoints {
+		if mp.Type == "bind" && mp.HostPath != "" {
+			validBindPaths[mp.HostPath] = true
+		}
+	}
+	for _, p := range deleteBindPaths {
+		if !validBindPaths[p] {
+			return nil, fmt.Errorf("path %q is not a bind mount host path on this install", p)
+		}
 	}
 
 	now := time.Now()
@@ -736,15 +750,24 @@ func (e *Engine) Uninstall(installID string, keepVolumes bool) (*Job, error) {
 		return nil, fmt.Errorf("creating uninstall job: %w", err)
 	}
 
-	go e.runUninstall(job, inst, keepVolumes)
+	go e.runUninstall(job, inst, keepVolumeNames, deleteBindPaths)
 
 	return job, nil
 }
 
-func (e *Engine) runUninstall(job *Job, inst *Install, keepVolumes bool) {
+func (e *Engine) runUninstall(job *Job, inst *Install, keepVolumeNames []string, deleteBindPaths []string) {
 	ctx := &installContext{engine: e, job: job}
+	keepSet := make(map[string]bool, len(keepVolumeNames))
+	for _, n := range keepVolumeNames {
+		keepSet[n] = true
+	}
+	keepVolumes := len(keepVolumeNames) > 0
+	deleteBindSet := make(map[string]bool, len(deleteBindPaths))
+	for _, p := range deleteBindPaths {
+		deleteBindSet[p] = true
+	}
 
-	ctx.info("Starting uninstall of %s (CTID %d, keepVolumes=%v)", inst.AppName, inst.CTID, keepVolumes)
+	ctx.info("Starting uninstall of %s (CTID %d, keepVolumes=%v)", inst.AppName, inst.CTID, keepVolumeNames)
 
 	bgCtx := context.Background()
 	ctGone := inst.CTID <= 0 // no valid container to destroy (e.g. failed edit)
@@ -772,11 +795,11 @@ func (e *Engine) runUninstall(job *Job, inst *Install, keepVolumes bool) {
 		}
 	}
 
-	// If keeping volumes, detach managed volumes before destroy (bind mounts don't need detaching)
+	// If keeping volumes, detach selected managed volumes before destroy (bind mounts don't need detaching)
 	if !ctGone && keepVolumes && len(inst.MountPoints) > 0 {
 		var managedIndexes []int
 		for _, mp := range inst.MountPoints {
-			if mp.Type == "volume" {
+			if mp.Type == "volume" && keepSet[mp.Name] {
 				managedIndexes = append(managedIndexes, mp.Index)
 			}
 		}
@@ -851,15 +874,30 @@ func (e *Engine) runUninstall(job *Job, inst *Install, keepVolumes bool) {
 		}
 	}
 
+	// Delete bind mount host directories that the user chose to remove
+	if len(deleteBindSet) > 0 {
+		ctx.transition("cleaning_bind_mounts")
+		for _, mp := range inst.MountPoints {
+			if mp.Type == "bind" && deleteBindSet[mp.HostPath] {
+				ctx.info("Deleting bind mount directory: %s (%s)", mp.Name, mp.HostPath)
+				if err := pct.RemoveAll(mp.HostPath); err != nil {
+					ctx.warn("Failed to delete %s: %v", mp.HostPath, err)
+				} else {
+					ctx.info("Deleted %s", mp.HostPath)
+				}
+			}
+		}
+	}
+
 	// Only preserve install record if there are managed volumes worth keeping
-	hasManagedVolumes := false
+	hasKeptManagedVolumes := false
 	for _, mp := range inst.MountPoints {
-		if mp.Type == "volume" {
-			hasManagedVolumes = true
+		if mp.Type == "volume" && keepSet[mp.Name] {
+			hasKeptManagedVolumes = true
 			break
 		}
 	}
-	if keepVolumes && hasManagedVolumes {
+	if hasKeptManagedVolumes {
 		// Preserve install record with "uninstalled" status and volume IDs
 		inst.Status = "uninstalled"
 		inst.CTID = 0
@@ -1091,6 +1129,7 @@ func (e *Engine) Reinstall(installID string, req ReinstallRequest) (*Job, error)
 		Inputs:      req.Inputs,
 		Outputs:     make(map[string]string),
 		MountPoints: inst.MountPoints, // Carry preserved volumes with VolumeIDs
+		CPUPin:      inst.CPUPin,      // Carry CPU pinning forward
 		CreatedAt:   now,
 		UpdatedAt:   now,
 	}
@@ -1165,6 +1204,7 @@ func (e *Engine) runReinstall(job *Job, inst *Install) {
 	inst.DiskGB = ctx.job.DiskGB
 	inst.Outputs = ctx.job.Outputs
 	inst.MountPoints = ctx.job.MountPoints
+	inst.CPUPin = ctx.job.CPUPin
 	inst.AppVersion = app.Version
 	e.store.UpdateInstall(inst)
 
@@ -1232,6 +1272,7 @@ func (e *Engine) Update(installID string, req ReinstallRequest) (*Job, error) {
 		Inputs:      req.Inputs,
 		Outputs:     make(map[string]string),
 		MountPoints: inst.MountPoints, // Carry mount points forward
+		CPUPin:      inst.CPUPin,      // Carry CPU pinning forward
 		CreatedAt:   now,
 		UpdatedAt:   now,
 	}
@@ -1375,6 +1416,7 @@ func (e *Engine) runUpdate(job *Job, inst *Install) {
 	inst.DiskGB = ctx.job.DiskGB
 	inst.Outputs = ctx.job.Outputs
 	inst.MountPoints = ctx.job.MountPoints
+	inst.CPUPin = ctx.job.CPUPin
 	inst.AppVersion = app.Version
 	e.store.UpdateInstall(inst)
 
@@ -1465,6 +1507,7 @@ func (e *Engine) EditInstall(installID string, req EditRequest) (*Job, error) {
 		MountPoints:   inst.MountPoints, // carry mount points forward
 		Devices:       inst.Devices,
 		EnvVars:       inst.EnvVars,
+		CPUPin:        inst.CPUPin, // carry CPU pinning forward
 		CreatedAt:     now,
 		UpdatedAt:     now,
 	}
@@ -1472,6 +1515,10 @@ func (e *Engine) EditInstall(installID string, req EditRequest) (*Job, error) {
 	// If the request includes explicit device list, use it instead of the existing one
 	if req.Devices != nil {
 		job.Devices = *req.Devices
+	}
+	// If the request includes explicit CPU pin, use it instead of the existing one
+	if req.CPUPin != nil {
+		job.CPUPin = *req.CPUPin
 	}
 
 	if err := e.store.CreateJob(job); err != nil {
@@ -1636,6 +1683,7 @@ func (e *Engine) runEdit(job *Job, inst *Install) {
 	inst.MountPoints = ctx.job.MountPoints
 	inst.Devices = ctx.job.Devices
 	inst.EnvVars = ctx.job.EnvVars
+	inst.CPUPin = ctx.job.CPUPin
 	e.store.UpdateInstall(inst)
 
 	ctx.info("Edit complete! %s CT %d recreated with preserved MAC address.", app.Name, ctx.job.CTID)

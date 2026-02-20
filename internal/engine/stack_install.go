@@ -227,6 +227,7 @@ func (e *Engine) StartStack(req StackCreateRequest) (*Job, error) {
 		MountPoints:  mountPoints,
 		Devices:      req.Devices,
 		EnvVars:      req.EnvVars,
+		CPUPin:       req.CPUPin,
 		StackID:      stackID,
 		CreatedAt:    now,
 		UpdatedAt:    now,
@@ -506,6 +507,17 @@ func (e *Engine) runStackInstall(bgCtx context.Context, job *Job, stackID, osTem
 		ctx.info("Applying %d extra LXC config line(s) from manifests...", len(extraConfig))
 		if err := e.cm.AppendLXCConfig(ctid, extraConfig); err != nil {
 			ctx.failJob("applying extra LXC config: %v", err)
+			return
+		}
+	}
+
+	// Apply CPU pinning if specified
+	if job.CPUPin != "" {
+		ctx.info("Applying CPU pinning: cpuset.cpus = %s", job.CPUPin)
+		if err := e.cm.AppendLXCConfig(ctid, []string{
+			fmt.Sprintf("lxc.cgroup2.cpuset.cpus: %s", job.CPUPin),
+		}); err != nil {
+			ctx.failJob("applying CPU pinning: %v", err)
 			return
 		}
 	}
