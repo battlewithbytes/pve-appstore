@@ -67,6 +67,16 @@ var (
 	}
 )
 
+// RemoveAll deletes a path on the real host filesystem, escaping the
+// systemd ProtectSystem=strict mount namespace.
+func RemoveAll(path string) error {
+	cmd := SudoNsenterCmd("/usr/bin/rm", "-rf", path)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("rm -rf %s: %s: %w", path, strings.TrimSpace(string(out)), err)
+	}
+	return nil
+}
+
 // Set runs `pct set <ctid> <args...>` to modify container configuration.
 func Set(ctid int, args ...string) error {
 	cmdArgs := append([]string{"set", strconv.Itoa(ctid)}, args...)

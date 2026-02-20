@@ -14,6 +14,7 @@ export function DirectoryBrowser({ initialPath, onSelect, onClose }: { initialPa
   const [newFolderName, setNewFolderName] = useState('')
   const [showNewFolder, setShowNewFolder] = useState(false)
   const [refreshKey, setRefreshKey] = useState(0)
+  const [initialRedirected, setInitialRedirected] = useState(false)
 
   useEffect(() => {
     api.browseMounts().then(d => {
@@ -23,6 +24,7 @@ export function DirectoryBrowser({ initialPath, onSelect, onClose }: { initialPa
       if (m.length > 0 && !m.some(mt => path === mt.path || path.startsWith(mt.path + '/'))) {
         setPath(m[0].path)
         setManualPath(m[0].path)
+        setInitialRedirected(true)
       }
     }).catch(() => {})
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
@@ -54,8 +56,6 @@ export function DirectoryBrowser({ initialPath, onSelect, onClose }: { initialPa
     }
   }
 
-  const bookmarks = mounts.map(m => ({ label: m.path, path: m.path }))
-
   const pathSegments = path.split('/').filter(Boolean)
 
   return (
@@ -63,17 +63,30 @@ export function DirectoryBrowser({ initialPath, onSelect, onClose }: { initialPa
       <div className="bg-bg-card border border-border rounded-xl p-6 w-full max-w-[500px] max-h-[70vh] flex flex-col" onClick={e => e.stopPropagation()}>
         <h3 className="text-sm font-bold text-text-primary mb-3 font-mono">Browse Host Path</h3>
 
-        {/* Bookmark chips */}
-        <div className="flex gap-1.5 mb-3 flex-wrap">
-          {bookmarks.map(bm => (
-            <button key={bm.path} onClick={() => setPath(bm.path)}
-              className={`px-2.5 py-1 text-[11px] font-mono rounded-md border cursor-pointer transition-colors ${
-                path.startsWith(bm.path) ? 'border-primary text-primary bg-primary/10' : 'border-border text-text-muted bg-bg-secondary hover:border-primary hover:text-primary'
-              }`}>
-              {bm.label}
-            </button>
-          ))}
-        </div>
+        {/* Redirected notice */}
+        {initialRedirected && initialPath && (
+          <div className="mb-2 p-2 bg-status-warning/10 border border-status-warning/30 rounded text-status-warning text-[11px] font-mono">
+            Default path <span className="font-bold">{initialPath}</span> is not on a configured storage. Showing available storage below.
+          </div>
+        )}
+
+        {/* Storage bookmarks with names */}
+        {mounts.length > 0 && (
+          <div className="mb-3">
+            <div className="text-[10px] text-text-muted font-mono uppercase tracking-wider mb-1.5">Storage Locations</div>
+            <div className="flex gap-1.5 flex-wrap">
+              {mounts.map(m => (
+                <button key={m.path} onClick={() => { setPath(m.path); setInitialRedirected(false) }}
+                  className={`px-2.5 py-1.5 text-[11px] font-mono rounded-md border cursor-pointer transition-colors flex items-center gap-1.5 ${
+                    path === m.path || path.startsWith(m.path + '/') ? 'border-primary text-primary bg-primary/10' : 'border-border text-text-muted bg-bg-secondary hover:border-primary hover:text-primary'
+                  }`}>
+                  <span className="font-bold">{m.device}</span>
+                  <span className="text-text-muted">{m.path}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
 
         <div className="flex gap-2 mb-3">
           <input type="text" value={manualPath} onChange={e => setManualPath(e.target.value)}

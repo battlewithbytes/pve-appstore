@@ -26,6 +26,7 @@ const sudoersContent = `# PVE App Store — managed sudoers file
 # tee -a: append raw lxc.* lines to /etc/pve/lxc/*.conf (extra_config)
 # mkdir -p: create directories on host storage pools for bind mounts
 # chown: fix ownership on bind mount paths for unprivileged containers
+# rm -rf: delete bind mount host directories during uninstall (paths validated by engine)
 # All other container lifecycle ops use the Proxmox REST API via API token.
 
 appstore ALL=(root) NOPASSWD: /usr/bin/nsenter --mount=/proc/1/ns/mnt -- /usr/sbin/pct exec *
@@ -34,6 +35,7 @@ appstore ALL=(root) NOPASSWD: /usr/bin/nsenter --mount=/proc/1/ns/mnt -- /usr/sb
 appstore ALL=(root) NOPASSWD: /usr/bin/nsenter --mount=/proc/1/ns/mnt -- /usr/bin/tee -a /etc/pve/lxc/*
 appstore ALL=(root) NOPASSWD: /usr/bin/nsenter --mount=/proc/1/ns/mnt -- /usr/bin/mkdir -p *
 appstore ALL=(root) NOPASSWD: /usr/bin/nsenter --mount=/proc/1/ns/mnt -- /usr/bin/chown *
+appstore ALL=(root) NOPASSWD: /usr/bin/nsenter --mount=/proc/1/ns/mnt -- /usr/bin/rm -rf *
 appstore ALL=(root) NOPASSWD: /usr/bin/nsenter --mount=/proc/1/ns/mnt -- /opt/pve-appstore/update.sh *
 `
 

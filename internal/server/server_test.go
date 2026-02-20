@@ -1127,24 +1127,26 @@ func TestInstallAppWithBindMounts(t *testing.T) {
 
 	// Check that we have both volume and bind mount types
 	hasVolume := false
-	hasBind := false
+	hasMediaBind := false
 	for _, m := range mounts {
 		mp := m.(map[string]interface{})
 		switch mp["type"] {
 		case "volume":
 			hasVolume = true
 		case "bind":
-			hasBind = true
-			if mp["host_path"] != "/mnt/storage/movies" {
-				t.Errorf("bind mount host_path = %v, want /mnt/storage/movies", mp["host_path"])
+			if mp["name"] == "media" {
+				hasMediaBind = true
+				if mp["host_path"] != "/mnt/storage/movies" {
+					t.Errorf("media bind mount host_path = %v, want /mnt/storage/movies", mp["host_path"])
+				}
 			}
 		}
 	}
 	if !hasVolume {
 		t.Error("expected a managed volume mount")
 	}
-	if !hasBind {
-		t.Error("expected a bind mount")
+	if !hasMediaBind {
+		t.Error("expected a media bind mount")
 	}
 }
 

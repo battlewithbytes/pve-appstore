@@ -489,7 +489,7 @@ func cleanupResults(eng *engine.Engine, cm engine.ContainerManager, results []te
 
 			// Try engine uninstall first (handles stop + destroy + DB cleanup)
 			if r.JobID != "" {
-				unJob, err := eng.Uninstall(r.JobID, false)
+				unJob, err := eng.Uninstall(r.JobID, nil, nil)
 				if err == nil {
 					// Wait for uninstall to complete
 					deadline := time.After(5 * time.Minute)

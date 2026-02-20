@@ -19,7 +19,7 @@ type EngineInstallService interface {
 	RestartContainer(id string) error
 	GetInstallDetail(id string) (*engine.InstallDetail, error)
 	GetInstall(id string) (*engine.Install, error)
-	Uninstall(id string, keepVolumes bool) (*engine.Job, error)
+	Uninstall(id string, keepVolumeNames []string, deleteBindPaths []string) (*engine.Job, error)
 	PurgeInstall(id string) error
 	Reinstall(id string, req engine.ReinstallRequest) (*engine.Job, error)
 	Update(id string, req engine.ReinstallRequest) (*engine.Job, error)
@@ -62,8 +62,8 @@ func (s *defaultEngineService) GetInstallDetail(id string) (*engine.InstallDetai
 func (s *defaultEngineService) GetInstall(id string) (*engine.Install, error) {
 	return s.eng.GetInstall(id)
 }
-func (s *defaultEngineService) Uninstall(id string, keepVolumes bool) (*engine.Job, error) {
-	return s.eng.Uninstall(id, keepVolumes)
+func (s *defaultEngineService) Uninstall(id string, keepVolumeNames []string, deleteBindPaths []string) (*engine.Job, error) {
+	return s.eng.Uninstall(id, keepVolumeNames, deleteBindPaths)
 }
 func (s *defaultEngineService) PurgeInstall(id string) error { return s.eng.PurgeInstall(id) }
 func (s *defaultEngineService) Reinstall(id string, req engine.ReinstallRequest) (*engine.Job, error) {

@@ -35,13 +35,17 @@ export function InstallsList({ requireAuth }: { requireAuth: (cb: () => void) =>
     return () => clearInterval(interval)
   }, [fetchInstalls])
 
-  const handleUninstallConfirm = async (keepVolumes: boolean) => {
+  const handleUninstallConfirm = async (keepVolumeNames: string[], deleteBindPaths: string[]) => {
     if (!uninstallTarget) return
     const id = uninstallTarget.id
     setUninstallTarget(null)
     setActionLoading(id)
     try {
-      const job = await api.uninstall(id, keepVolumes)
+      const job = await api.uninstall(
+        id,
+        keepVolumeNames.length > 0 ? keepVolumeNames : undefined,
+        deleteBindPaths.length > 0 ? deleteBindPaths : undefined,
+      )
       window.location.hash = `#/job/${job.id}`
     } catch (e) {
       alert(e instanceof Error ? e.message : 'Uninstall failed')
@@ -347,7 +351,7 @@ export function InstallsList({ requireAuth }: { requireAuth: (cb: () => void) =>
         <UninstallDialog
           appName={uninstallTarget.app_name}
           ctid={uninstallTarget.ctid}
-          mountPoints={(uninstallTarget.mount_points || []).filter(mp => mp.type === 'volume')}
+          mountPoints={uninstallTarget.mount_points || []}
           onConfirm={handleUninstallConfirm}
           onCancel={() => setUninstallTarget(null)}
         />

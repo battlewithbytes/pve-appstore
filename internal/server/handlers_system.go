@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/battlewithbytes/pve-appstore/internal/engine"
 	"github.com/battlewithbytes/pve-appstore/internal/installer"
 	"github.com/battlewithbytes/pve-appstore/internal/updater"
 	"github.com/battlewithbytes/pve-appstore/internal/version"
@@ -144,8 +145,9 @@ func (s *Server) handleListGPUs(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"gpus":         items,
-		"gpu_installs": gpuInstalls,
-		"gpu_stacks":   gpuStacks,
+		"gpus":          items,
+		"gpu_installs":  gpuInstalls,
+		"gpu_stacks":    gpuStacks,
+		"driver_status": engine.DetectDriverStatus(),
 	})
 }

@@ -87,11 +87,14 @@ export const api = {
   restartContainer: (id: string) =>
     fetchJSON<{ status: string; install_id: string }>(`${BASE}/installs/${id}/restart`, { method: 'POST' }),
 
-  uninstall: (id: string, keepVolumes?: boolean) =>
+  uninstall: (id: string, keepVolumeNames?: string[], deleteBindPaths?: string[]) =>
     fetchJSON<Job>(`${BASE}/installs/${id}/uninstall`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ keep_volumes: keepVolumes }),
+      body: JSON.stringify({
+        keep_volumes: keepVolumeNames,
+        delete_binds: deleteBindPaths,
+      }),
     }),
 
   purgeInstall: (id: string) =>
@@ -235,6 +238,9 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(update),
     }),
+
+  catalogRefresh: () => fetchJSON<{ status: string; app_count: number; last_refresh?: string }>(
+    `${BASE}/catalog/refresh`, { method: 'POST' }),
 
   discoverResources: () => fetchJSON<DiscoverResponse>(`${BASE}/settings/discover`),
 

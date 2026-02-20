@@ -152,3 +152,67 @@ func prepareNvidiaLibStaging() (string, error) {
 
 	return stagingDir, nil
 }
+
+// GPUDriverStatus reports the state of GPU kernel drivers and userspace libraries on the host.
+type GPUDriverStatus struct {
+	NvidiaDriverLoaded bool   `json:"nvidia_driver_loaded"`
+	NvidiaVersion      string `json:"nvidia_version,omitempty"`
+	NvidiaLibsFound    bool   `json:"nvidia_libs_found"`
+	IntelDriverLoaded  bool   `json:"intel_driver_loaded"`
+	AmdDriverLoaded    bool   `json:"amd_driver_loaded"`
+}
+
+// DetectDriverStatus checks which GPU kernel modules are loaded and whether
+// NVIDIA userspace libraries are present on the host.
+func DetectDriverStatus() GPUDriverStatus {
+	var s GPUDriverStatus
+
+	// NVIDIA kernel module
+	if _, err := os.Stat("/sys/module/nvidia"); err == nil {
+		s.NvidiaDriverLoaded = true
+		// Read driver version
+		if data, err := os.ReadFile("/sys/module/nvidia/version"); err == nil {
+			s.NvidiaVersion = strings.TrimSpace(string(data))
+		}
+	}
+
+	// NVIDIA userspace libraries
+	if _, err := resolveNvidiaLibPath(); err == nil {
+		s.NvidiaLibsFound = true
+	}
+
+	// Intel: i915 or xe (newer Intel GPUs)
+	if _, err := os.Stat("/sys/module/i915"); err == nil {
+		s.IntelDriverLoaded = true
+	} else if _, err := os.Stat("/sys/module/xe"); err == nil {
+		s.IntelDriverLoaded = true
+	}
+
+	// AMD
+	if _, err := os.Stat("/sys/module/amdgpu"); err == nil {
+		s.AmdDriverLoaded = true
+	}
+
+	return s
+}
+
+// DevicesForGPUType returns the device passthrough config for a discovered GPU
+// based on its type and device path.
+func DevicesForGPUType(gpuType string, devicePath string) []DevicePassthrough {
+	switch gpuType {
+	case "intel", "amd":
+		return []DevicePassthrough{{Path: devicePath, GID: 44, Mode: "0666"}}
+	case "nvidia":
+		devs := []DevicePassthrough{{Path: devicePath}}
+		// Add shared NVIDIA control nodes (deduplicated by caller if multiple GPUs)
+		if devicePath != "/dev/nvidiactl" {
+			devs = append(devs, DevicePassthrough{Path: "/dev/nvidiactl"})
+		}
+		if devicePath != "/dev/nvidia-uvm" {
+			devs = append(devs, DevicePassthrough{Path: "/dev/nvidia-uvm"})
+		}
+		return devs
+	default:
+		return []DevicePassthrough{{Path: devicePath}}
+	}
+}

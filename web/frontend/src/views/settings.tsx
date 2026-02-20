@@ -473,20 +473,7 @@ function SettingsView({ requireAuth, onDevModeChange, onUpdateApplied, onAuthCha
           )}
 
           {activeTab === 'catalog' && (
-            <InfoCard title="Catalog">
-              <div className="flex items-center gap-4">
-                <label className="text-xs text-text-muted font-mono uppercase w-20">Refresh</label>
-                <select
-                  value={settings.catalog.refresh}
-                  onChange={(e) => save({ catalog: { refresh: e.target.value } })}
-                  className="bg-bg-primary border border-border rounded px-3 py-1.5 text-sm font-mono text-text-primary"
-                >
-                  <option value="daily">Daily</option>
-                  <option value="weekly">Weekly</option>
-                  <option value="manual">Manual</option>
-                </select>
-              </div>
-            </InfoCard>
+            <CatalogTab settings={settings} saving={saving} save={save} requireAuth={requireAuth} setSettings={setSettings} />
           )}
 
           {activeTab === 'gpu' && (
@@ -584,6 +571,46 @@ function SettingsView({ requireAuth, onDevModeChange, onUpdateApplied, onAuthCha
                         ))}
                       </tbody>
                     </table>
+                  </div>
+                )}
+              </InfoCard>
+
+              <InfoCard title="Driver Status">
+                {!gpuData ? (
+                  <p className="text-sm text-text-muted font-mono">Loading...</p>
+                ) : (
+                  <div className="space-y-2">
+                    <div className="flex items-center gap-3">
+                      <span className="text-xs font-mono text-text-muted uppercase w-16">NVIDIA</span>
+                      {gpuData.driver_status.nvidia_driver_loaded ? (
+                        <span className="text-sm font-mono text-green-400">Driver loaded{gpuData.driver_status.nvidia_version ? ` (v${gpuData.driver_status.nvidia_version})` : ''}</span>
+                      ) : (
+                        <span className="text-sm font-mono text-text-muted">Not loaded</span>
+                      )}
+                      {gpuData.driver_status.nvidia_driver_loaded && (
+                        gpuData.driver_status.nvidia_libs_found ? (
+                          <span className="text-xs font-mono text-green-400/70">libs found</span>
+                        ) : (
+                          <span className="text-xs font-mono text-status-warning">libs missing</span>
+                        )
+                      )}
+                    </div>
+                    <div className="flex items-center gap-3">
+                      <span className="text-xs font-mono text-text-muted uppercase w-16">Intel</span>
+                      {gpuData.driver_status.intel_driver_loaded ? (
+                        <span className="text-sm font-mono text-green-400">i915/xe module loaded</span>
+                      ) : (
+                        <span className="text-sm font-mono text-text-muted">Not loaded</span>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-3">
+                      <span className="text-xs font-mono text-text-muted uppercase w-16">AMD</span>
+                      {gpuData.driver_status.amd_driver_loaded ? (
+                        <span className="text-sm font-mono text-green-400">amdgpu module loaded</span>
+                      ) : (
+                        <span className="text-sm font-mono text-text-muted">Not loaded</span>
+                      )}
+                    </div>
                   </div>
                 )}
               </InfoCard>
@@ -822,6 +849,113 @@ function SettingsView({ requireAuth, onDevModeChange, onUpdateApplied, onAuthCha
         </div>
       </div>
     </div>
+  )
+}
+
+function timeAgo(dateStr: string): string {
+  const seconds = Math.floor((Date.now() - new Date(dateStr).getTime()) / 1000)
+  if (seconds < 60) return 'just now'
+  const minutes = Math.floor(seconds / 60)
+  if (minutes < 60) return `${minutes}m ago`
+  const hours = Math.floor(minutes / 60)
+  if (hours < 24) return `${hours}h ago`
+  const days = Math.floor(hours / 24)
+  return `${days}d ago`
+}
+
+function CatalogTab({ settings, saving, save, requireAuth, setSettings }: {
+  settings: Settings
+  saving: boolean
+  save: (update: SettingsUpdate) => void
+  requireAuth: (cb: () => void) => void
+  setSettings: (s: Settings) => void
+}) {
+  const [refreshing, setRefreshing] = useState(false)
+  const [refreshMsg, setRefreshMsg] = useState('')
+
+  const doRefresh = () => {
+    requireAuth(async () => {
+      setRefreshing(true)
+      setRefreshMsg('')
+      try {
+        await api.catalogRefresh()
+        // Re-fetch settings to get updated counts/timestamp
+        const updated = await api.settings()
+        setSettings(updated)
+        setRefreshMsg('Catalog refreshed')
+        setTimeout(() => setRefreshMsg(''), 3000)
+      } catch (e: unknown) {
+        setRefreshMsg(`Error: ${e instanceof Error ? e.message : 'unknown'}`)
+      }
+      setRefreshing(false)
+    })
+  }
+
+  return (
+    <>
+      <InfoCard title="Repository">
+        <div className="space-y-2">
+          <div className="flex items-center gap-3">
+            <span className="text-xs text-text-muted font-mono uppercase w-20 shrink-0">URL</span>
+            <span className="text-sm font-mono text-text-secondary truncate" title={settings.catalog.url}>{settings.catalog.url || '—'}</span>
+          </div>
+          <div className="flex items-center gap-3">
+            <span className="text-xs text-text-muted font-mono uppercase w-20 shrink-0">Branch</span>
+            <span className="inline-block text-xs font-mono font-bold text-bg-primary bg-primary rounded-full px-2.5 py-0.5">{settings.catalog.branch || '—'}</span>
+          </div>
+        </div>
+      </InfoCard>
+
+      <InfoCard title="Catalog Status">
+        <div className="space-y-4">
+          <div className="flex items-center gap-6">
+            <div>
+              <span className="text-xs text-text-muted font-mono uppercase block">Apps</span>
+              <span className="text-lg font-mono font-bold text-text-primary">{settings.catalog.app_count}</span>
+            </div>
+            <div>
+              <span className="text-xs text-text-muted font-mono uppercase block">Stacks</span>
+              <span className="text-lg font-mono font-bold text-text-primary">{settings.catalog.stack_count}</span>
+            </div>
+            <div>
+              <span className="text-xs text-text-muted font-mono uppercase block">Last Refreshed</span>
+              <span
+                className="text-sm font-mono text-text-primary"
+                title={settings.catalog.last_refresh ? new Date(settings.catalog.last_refresh).toLocaleString() : undefined}
+              >
+                {settings.catalog.last_refresh ? timeAgo(settings.catalog.last_refresh) : 'Never'}
+              </span>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-4">
+            <label className="text-xs text-text-muted font-mono uppercase w-24 shrink-0">Auto-refresh</label>
+            <select
+              value={settings.catalog.refresh}
+              onChange={(e) => save({ catalog: { refresh: e.target.value } })}
+              disabled={saving}
+              className="bg-bg-primary border border-border rounded px-3 py-1.5 text-sm font-mono text-text-primary"
+            >
+              <option value="daily">Daily</option>
+              <option value="weekly">Weekly</option>
+              <option value="manual">Manual</option>
+            </select>
+          </div>
+
+          {refreshMsg && (
+            <p className={`text-sm font-mono ${refreshMsg.startsWith('Error') ? 'text-red-400' : 'text-primary'}`}>{refreshMsg}</p>
+          )}
+
+          <button
+            onClick={doRefresh}
+            disabled={refreshing}
+            className="bg-primary text-bg-primary rounded px-4 py-1.5 text-xs font-mono font-bold cursor-pointer hover:opacity-90 disabled:opacity-50"
+          >
+            {refreshing ? 'Refreshing...' : 'Refresh Now'}
+          </button>
+        </div>
+      </InfoCard>
+    </>
   )
 }
 

@@ -248,6 +248,9 @@ func (s catalogSvcStub) Refresh() error {
 }
 
 func (s catalogSvcStub) LastRefresh() time.Time { return time.Time{} }
+func (s catalogSvcStub) StackCount() int        { return 0 }
+func (s catalogSvcStub) RepoURL() string        { return "https://example.com/catalog.git" }
+func (s catalogSvcStub) Branch() string          { return "main" }
 
 func (s catalogSvcStub) MergeDevApp(app *catalog.AppManifest) {
 	if s.mergeDevAppFn != nil {
@@ -467,7 +470,7 @@ type engineSvcStub struct {
 	startContainerFn     func(id string) error
 	stopContainerFn      func(id string) error
 	restartContainerFn   func(id string) error
-	uninstallFn          func(id string, keepVolumes bool) (*engine.Job, error)
+	uninstallFn          func(id string, keepVolumeNames []string, deleteBindPaths []string) (*engine.Job, error)
 	purgeInstallFn       func(id string) error
 	getInstallFn         func(id string) (*engine.Install, error)
 	getInstallDetailFn   func(id string) (*engine.InstallDetail, error)
@@ -601,9 +604,9 @@ func (s engineSvcStub) RestartContainer(id string) error {
 	return nil
 }
 
-func (s engineSvcStub) Uninstall(id string, keepVolumes bool) (*engine.Job, error) {
+func (s engineSvcStub) Uninstall(id string, keepVolumeNames []string, deleteBindPaths []string) (*engine.Job, error) {
 	if s.uninstallFn != nil {
-		return s.uninstallFn(id, keepVolumes)
+		return s.uninstallFn(id, keepVolumeNames, deleteBindPaths)
 	}
 	return nil, fmt.Errorf("not found")
 }

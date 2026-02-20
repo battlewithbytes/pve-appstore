@@ -48,7 +48,12 @@ type settingsAuth struct {
 }
 
 type settingsCatalog struct {
-	Refresh string `json:"refresh"`
+	Refresh    string `json:"refresh"`
+	URL        string `json:"url"`
+	Branch     string `json:"branch"`
+	AppCount   int    `json:"app_count"`
+	StackCount int    `json:"stack_count"`
+	LastRefresh string `json:"last_refresh,omitempty"`
 }
 
 type settingsGPU struct {
@@ -76,10 +81,25 @@ func (s *Server) handleGetSettings(w http.ResponseWriter, r *http.Request) {
 		},
 		Service:   settingsService{Port: s.cfg.Service.Port},
 		Auth:      settingsAuth{Mode: s.cfg.Auth.Mode},
-		Catalog:   settingsCatalog{Refresh: s.cfg.Catalog.Refresh},
+		Catalog:   s.buildCatalogSettings(),
 		GPU:       settingsGPU{Enabled: s.cfg.GPU.Enabled, Policy: s.cfg.GPU.Policy, AllowedDevices: s.cfg.GPU.AllowedDevices},
 	}
 	writeJSON(w, http.StatusOK, resp)
+}
+
+func (s *Server) buildCatalogSettings() settingsCatalog {
+	sc := settingsCatalog{Refresh: s.cfg.Catalog.Refresh}
+	if s.catalogSvc != nil {
+		sc.URL = s.catalogSvc.RepoURL()
+		sc.Branch = s.catalogSvc.Branch()
+		sc.AppCount = s.catalogSvc.AppCount()
+		sc.StackCount = s.catalogSvc.StackCount()
+		lr := s.catalogSvc.LastRefresh()
+		if !lr.IsZero() {
+			sc.LastRefresh = lr.Format(time.RFC3339)
+		}
+	}
+	return sc
 }
 
 func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {

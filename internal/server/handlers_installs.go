@@ -255,26 +255,35 @@ func (s *Server) handleUninstall(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Parse optional keep_volumes from body (defaults to true if app has volumes)
-	var req struct {
-		KeepVolumes *bool `json:"keep_volumes"`
+	// Parse keep_volumes and delete_binds from body
+	// keep_volumes: string[] (volume names) or bool (legacy)
+	// delete_binds: string[] (host paths of bind mounts to delete)
+	var rawReq struct {
+		KeepVolumes json.RawMessage `json:"keep_volumes"`
+		DeleteBinds []string        `json:"delete_binds"`
 	}
 	if r.Body != nil && r.ContentLength > 0 {
-		json.NewDecoder(r.Body).Decode(&req)
+		json.NewDecoder(r.Body).Decode(&rawReq)
 	}
 
-	keepVolumes := false
-	if req.KeepVolumes != nil {
-		keepVolumes = *req.KeepVolumes
-	} else {
-		// Default: keep volumes if the install has mount points
-		inst, err := s.engineInstallSvc.GetInstall(installID)
-		if err == nil && len(inst.MountPoints) > 0 {
-			keepVolumes = true
+	var keepVolumeNames []string
+	if len(rawReq.KeepVolumes) > 0 {
+		// Try as string array first
+		if err := json.Unmarshal(rawReq.KeepVolumes, &keepVolumeNames); err != nil {
+			// Fall back to boolean (legacy)
+			var keepAll bool
+			if err := json.Unmarshal(rawReq.KeepVolumes, &keepAll); err == nil && keepAll {
+				// true = keep all volumes
+				if inst, err := s.engineInstallSvc.GetInstall(installID); err == nil {
+					for _, mp := range inst.MountPoints {
+						keepVolumeNames = append(keepVolumeNames, mp.Name)
+					}
+				}
+			}
 		}
 	}
 
-	job, err := s.engineInstallSvc.Uninstall(installID, keepVolumes)
+	job, err := s.engineInstallSvc.Uninstall(installID, keepVolumeNames, rawReq.DeleteBinds)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return

@@ -194,6 +194,19 @@ func (c *Catalog) AppCount() int {
 	return len(c.apps)
 }
 
+// StackCount returns the number of loaded stacks.
+func (c *Catalog) StackCount() int {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return len(c.stacks)
+}
+
+// RepoURL returns the configured repository URL.
+func (c *Catalog) RepoURL() string { return c.repoURL }
+
+// Branch returns the configured branch name.
+func (c *Catalog) Branch() string { return c.branch }
+
 // LastRefresh returns the time of the most recent successful refresh or load.
 func (c *Catalog) LastRefresh() time.Time {
 	c.mu.RLock()

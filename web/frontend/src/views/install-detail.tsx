@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { api } from '../api'
-import type { InstallDetail, AppDetail, MountPoint, EditRequest, ReconfigureRequest, ConfigDefaultsResponse, DevicePassthrough } from '../types'
+import type { InstallDetail, AppDetail, MountPoint, EditRequest, ReconfigureRequest, ConfigDefaultsResponse, DevicePassthrough, GPUInfo, GPUDriverStatus } from '../types'
 import { Center, BackLink, Badge, StatusDot, ResourceCard, InfoCard, InfoRow } from '../components/ui'
 import { formatUptime, formatBytes, formatBytesShort } from '../lib/format'
 import { TerminalModal } from '../components/terminal'
@@ -34,13 +34,17 @@ export function InstallDetailView({ id, requireAuth }: { id: string; requireAuth
     return () => clearInterval(interval)
   }, [fetchDetail, detail?.status])
 
-  const handleUninstall = (keepVolumes: boolean) => {
+  const handleUninstall = (keepVolumeNames: string[], deleteBindPaths: string[]) => {
     requireAuth(async () => {
       if (!detail) return
       setUninstalling(true)
       setShowUninstallDialog(false)
       try {
-        const j = await api.uninstall(detail.id, keepVolumes)
+        const j = await api.uninstall(
+          detail.id,
+          keepVolumeNames.length > 0 ? keepVolumeNames : undefined,
+          deleteBindPaths.length > 0 ? deleteBindPaths : undefined,
+        )
         window.location.hash = `#/job/${j.id}`
       } catch (e: unknown) {
         alert(e instanceof Error ? e.message : 'Uninstall failed')
@@ -185,7 +189,7 @@ export function InstallDetailView({ id, requireAuth }: { id: string; requireAuth
             </button>
           )}
           {!isUninstalled && (
-            <button onClick={() => hasVolumes ? setShowUninstallDialog(true) : handleUninstall(false)} disabled={uninstalling} className="px-4 py-2 text-sm font-mono border border-status-stopped/30 rounded-lg cursor-pointer text-status-stopped bg-status-stopped/10 hover:bg-status-stopped/20 transition-colors disabled:opacity-50">
+            <button onClick={() => hasVolumes ? setShowUninstallDialog(true) : handleUninstall([], [])} disabled={uninstalling} className="px-4 py-2 text-sm font-mono border border-status-stopped/30 rounded-lg cursor-pointer text-status-stopped bg-status-stopped/10 hover:bg-status-stopped/20 transition-colors disabled:opacity-50">
               {uninstalling ? 'Removing...' : 'Uninstall'}
             </button>
           )}
@@ -326,37 +330,66 @@ export function InstallDetailView({ id, requireAuth }: { id: string; requireAuth
 
 export function UninstallDialog({ appName, ctid, mountPoints, onConfirm, onCancel }: {
   appName: string; ctid: number; mountPoints: MountPoint[];
-  onConfirm: (keepVolumes: boolean) => void; onCancel: () => void;
+  onConfirm: (keepVolumeNames: string[], deleteBindPaths: string[]) => void; onCancel: () => void;
 }) {
   useEscapeKey(onCancel)
-  const [keepVolumes, setKeepVolumes] = useState(true)
+  const volumes = mountPoints.filter(mp => mp.type === 'volume' || !mp.type)
+  const binds = mountPoints.filter(mp => mp.type === 'bind')
+  const [kept, setKept] = useState<Set<string>>(() => new Set(volumes.map(v => v.name)))
+  const [deleteBinds, setDeleteBinds] = useState<Set<string>>(new Set())
+
+  const allKept = volumes.length > 0 && kept.size === volumes.length
+  const noneKept = volumes.length === 0 || kept.size === 0
+
+  const toggleAll = () => {
+    if (allKept) setKept(new Set())
+    else setKept(new Set(volumes.map(v => v.name)))
+  }
+
+  const toggle = (name: string) => {
+    const next = new Set(kept)
+    if (next.has(name)) next.delete(name); else next.add(name)
+    setKept(next)
+  }
+
+  const toggleBind = (hostPath: string) => {
+    const next = new Set(deleteBinds)
+    if (next.has(hostPath)) next.delete(hostPath); else next.add(hostPath)
+    setDeleteBinds(next)
+  }
 
   return (
     <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-[100]">
-      <div className="bg-bg-card border border-border rounded-xl p-8 w-full max-w-[480px]">
+      <div className="bg-bg-card border border-border rounded-xl p-8 w-full max-w-[480px] max-h-[80vh] overflow-y-auto">
         <h2 className="text-lg font-bold text-text-primary mb-2 font-mono">Uninstall {appName}</h2>
         <p className="text-sm text-text-secondary mb-4">This will destroy container CT {ctid}.</p>
 
-        {mountPoints.length > 0 && (
+        {volumes.length > 0 && (
           <div className="mb-4">
-            <label className="flex items-center gap-3 cursor-pointer p-3 bg-bg-secondary rounded-lg">
-              <input type="checkbox" checked={keepVolumes} onChange={e => setKeepVolumes(e.target.checked)} className="w-4 h-4 accent-primary" />
+            <label className="flex items-center gap-3 cursor-pointer p-3 bg-bg-secondary rounded-lg mb-2">
+              <input type="checkbox" checked={allKept} ref={el => { if (el) el.indeterminate = !allKept && !noneKept }} onChange={toggleAll} className="w-4 h-4 accent-primary" />
               <div>
-                <span className="text-sm text-text-primary font-medium">Keep data volumes</span>
-                <p className="text-xs text-text-muted mt-0.5">Preserve {mountPoints.length} volume(s) for future reinstall</p>
+                <span className="text-sm text-text-primary font-medium">Keep managed volumes</span>
+                <p className="text-xs text-text-muted mt-0.5">
+                  {allKept ? `All ${volumes.length} volume(s) preserved` : noneKept ? 'All volumes will be destroyed' : `${kept.size} of ${volumes.length} volume(s) preserved`}
+                </p>
               </div>
             </label>
 
-            <div className="mt-3 space-y-1">
-              {mountPoints.map(mp => (
-                <div key={mp.index} className={`flex justify-between text-xs font-mono px-3 py-1.5 rounded ${keepVolumes ? 'bg-primary/10 text-primary' : 'bg-status-stopped/10 text-status-stopped'}`}>
-                  <span>{mp.name} ({mp.mount_path})</span>
-                  <span>{keepVolumes ? 'preserved' : 'destroyed'}</span>
-                </div>
-              ))}
+            <div className="space-y-1">
+              {volumes.map(mp => {
+                const isKept = kept.has(mp.name)
+                return (
+                  <label key={mp.index} className={`flex items-center gap-2.5 text-xs font-mono px-3 py-2 rounded cursor-pointer transition-colors ${isKept ? 'bg-primary/10 text-primary hover:bg-primary/15' : 'bg-status-stopped/10 text-status-stopped hover:bg-status-stopped/15'}`}>
+                    <input type="checkbox" checked={isKept} onChange={() => toggle(mp.name)} className="w-3.5 h-3.5 accent-primary" />
+                    <span className="flex-1">{mp.name} <span className="text-text-muted">({mp.mount_path})</span></span>
+                    <span className="text-[10px] uppercase font-bold">{isKept ? 'keep' : 'destroy'}</span>
+                  </label>
+                )
+              })}
             </div>
 
-            {!keepVolumes && (
+            {noneKept && volumes.length > 0 && (
               <div className="mt-3 p-2.5 bg-status-stopped/10 border border-status-stopped/30 rounded text-status-stopped text-xs font-mono">
                 Warning: This will permanently delete all data in these volumes.
               </div>
@@ -364,9 +397,37 @@ export function UninstallDialog({ appName, ctid, mountPoints, onConfirm, onCance
           </div>
         )}
 
+        {binds.length > 0 && (
+          <div className="mb-4">
+            <h3 className="text-xs font-semibold text-text-muted mb-2 uppercase tracking-wider font-mono">Bind Mounts (host directories)</h3>
+            <p className="text-xs text-text-muted mb-2">These directories live on the host filesystem. By default they are kept.</p>
+            <div className="space-y-1">
+              {binds.map(mp => {
+                const willDelete = deleteBinds.has(mp.host_path || '')
+                return (
+                  <label key={mp.index} className={`flex items-center gap-2.5 text-xs font-mono px-3 py-2 rounded cursor-pointer transition-colors ${willDelete ? 'bg-status-stopped/10 text-status-stopped hover:bg-status-stopped/15' : 'bg-bg-secondary text-text-secondary hover:bg-bg-secondary/80'}`}>
+                    <input type="checkbox" checked={willDelete} onChange={() => toggleBind(mp.host_path || '')} className="w-3.5 h-3.5 accent-[#ef4444]" />
+                    <div className="flex-1 min-w-0">
+                      <div>{mp.name} <span className="text-text-muted">({mp.mount_path})</span></div>
+                      <div className="text-text-muted truncate">{mp.host_path}</div>
+                    </div>
+                    <span className={`text-[10px] uppercase font-bold shrink-0 ${willDelete ? 'text-status-stopped' : 'text-text-muted'}`}>{willDelete ? 'delete' : 'keep'}</span>
+                  </label>
+                )
+              })}
+            </div>
+
+            {deleteBinds.size > 0 && (
+              <div className="mt-3 p-2.5 bg-status-stopped/10 border border-status-stopped/30 rounded text-status-stopped text-xs font-mono">
+                Warning: {deleteBinds.size} host director{deleteBinds.size === 1 ? 'y' : 'ies'} will be permanently deleted (rm -rf).
+              </div>
+            )}
+          </div>
+        )}
+
         <div className="flex gap-3 justify-end">
           <button onClick={onCancel} className="px-5 py-2.5 text-sm font-semibold border border-border rounded-lg cursor-pointer text-text-secondary bg-transparent hover:border-text-secondary transition-colors font-mono">Cancel</button>
-          <button onClick={() => onConfirm(keepVolumes)} className="px-5 py-2.5 text-sm font-semibold border-none rounded-lg cursor-pointer bg-status-stopped text-white hover:opacity-90 transition-all font-mono">
+          <button onClick={() => onConfirm(Array.from(kept), Array.from(deleteBinds))} className="px-5 py-2.5 text-sm font-semibold border-none rounded-lg cursor-pointer bg-status-stopped text-white hover:opacity-90 transition-all font-mono">
             Uninstall
           </button>
         </div>
@@ -423,15 +484,28 @@ export function ConfigureDialog({ detail, appInfo, isRunning, onConfirm, onCance
   const [inputs, setInputs] = useState<Record<string, string>>({ ...(detail.inputs || {}) })
   const [devices, setDevices] = useState<DevicePassthrough[]>(detail.devices || [])
   const [configDefaults, setConfigDefaults] = useState<ConfigDefaultsResponse | null>(null)
+  const [availableGPUs, setAvailableGPUs] = useState<GPUInfo[]>([])
+  const [driverStatus, setDriverStatus] = useState<GPUDriverStatus | null>(null)
+  const [selectedGPUs, setSelectedGPUs] = useState<Set<string>>(new Set(
+    (detail.devices || []).map(d => d.path).filter(p => !p.includes('nvidiactl') && !p.includes('nvidia-uvm'))
+  ))
 
   useEffect(() => {
     api.configDefaults().then(setConfigDefaults).catch(() => {})
   }, [])
 
+  const hasGPUSection = !!(appInfo?.gpu && (appInfo.gpu.required !== undefined || appInfo.gpu.supported?.length || appInfo.gpu.profiles?.length || appInfo.gpu.notes))
+  useEffect(() => {
+    if (hasGPUSection) {
+      api.listGPUs().then(data => {
+        setAvailableGPUs(data.gpus)
+        setDriverStatus(data.driver_status)
+      }).catch(() => {})
+    }
+  }, [hasGPUSection])
+
   const bridgeOptions = configDefaults?.bridges || [detail.bridge]
   const appInputs = appInfo?.inputs || []
-  const gpuSupported = appInfo?.gpu?.supported && appInfo.gpu.supported.length > 0
-  const gpuProfiles = appInfo?.gpu?.profiles || []
   const origDevices = detail.devices || []
 
   // Detect which fields changed
@@ -583,45 +657,81 @@ export function ConfigureDialog({ detail, appInfo, isRunning, onConfirm, onCance
           </div>
         )}
 
-        {/* GPU / Device Passthrough */}
-        {gpuSupported && (
+        {/* GPU / Device Passthrough — detected GPUs */}
+        {hasGPUSection && (
           <div className="mb-4">
             <h3 className="text-xs font-semibold text-text-muted mb-2 uppercase tracking-wider font-mono">GPU Passthrough</h3>
-            {gpuProfiles.length > 0 && (
-              <div className="text-xs text-text-muted mb-2 font-mono">Profiles: {gpuProfiles.join(', ')}</div>
+            {appInfo?.gpu?.notes && <div className="text-xs text-text-muted mb-2 font-mono border-l-2 border-primary/30 pl-2">{appInfo.gpu.notes}</div>}
+            {/* Driver warnings */}
+            {driverStatus && availableGPUs.some(g => g.type === 'nvidia') && !driverStatus.nvidia_driver_loaded && (
+              <div className="mb-2 p-2 bg-status-stopped/10 border border-status-stopped/30 rounded text-status-stopped text-xs font-mono">
+                NVIDIA kernel driver not loaded. Install nvidia-driver on the host.
+              </div>
             )}
-            <label className="flex items-center gap-2 text-xs text-text-muted cursor-pointer mb-2">
-              <input type="checkbox" checked={devices.length > 0}
-                onChange={e => {
-                  if (e.target.checked) {
-                    const profileDevs: DevicePassthrough[] = []
-                    for (const profile of gpuProfiles) {
-                      if (profile === 'dri-render') profileDevs.push({ path: '/dev/dri/renderD128', gid: 44, mode: '0666' })
-                      else if (profile === 'nvidia-basic') {
-                        profileDevs.push({ path: '/dev/nvidia0' }, { path: '/dev/nvidiactl' }, { path: '/dev/nvidia-uvm' })
-                      }
-                    }
-                    setDevices(profileDevs.length > 0 ? profileDevs : [{ path: '' }])
-                  } else setDevices([])
-                }}
-                className="w-3.5 h-3.5 accent-primary" />
-              Enable GPU/device passthrough
-              {devicesChanged && <span className="ml-2 text-status-warning text-[10px]">(requires rebuild)</span>}
-            </label>
+            {driverStatus && availableGPUs.some(g => g.type === 'nvidia') && driverStatus.nvidia_driver_loaded && !driverStatus.nvidia_libs_found && (
+              <div className="mb-2 p-2 bg-status-warning/10 border border-status-warning/30 rounded text-status-warning text-xs font-mono">
+                NVIDIA userspace libraries not found on host.
+              </div>
+            )}
+            {devicesChanged && <div className="text-status-warning text-[10px] font-mono mb-2">(device changes require rebuild)</div>}
+            {availableGPUs.length > 0 ? (
+              <div className="space-y-1.5 mb-2">
+                {availableGPUs.map(gpu => {
+                  const checked = selectedGPUs.has(gpu.path)
+                  return (
+                    <label key={gpu.path} className="flex items-center gap-2 text-xs text-text-primary cursor-pointer group">
+                      <input type="checkbox" checked={checked}
+                        onChange={() => {
+                          const next = new Set(selectedGPUs)
+                          if (checked) next.delete(gpu.path); else next.add(gpu.path)
+                          setSelectedGPUs(next)
+                          const devs: DevicePassthrough[] = []
+                          const seen = new Set<string>()
+                          for (const path of next) {
+                            const g = availableGPUs.find(x => x.path === path)
+                            if (!g) continue
+                            if (g.type === 'intel' || g.type === 'amd') {
+                              if (!seen.has(path)) { devs.push({ path, gid: 44, mode: '0666' }); seen.add(path) }
+                            } else if (g.type === 'nvidia') {
+                              if (!seen.has(path)) { devs.push({ path }); seen.add(path) }
+                              if (!seen.has('/dev/nvidiactl')) { devs.push({ path: '/dev/nvidiactl' }); seen.add('/dev/nvidiactl') }
+                              if (!seen.has('/dev/nvidia-uvm')) { devs.push({ path: '/dev/nvidia-uvm' }); seen.add('/dev/nvidia-uvm') }
+                            } else {
+                              if (!seen.has(path)) { devs.push({ path }); seen.add(path) }
+                            }
+                          }
+                          setDevices(devs)
+                        }}
+                        className="w-3.5 h-3.5 accent-primary" />
+                      <span className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-bold uppercase ${
+                        gpu.type === 'nvidia' ? 'bg-green-500/20 text-green-400' :
+                        gpu.type === 'intel' ? 'bg-blue-500/20 text-blue-400' :
+                        gpu.type === 'amd' ? 'bg-red-500/20 text-red-400' :
+                        'bg-gray-500/20 text-gray-400'
+                      }`}>{gpu.type}</span>
+                      <span className="font-mono group-hover:text-primary transition-colors">{gpu.name}</span>
+                      <span className="text-text-muted font-mono">({gpu.path})</span>
+                    </label>
+                  )
+                })}
+              </div>
+            ) : (
+              <p className="text-xs text-text-muted mb-2">No GPUs detected. You can add custom device paths below.</p>
+            )}
             {devices.map((dev, i) => (
               <div key={i} className="flex gap-2 mb-1.5 items-center">
                 <input type="text" value={dev.path} onChange={e => setDevices(p => p.map((x, j) => j === i ? { ...x, path: e.target.value } : x))} placeholder="/dev/dri/renderD128"
-                  className="flex-1 px-3 py-2 bg-bg-secondary border border-border rounded-md text-text-primary text-sm outline-none focus:border-primary font-mono placeholder:text-text-muted" />
-                <button type="button" onClick={() => setDevices(p => p.filter((_, j) => j !== i))}
-                  className="text-status-stopped text-sm bg-transparent border-none cursor-pointer hover:text-status-stopped/80 leading-none px-1">&times;</button>
+                  className="flex-1 px-3 py-2 bg-bg-secondary border border-border rounded-md text-text-primary text-sm outline-none focus:border-primary font-mono placeholder:text-text-muted" readOnly={availableGPUs.some(g => g.path === dev.path || dev.path === '/dev/nvidiactl' || dev.path === '/dev/nvidia-uvm')} />
+                {!availableGPUs.some(g => g.path === dev.path) && dev.path !== '/dev/nvidiactl' && dev.path !== '/dev/nvidia-uvm' && (
+                  <button type="button" onClick={() => setDevices(p => p.filter((_, j) => j !== i))}
+                    className="text-status-stopped text-sm bg-transparent border-none cursor-pointer hover:text-status-stopped/80 leading-none px-1">&times;</button>
+                )}
               </div>
             ))}
-            {devices.length > 0 && (
-              <button type="button" onClick={() => setDevices(p => [...p, { path: '' }])}
-                className="text-primary text-xs font-mono bg-transparent border-none cursor-pointer hover:underline p-0">
-                + Add Device
-              </button>
-            )}
+            <button type="button" onClick={() => setDevices(p => [...p, { path: '' }])}
+              className="text-primary text-xs font-mono bg-transparent border-none cursor-pointer hover:underline p-0">
+              + Add Device
+            </button>
           </div>
         )}
 

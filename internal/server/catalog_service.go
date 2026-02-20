@@ -9,6 +9,9 @@ import (
 // CatalogService isolates catalog access from HTTP handlers.
 type CatalogService interface {
 	AppCount() int
+	StackCount() int
+	RepoURL() string
+	Branch() string
 	ListApps() []*catalog.AppManifest
 	SearchApps(query string) []*catalog.AppManifest
 	GetApp(id string) (*catalog.AppManifest, bool)
@@ -35,7 +38,10 @@ func NewCatalogService(cat *catalog.Catalog) CatalogService {
 	return &defaultCatalogService{cat: cat}
 }
 
-func (s *defaultCatalogService) AppCount() int { return s.cat.AppCount() }
+func (s *defaultCatalogService) AppCount() int    { return s.cat.AppCount() }
+func (s *defaultCatalogService) StackCount() int  { return s.cat.StackCount() }
+func (s *defaultCatalogService) RepoURL() string  { return s.cat.RepoURL() }
+func (s *defaultCatalogService) Branch() string   { return s.cat.Branch() }
 func (s *defaultCatalogService) ListApps() []*catalog.AppManifest {
 	return s.cat.List()
 }
