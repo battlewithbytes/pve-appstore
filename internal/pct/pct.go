@@ -1,11 +1,16 @@
 // Package pct provides safe wrappers for Proxmox pct commands that have
 // no REST API equivalent: exec, push, and IP discovery.
 // All commands use exec.Command with explicit argv — no shell strings.
+//
+// When the helper daemon is available (Helper != nil), operations are
+// delegated to it over a Unix socket. Otherwise, the legacy sudo/nsenter
+// path is used as a fallback.
 package pct
 
 import (
 	"bufio"
 	"fmt"
+	"net"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -20,6 +25,24 @@ const (
 // (pct) see the real host filesystem instead of the
 // ProtectSystem=strict read-only overlay applied by systemd.
 var nsenterArgs = []string{"--mount=/proc/1/ns/mnt", "--"}
+
+// HelperClient abstracts the helper daemon for privileged operations.
+// When set, all pct functions delegate to it instead of using sudo.
+type HelperClient interface {
+	PctExec(ctid int, command []string) (output string, exitCode int, err error)
+	PctExecStream(ctid int, command []string, onLine func(string)) (output string, exitCode int, err error)
+	PctPush(ctid int, src, dst, perms string) error
+	PctSet(ctid int, option, value string) error
+	AppendConf(ctid int, lines []string) error
+	RemoveAll(path string) error
+	Mkdir(path string) error
+	Chown(path string, uid, gid int, recursive bool) error
+	StartTerminal(ctid int, shell string) (net.Conn, error)
+	ApplyUpdate() error
+}
+
+// Helper is the global helper client, set at startup if the helper socket exists.
+var Helper HelperClient
 
 // SudoNsenterCmd builds an exec.Cmd that runs:
 //
@@ -67,9 +90,12 @@ var (
 	}
 )
 
-// RemoveAll deletes a path on the real host filesystem, escaping the
-// systemd ProtectSystem=strict mount namespace.
+// RemoveAll deletes a path on the real host filesystem.
+// Uses the helper daemon when available, otherwise falls back to sudo.
 func RemoveAll(path string) error {
+	if Helper != nil {
+		return Helper.RemoveAll(path)
+	}
 	cmd := SudoNsenterCmd("/usr/bin/rm", "-rf", path)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("rm -rf %s: %s: %w", path, strings.TrimSpace(string(out)), err)
@@ -77,8 +103,44 @@ func RemoveAll(path string) error {
 	return nil
 }
 
+// Mkdir creates a directory on the real host filesystem.
+// Uses the helper daemon when available, otherwise falls back to sudo.
+func Mkdir(path string) error {
+	if Helper != nil {
+		return Helper.Mkdir(path)
+	}
+	cmd := SudoNsenterCmd("/usr/bin/mkdir", "-p", path)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("mkdir -p %s: %s: %w", path, strings.TrimSpace(string(out)), err)
+	}
+	return nil
+}
+
+// Chown changes ownership of a path on the real host filesystem.
+// Uses the helper daemon when available, otherwise falls back to sudo.
+func Chown(path string, uid, gid int, recursive bool) error {
+	if Helper != nil {
+		return Helper.Chown(path, uid, gid, recursive)
+	}
+	ownership := fmt.Sprintf("%d:%d", uid, gid)
+	args := []string{}
+	if recursive {
+		args = append(args, "-R")
+	}
+	args = append(args, ownership, path)
+	cmd := SudoNsenterCmd("/usr/bin/chown", args...)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("chown %s: %s: %w", path, strings.TrimSpace(string(out)), err)
+	}
+	return nil
+}
+
 // Set runs `pct set <ctid> <args...>` to modify container configuration.
+// Uses the helper daemon when available for validated operations.
 func Set(ctid int, args ...string) error {
+	if Helper != nil && len(args) == 2 {
+		return Helper.PctSet(ctid, args[0], args[1])
+	}
 	cmdArgs := append([]string{"set", strconv.Itoa(ctid)}, args...)
 	out, err := pctRun(cmdArgs...)
 	if err != nil {
@@ -94,18 +156,35 @@ type ExecResult struct {
 }
 
 // Exec runs a command inside a container via pct exec.
+// Uses the helper daemon when available.
 func Exec(ctid int, command []string) (*ExecResult, error) {
 	if len(command) == 0 {
 		return nil, fmt.Errorf("empty command")
+	}
+	if Helper != nil {
+		output, exitCode, err := Helper.PctExec(ctid, command)
+		if err != nil {
+			return nil, err
+		}
+		return &ExecResult{Output: output, ExitCode: exitCode}, nil
 	}
 	return pctExecInCT(ctid, command)
 }
 
 // ExecStream runs a command inside a container and calls onLine for each
 // line of output as it arrives, enabling real-time log streaming.
+// Uses the helper daemon when available.
 func ExecStream(ctid int, command []string, onLine func(line string)) (*ExecResult, error) {
 	if len(command) == 0 {
 		return nil, fmt.Errorf("empty command")
+	}
+
+	if Helper != nil {
+		output, exitCode, err := Helper.PctExecStream(ctid, command, onLine)
+		if err != nil {
+			return nil, err
+		}
+		return &ExecResult{Output: output, ExitCode: exitCode}, nil
 	}
 
 	args := append([]string{"exec", strconv.Itoa(ctid), "--"}, command...)
@@ -148,6 +227,43 @@ func ExecStream(ctid int, command []string, onLine func(line string)) (*ExecResu
 	return result, nil
 }
 
+// Push copies a file from the host into the container.
+// Uses the helper daemon when available.
+func Push(ctid int, src, dst string, perms string) error {
+	if Helper != nil {
+		return Helper.PctPush(ctid, src, dst, perms)
+	}
+	args := []string{"push", strconv.Itoa(ctid), src, dst}
+	if perms != "" {
+		args = append(args, "--perms", perms)
+	}
+	out, err := pctRun(args...)
+	if err != nil {
+		return fmt.Errorf("pct push %d %s %s: %s: %w", ctid, src, dst, out, err)
+	}
+	// pct push can return exit 0 but print an error to stdout (e.g., "failed to open")
+	if strings.Contains(out, "failed to") {
+		return fmt.Errorf("pct push %d %s %s: %s", ctid, src, dst, out)
+	}
+	return nil
+}
+
+// AppendConf appends raw LXC config lines to /etc/pve/lxc/<ctid>.conf.
+// Uses the helper daemon when available, otherwise falls back to sudo tee -a.
+func AppendConf(ctid int, lines []string) error {
+	if Helper != nil {
+		return Helper.AppendConf(ctid, lines)
+	}
+	confPath := fmt.Sprintf("/etc/pve/lxc/%d.conf", ctid)
+	cmd := SudoNsenterCmd("/usr/bin/tee", "-a", confPath)
+	cmd.Stdin = strings.NewReader(strings.Join(lines, "\n") + "\n")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("tee -a %s: %s: %w", confPath, strings.TrimSpace(string(out)), err)
+	}
+	return nil
+}
+
 // BuildExecScriptCommand builds the command slice for running a script with env vars.
 func BuildExecScriptCommand(scriptPath string, env map[string]string) []string {
 	envParts := make([]string, 0, len(env))
@@ -166,36 +282,6 @@ func BuildExecScriptCommand(scriptPath string, env map[string]string) []string {
 func ExecScript(ctid int, scriptPath string, env map[string]string) (*ExecResult, error) {
 	command := BuildExecScriptCommand(scriptPath, env)
 	return Exec(ctid, command)
-}
-
-// Push copies a file from the host into the container.
-func Push(ctid int, src, dst string, perms string) error {
-	args := []string{"push", strconv.Itoa(ctid), src, dst}
-	if perms != "" {
-		args = append(args, "--perms", perms)
-	}
-	out, err := pctRun(args...)
-	if err != nil {
-		return fmt.Errorf("pct push %d %s %s: %s: %w", ctid, src, dst, out, err)
-	}
-	// pct push can return exit 0 but print an error to stdout (e.g., "failed to open")
-	if strings.Contains(out, "failed to") {
-		return fmt.Errorf("pct push %d %s %s: %s", ctid, src, dst, out)
-	}
-	return nil
-}
-
-// AppendConf appends raw LXC config lines to /etc/pve/lxc/<ctid>.conf
-// using sudo tee -a through the nsenter wrapper.
-func AppendConf(ctid int, lines []string) error {
-	confPath := fmt.Sprintf("/etc/pve/lxc/%d.conf", ctid)
-	cmd := SudoNsenterCmd("/usr/bin/tee", "-a", confPath)
-	cmd.Stdin = strings.NewReader(strings.Join(lines, "\n") + "\n")
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("tee -a %s: %s: %w", confPath, strings.TrimSpace(string(out)), err)
-	}
-	return nil
 }
 
 // GetIP attempts to get the IP address of a running container.

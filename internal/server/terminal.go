@@ -2,6 +2,7 @@ package server
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -57,6 +58,13 @@ func (s *Server) handleTerminalForCTID(w http.ResponseWriter, r *http.Request, c
 	if result, err := pctpkg.Exec(ctid, []string{"test", "-x", "/bin/bash"}); err != nil || result.ExitCode != 0 {
 		shell = "/bin/sh"
 	}
+
+	// Use helper daemon if available for terminal
+	if pctpkg.Helper != nil {
+		s.handleTerminalViaHelper(conn, ctx, ctid, shell)
+		return
+	}
+
 	cmd := pctpkg.SudoNsenterCmd("/usr/sbin/pct", "exec", strconv.Itoa(ctid), "--", shell, "-l")
 	cmd.Env = append(os.Environ(), "TERM=xterm-256color")
 
@@ -128,6 +136,63 @@ func (s *Server) handleTerminalForCTID(w http.ResponseWriter, r *http.Request, c
 	wg.Wait()
 }
 
+// handleTerminalViaHelper bridges a WebSocket to the helper daemon's terminal.
+func (s *Server) handleTerminalViaHelper(conn *websocket.Conn, ctx context.Context, ctid int, shell string) {
+	termConn, err := pctpkg.Helper.StartTerminal(ctid, shell)
+	if err != nil {
+		conn.Close(websocket.StatusInternalError, fmt.Sprintf("helper terminal: %v", err))
+		return
+	}
+	defer termConn.Close()
+
+	var wg sync.WaitGroup
+
+	// Helper -> WebSocket
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		buf := make([]byte, 4096)
+		for {
+			n, err := termConn.Read(buf)
+			if n > 0 {
+				if writeErr := conn.Write(ctx, websocket.MessageBinary, buf[:n]); writeErr != nil {
+					break
+				}
+			}
+			if err != nil {
+				break
+			}
+		}
+	}()
+
+	// WebSocket -> Helper
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for {
+			msgType, data, err := conn.Read(ctx)
+			if err != nil {
+				break
+			}
+			if msgType == websocket.MessageText {
+				// Check if it's a resize message — forward as JSON to helper
+				var resize terminalResize
+				if json.Unmarshal(data, &resize) == nil && resize.Type == "resize" {
+					// Forward resize to helper
+					termConn.Write(data)
+					continue
+				}
+			}
+			if _, err := termConn.Write(data); err != nil {
+				break
+			}
+		}
+	}()
+
+	wg.Wait()
+	conn.Close(websocket.StatusNormalClosure, "shell exited")
+}
+
 // handleJournalLogs streams journalctl output from inside a container via WebSocket.
 // Unlike handleTerminal, this is read-only (no PTY, no stdin).
 func (s *Server) handleJournalLogs(w http.ResponseWriter, r *http.Request) {
@@ -166,6 +231,11 @@ func (s *Server) handleJournalLogsForCTID(w http.ResponseWriter, r *http.Request
 		// Alpine/BusyBox: tail the syslog file (logread requires syslogd -C which isn't default)
 		logArgs = []string{"tail", "-n", "100", "-f", "/var/log/messages"}
 	}
+
+	// Use helper daemon for streaming if available — the exec-stream endpoint
+	// handles pct exec directly, but for journal logs we need the streaming variant.
+	// Since the helper's exec runs pct directly (no sudo/nsenter needed), we fall through
+	// to the same SudoNsenterCmd path when helper is not available.
 	pctArgs := append([]string{"exec", strconv.Itoa(ctid), "--"}, logArgs...)
 	cmd := pctpkg.SudoNsenterCmd("/usr/sbin/pct", pctArgs...)
 	cmd.Env = append(os.Environ(), "TERM=dumb")

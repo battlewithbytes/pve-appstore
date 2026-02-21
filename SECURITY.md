@@ -10,27 +10,83 @@ The service runs as the unprivileged `appstore` Linux user under systemd. It nev
 
 Container lifecycle operations (create, start, stop, shutdown, destroy, status) and cluster queries (next CTID, template listing) use the **Proxmox REST API** via an API token. This avoids privilege escalation entirely for these operations — the API token carries only the permissions granted to it.
 
-### Shell operations (fallback)
+### Helper Daemon (privileged operations)
 
-Seven operations have no REST API equivalent (or are restricted to `root@pam` in the API) and require `sudo` via a strict sudoers allowlist:
+Eight operations have no REST API equivalent (or are restricted to `root@pam` in the API) and require root access. These are handled by a dedicated **helper daemon** (`pve-appstore-helper`) that runs as root and exposes a validated HTTP REST API over a Unix domain socket at `/run/pve-appstore/helper.sock`.
 
-- `pct exec` — run commands inside a container
-- `pct push` — copy files from the host into a container
-- `pct set` — configure device passthrough (GPU) on a container
-- `tee -a` — append raw LXC config lines (`extra_config`) to `/etc/pve/lxc/*.conf`
-- `mkdir -p` — create directories on host storage pools for bind mounts
-- `chown` — fix ownership on bind mount paths for unprivileged containers
-- `update.sh` — binary replacement and service restart for self-updates
+The main service connects to the helper socket; the helper performs the privileged operation. All requests are structured JSON — no shell argument injection is possible.
 
-The Proxmox API restricts `dev*` parameters (device passthrough) to `root@pam` only — API tokens cannot set them. To work around this, containers are created via the API without device params, and `pct set` is used post-creation to apply device passthrough on the host.
+| Operation | Helper Endpoint | Why root is needed |
+|-----------|----------------|-------------------|
+| `pct exec` | `POST /v1/pct/exec` | No API endpoint exists for LXC command execution |
+| `pct push` | `POST /v1/pct/push` | No API endpoint exists for LXC file push |
+| `pct set` (devices, bind mounts) | `POST /v1/pct/set` | API restricts `dev*` and bind mounts to `root@pam` |
+| LXC config append | `POST /v1/conf/append` | `/etc/pve/lxc/` is a FUSE-mounted cluster filesystem requiring root |
+| mkdir | `POST /v1/fs/mkdir` | Storage pool directories are owned by root |
+| chown | `POST /v1/fs/chown` | Ownership change for unprivileged container UID mapping |
+| rm | `POST /v1/fs/rm` | Clean up bind mount directories during uninstall |
+| Self-update | `POST /v1/update` | Binary replacement and service restart |
 
-The `tee -a` command is needed because `/etc/pve/lxc/` is a FUSE-mounted cluster filesystem that requires root access. Apps with `extra_config` in their manifest (e.g. `lxc.cap.add: net_admin`) have these lines appended to the container config file after creation.
+The helper daemon validates every request at the privilege boundary before executing it.
 
-The `mkdir` command is needed because bind mount target directories often live on storage pools (ZFS datasets, LVM, etc.) owned by root. The service process cannot write there due to `ProtectSystem=strict` and filesystem ownership. The file browser's "create directory" feature uses this to prepare host paths before container creation.
+### Helper Daemon Security
 
-The `chown` command is needed for unprivileged containers with bind mounts. In unprivileged containers, UID 0 maps to host UID 100000. Bind mount host directories are typically owned by host UID 0, so the container's root cannot chown files inside them (EPERM). Before starting the container, the engine chowns bind mount paths to `100000:100000` so the container's mapped root has ownership.
+The helper daemon implements defense-in-depth at the privilege boundary:
 
-These are the **only** commands permitted via `/etc/sudoers.d/pve-appstore`. The `update.sh` script is a static helper that only accepts one argument (the path to the new binary) and performs a fixed sequence: backup, remove, move, chmod, restart.
+**Socket access control:**
+- Socket file: `/run/pve-appstore/helper.sock` owned `root:appstore` with mode `0660`
+- Socket directory: `/run/pve-appstore/` owned `root:appstore` with mode `0750`
+- SO_PEERCRED verification: every request's peer UID is verified against the `appstore` user
+
+**CTID ownership verification:**
+- Every CTID-accepting endpoint checks the install database (read-only connection) to verify the CTID belongs to a managed container
+- The helper's DB connection is read-only — a compromised main service cannot insert fake records
+
+**pct set option allowlist:**
+- Only `-dev[0-9]{1,2}` (device passthrough) and `-mp[0-9]{1,2}` (bind mounts) are accepted
+- All other options (`-rootfs`, `-ostype`, `-net`, `-memory`, etc.) are rejected
+- Device values are validated against the same allowed device patterns used by the engine
+- Bind mount host paths are validated against storage roots with symlink resolution
+
+**Path validation (filesystem operations):**
+- All paths are cleaned (`filepath.Clean`), resolved (`filepath.EvalSymlinks` on parent), and checked against storage root prefixes
+- Deny-list blocks operations on `/etc`, `/proc`, `/sys`, `/dev`, `/root`, `/boot`, `/usr`, `/bin`, `/sbin`, `/lib`
+- Symlinks at leaf paths are resolved and re-validated to prevent symlink attacks
+- Push source files must be under `/var/lib/pve-appstore/tmp/` and must be regular files
+
+**LXC config value validation:**
+- Config keys are allowlisted: `lxc.cgroup2.devices.allow`, `lxc.mount.entry`, `lxc.mount.auto`, `lxc.environment`, `lxc.cgroup2.cpuset.cpus`
+- Explicitly rejected: `lxc.apparmor.profile`, `lxc.seccomp.profile`, `lxc.cap.drop`, `lxc.cap.keep`, `lxc.rootfs`, `lxc.idmap`, `lxc.init.cmd`
+- Values are validated: `cgroup2.devices.allow` must specify device type + major:minor (no `a` for allow-all), `mount.auto` must be from a safe list
+- Config file path is constructed server-side from the CTID (not passed by the client)
+
+**Chown UID/GID allowlist:**
+- Only `100000:100000` (standard unprivileged container root mapping) is permitted
+
+**Concurrency controls:**
+- Per-CTID mutex for config-modifying operations
+- Max 5 concurrent terminal sessions
+- Max 20 concurrent exec operations
+- 1 MB request body size limit on all endpoints
+
+**Audit logging:**
+- Every request logged as structured JSON to `/var/log/pve-appstore/helper-audit.log`
+- Log is owned `root:root 0640` — the `appstore` user cannot modify or delete it
+- Entries include: timestamp, peer UID/PID, endpoint, CTID, result, duration
+
+**systemd hardening on the helper:**
+
+| Directive | Effect |
+|-----------|--------|
+| `RestrictAddressFamilies=AF_UNIX` | Helper **cannot make network connections** — TCP/UDP sockets are blocked |
+| `IPAddressDeny=any` | Additional network restriction |
+| `NoNewPrivileges=yes` | No further privilege escalation |
+| `ProtectHome=yes` | No access to home directories |
+| `PrivateTmp=yes` | Isolated /tmp |
+| `ProtectKernelModules=yes` | Cannot load kernel modules |
+| `ProtectKernelTunables=yes` | Cannot modify kernel parameters |
+| `SystemCallFilter=@system-service @mount @privileged` | Restricted syscall set |
+| `SystemCallArchitectures=native` | Only native architecture syscalls |
 
 ### Unprivileged service process
 
@@ -43,25 +99,16 @@ The `pve-appstore.service` unit applies systemd sandboxing:
 | `ProtectHome=yes` | `/home`, `/root`, `/run/user` are inaccessible |
 | `PrivateTmp=yes` | Service gets an isolated `/tmp` |
 | `ReadWritePaths=` | Only `/var/lib/pve-appstore` and `/var/log/pve-appstore` are writable |
-| `NoNewPrivileges=no` | Required to allow `sudo` for `pct exec`/`pct push`/`pct set` child processes |
+| `NoNewPrivileges=yes` | No privilege escalation possible — sudo is not used |
+| `Requires=pve-appstore-helper.service` | Helper daemon must be running |
 
 All web server, API handler, catalog parsing, and general application code runs within this sandbox.
 
-### Sudoers allowlist
+### Sudoers (legacy fallback)
 
-Only these commands are permitted via `/etc/sudoers.d/pve-appstore`:
+A sudoers file is installed as a legacy fallback for environments where the helper daemon is not deployed. When the helper daemon socket is detected at startup, all privileged operations are routed through the helper and sudo is never invoked.
 
-```
-appstore ALL=(root) NOPASSWD: /usr/bin/nsenter --mount=/proc/1/ns/mnt -- /usr/sbin/pct exec *
-appstore ALL=(root) NOPASSWD: /usr/bin/nsenter --mount=/proc/1/ns/mnt -- /usr/sbin/pct push *
-appstore ALL=(root) NOPASSWD: /usr/bin/nsenter --mount=/proc/1/ns/mnt -- /usr/sbin/pct set *
-appstore ALL=(root) NOPASSWD: /usr/bin/nsenter --mount=/proc/1/ns/mnt -- /usr/bin/tee -a /etc/pve/lxc/*
-appstore ALL=(root) NOPASSWD: /usr/bin/nsenter --mount=/proc/1/ns/mnt -- /usr/bin/mkdir -p *
-appstore ALL=(root) NOPASSWD: /usr/bin/nsenter --mount=/proc/1/ns/mnt -- /usr/bin/chown *
-appstore ALL=(root) NOPASSWD: /usr/bin/nsenter --mount=/proc/1/ns/mnt -- /opt/pve-appstore/update.sh *
-```
-
-No other commands can be run as root by the `appstore` user.
+The sudoers fallback will be removed in a future release once the helper daemon has been validated across all deployment environments.
 
 ## Self-Update
 
@@ -76,83 +123,49 @@ The CLI command runs as root directly. It:
 
 ### Web update (`POST /api/system/update`)
 
-The web endpoint runs as the `appstore` user and cannot replace the binary directly. Instead:
+The web endpoint runs as the `appstore` user. It:
 1. Downloads the new binary to `/var/lib/pve-appstore/pve-appstore.new`
-2. Delegates to `/opt/pve-appstore/update.sh` via `sudo nsenter --mount=/proc/1/ns/mnt --` to escape the service's `ProtectSystem=strict` mount namespace
-3. The script removes the old binary, moves the new one into place, and restarts the service
-4. Uses `setsid` to detach the update process so it survives the service restart
-
-The update script is added to the sudoers allowlist:
-```
-appstore ALL=(root) NOPASSWD: /usr/bin/nsenter --mount=/proc/1/ns/mnt -- /opt/pve-appstore/update.sh *
-```
+2. Delegates to the helper daemon's `POST /v1/update` endpoint
+3. The helper validates the binary path (hardcoded, not from request), verifies it's a regular file
+4. Runs the update script detached via `setsid` so it survives the service restart
+5. The script replaces the binary and restarts both the helper and main service
 
 ### Update check endpoint
 
 `GET /api/system/update-check` queries the GitHub Releases API (public, no auth needed) and compares the response with the running version using semver parsing. Results are cached in-memory for 1 hour to avoid rate limiting. The endpoint requires authentication (via `withAuth` middleware).
 
-## Mount Namespace Escape (nsenter)
-
-### The problem
-
-`ProtectSystem=strict` creates a read-only mount namespace for the service process. This namespace is **inherited by all child processes**, including those run via `sudo`. When `pct exec` runs as root, it still cannot write to paths like `/run/lock/lxc/` because the mount namespace makes them read-only.
-
-### The solution
-
-All privileged commands are wrapped with `nsenter --mount=/proc/1/ns/mnt --` which re-enters PID 1's (host init) mount namespace before executing the command:
-
-```
-sudo /usr/bin/nsenter --mount=/proc/1/ns/mnt -- /usr/sbin/pct exec 104 -- ...
-```
-
-This means:
-
-- The **main service process stays fully sandboxed** — web server, API handlers, catalog parser, etc. all run under `ProtectSystem=strict`
-- Only `pct exec`, `pct push`, `pct set`, `tee`, `mkdir`, and `chown` child processes escape to the host mount namespace
-- Only the mount namespace is affected — PID, network, user, and other namespaces remain unchanged
-
-### Why not ProtectSystem=full?
-
-Downgrading to `ProtectSystem=full` would weaken security for the **entire service** (making `/etc` writable) just to accommodate child processes. The nsenter approach keeps `/etc` read-only for the service while allowing only allowlisted commands to see the real filesystem.
-
-| | `ProtectSystem=full` | nsenter approach |
-|---|---|---|
-| Service process | `/usr` and `/boot` read-only | `/usr`, `/boot`, `/efi`, **`/etc`** all read-only |
-| Child processes | All see writable `/etc`, `/run`, `/var` | Only allowlisted commands see writable host |
-| Attack surface | Broader | Narrower |
-
 ## API vs Shell attack surface
 
-| Operation | Before (shell) | After (API) |
-|-----------|----------------|-------------|
-| Container create/start/stop/destroy | `sudo pct ...` (11 sudoers entries) | REST API via token (0 sudoers entries) |
-| CTID allocation | `sudo pvesh get /cluster/nextid` | REST API `GET /cluster/nextid` |
-| Template listing | `sudo pveam list` | REST API `GET /nodes/{node}/storage/{storage}/content` |
-| GPU detection | `lspci` + `nvidia-smi` (shell parsing) | REST API `GET /nodes/{node}/hardware/pci` |
-| Container exec | `sudo pct exec` | `sudo pct exec` (no API equivalent) |
-| File push | `sudo pct push` | `sudo pct push` (no API equivalent) |
-| Device passthrough | `sudo pct set` | `sudo pct set` (API restricted to root@pam) |
-| Host directory creation | N/A | `sudo mkdir -p` (for bind mount paths on storage pools) |
-| Bind mount ownership | N/A | `sudo chown` (UID shift for unprivileged containers) |
-| Extra LXC config | N/A | `sudo tee -a` (append to `/etc/pve/lxc/*.conf`) |
-
-The API approach:
-- **Reduces sudoers entries from 11 to 7** (6 for container ops + 1 for self-update)
-- **Eliminates `sudo` privilege escalation** for most operations
-- **Uses the API token** with scoped permissions (pool-limited, role-limited)
-- **Removes dependency** on `pvesh` and `pveam` binaries
+| Operation | Method | Privilege |
+|-----------|--------|-----------|
+| Container create/start/stop/destroy | REST API via token | 0 sudoers entries |
+| CTID allocation | REST API `GET /cluster/nextid` | 0 sudoers entries |
+| Template listing | REST API `GET /nodes/{node}/storage/{storage}/content` | 0 sudoers entries |
+| GPU detection | REST API `GET /nodes/{node}/hardware/pci` | 0 sudoers entries |
+| Container exec | Helper `POST /v1/pct/exec` | Validated JSON, CTID verified |
+| File push | Helper `POST /v1/pct/push` | Source path validated, CTID verified |
+| Device passthrough | Helper `POST /v1/pct/set` | Option allowlist, device path allowlist |
+| Host directory creation | Helper `POST /v1/fs/mkdir` | Path validation with symlink resolution |
+| Bind mount ownership | Helper `POST /v1/fs/chown` | UID/GID allowlist, path validation |
+| Extra LXC config | Helper `POST /v1/conf/append` | Key+value validation, path server-constructed |
+| Self-update | Helper `POST /v1/update` | Binary path hardcoded, regular file check |
 
 ## What an attacker cannot do
 
 Even if the service process is compromised:
 
-- **Run arbitrary commands as root**: Sudoers only allows `nsenter --mount=/proc/1/ns/mnt --` with specific binaries (`pct exec/push/set`, `tee`, `mkdir`, `chown`). Substituting a different binary (e.g., `nsenter -- /bin/bash`) is rejected.
-- **Escape other namespaces**: Only `--mount` is specified. PID, network, and user namespaces are unaffected.
-- **Run nsenter without sudo**: `/proc/1/ns/mnt` is owned by root and inaccessible to the `appstore` user directly.
-- **Modify the sudoers file**: `/etc/sudoers.d/` is protected by `ProtectSystem=strict` (read-only for the service).
-- **Write to system binaries or config**: `/usr`, `/etc`, `/boot` are all read-only.
-- **Access home directories**: `ProtectHome=yes` blocks `/home`, `/root`, `/run/user`.
-- **Manage containers outside the pool**: API token permissions are scoped to the configured pool.
+- **Send malformed arguments to privileged commands**: All inputs are parsed from structured JSON, not shell-interpolated argv
+- **Target containers outside the managed set**: The helper verifies every CTID against the install database
+- **Use dangerous pct set options**: Only `-dev[N]` and `-mp[N]` are permitted — no `-rootfs`, `-ostype`, etc.
+- **Inject arbitrary LXC config lines**: Config keys and values are validated against strict allowlists
+- **Traverse paths via symlinks**: All paths are resolved and validated against storage roots and a deny-list
+- **Make the helper daemon talk to the network**: `RestrictAddressFamilies=AF_UNIX` prevents TCP/UDP socket creation
+- **Access the helper socket**: It's owned `root:appstore 0660`, and the helper verifies peer UID via SO_PEERCRED
+- **Modify the audit log**: Owned `root:root 0640`, inaccessible to the `appstore` user
+- **Write to system binaries or config**: `/usr`, `/etc`, `/boot` are all read-only via `ProtectSystem=strict`
+- **Access home directories**: `ProtectHome=yes` blocks `/home`, `/root`, `/run/user`
+- **Manage containers outside the pool**: API token permissions are scoped to the configured pool
+- **Escalate privileges**: `NoNewPrivileges=yes` on both the main service and the helper
 
 ## GPU Passthrough
 
@@ -191,7 +204,7 @@ At install time, the engine:
 1. **Validates device nodes exist** on the host (e.g. `/dev/nvidia0`) before adding them to the job
 2. If `gpu.required: false` and no GPU hardware is found, the install proceeds in CPU-only mode — no devices are passed through
 3. If `gpu.required: true` and devices are missing, the install fails early with a clear error
-4. Device passthrough is applied via `pct set` (see Shell operations above), not the Proxmox API
+4. Device passthrough is applied via the helper daemon's `POST /v1/pct/set` endpoint with strict device path validation
 
 ### NVIDIA library bind-mount
 
@@ -200,7 +213,7 @@ LXC containers share the host's kernel, so the host's NVIDIA kernel module is al
 To solve this, the engine automatically bind-mounts the host's NVIDIA libraries into GPU containers:
 
 1. Resolves the host library path — prefers the curated `/usr/lib/x86_64-linux-gnu/nvidia/current/` directory (Debian NVIDIA packages), falls back to auto-discovering libraries by glob
-2. Adds a **read-only bind mount** via `pct set -mpN <host-path>,mp=/usr/lib/nvidia,ro=1`
+2. Adds a **read-only bind mount** via the helper daemon's `POST /v1/pct/set` with `-mpN`
 3. After container start, creates `/etc/ld.so.conf.d/nvidia.conf` inside the container and runs `ldconfig` so applications can find the libraries
 
 This approach:
@@ -345,6 +358,7 @@ Developer mode allows creating, editing, and deploying custom apps but cannot mo
 
 - **API requests** (POST/PUT/DELETE): 1 MB maximum body size
 - **File uploads** (dev mode): 2 MB maximum body size
+- **Helper daemon requests**: 1 MB maximum body size
 
 ### CORS
 
@@ -358,6 +372,7 @@ Cross-origin requests from other origins are rejected.
 
 - File operations in developer mode validate paths with `filepath.Clean()` and reject paths containing `..`
 - The filesystem browser restricts access to configured storage pool roots via prefix matching
+- The helper daemon validates all paths with `EvalSymlinks` on parent directories and deny-list checks
 - App provision files are confined to the app's `provision/` directory
 
 ### SQL injection

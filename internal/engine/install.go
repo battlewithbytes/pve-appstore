@@ -488,9 +488,8 @@ func stepCreateContainer(ctx *installContext) error {
 func chownBindMountsForUnprivileged(mounts []MountPointOption, info func(string, ...interface{}), warn func(string, ...interface{})) error {
 	for _, bm := range mounts {
 		info("Setting ownership on %s for unprivileged container", bm.HostPath)
-		cmd := pct.SudoNsenterCmd("/usr/bin/chown", "-R", "100000:100000", bm.HostPath)
-		if out, err := cmd.CombinedOutput(); err != nil {
-			warn("chown %s: %s: %v", bm.HostPath, strings.TrimSpace(string(out)), err)
+		if err := pct.Chown(bm.HostPath, 100000, 100000, true); err != nil {
+			warn("chown %s: %v", bm.HostPath, err)
 			// Non-fatal — the install may still succeed if the app doesn't need to write here
 		}
 	}

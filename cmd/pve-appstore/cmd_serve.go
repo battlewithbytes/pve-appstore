@@ -17,6 +17,8 @@ import (
 	"github.com/battlewithbytes/pve-appstore/internal/catalog"
 	"github.com/battlewithbytes/pve-appstore/internal/config"
 	"github.com/battlewithbytes/pve-appstore/internal/engine"
+	"github.com/battlewithbytes/pve-appstore/internal/helper"
+	"github.com/battlewithbytes/pve-appstore/internal/pct"
 	"github.com/battlewithbytes/pve-appstore/internal/proxmox"
 	"github.com/battlewithbytes/pve-appstore/internal/server"
 	"github.com/battlewithbytes/pve-appstore/web"
@@ -71,6 +73,25 @@ var serveCmd = &cobra.Command{
 			} else {
 				fmt.Printf("  auth:    generated new HMAC secret and saved to %s\n", serveConfigPath)
 			}
+		}
+
+		// Detect helper daemon (retry briefly — Type=simple helper may still be creating the socket)
+		const helperSocket = "/run/pve-appstore/helper.sock"
+		helperConnected := false
+		for attempt := 0; attempt < 10; attempt++ {
+			if _, err := os.Stat(helperSocket); err == nil {
+				helperClient := helper.NewClient(helperSocket)
+				if err := helperClient.Health(); err == nil {
+					pct.Helper = helperClient
+					fmt.Printf("  helper:  connected (%s)\n", helperSocket)
+					helperConnected = true
+					break
+				}
+			}
+			time.Sleep(300 * time.Millisecond)
+		}
+		if !helperConnected {
+			fmt.Printf("  helper:  not found, using sudo fallback\n")
 		}
 
 		fmt.Printf("PVE App Store starting...\n")

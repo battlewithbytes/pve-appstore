@@ -207,7 +207,7 @@ cp "$TARGET" "${TARGET}.bak" 2>/dev/null || true
 rm -f "$TARGET"
 mv "$NEW" "$TARGET"
 chmod 0755 "$TARGET"
-systemctl restart pve-appstore
+systemctl restart pve-appstore-helper pve-appstore 2>/dev/null || systemctl restart pve-appstore
 `
 	if err := os.WriteFile(UpdateScript, []byte(script), 0755); err != nil {
 		return fmt.Errorf("writing update script: %w", err)

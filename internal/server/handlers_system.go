@@ -7,6 +7,7 @@ import (
 
 	"github.com/battlewithbytes/pve-appstore/internal/engine"
 	"github.com/battlewithbytes/pve-appstore/internal/installer"
+	"github.com/battlewithbytes/pve-appstore/internal/pct"
 	"github.com/battlewithbytes/pve-appstore/internal/updater"
 	"github.com/battlewithbytes/pve-appstore/internal/version"
 )
@@ -55,7 +56,11 @@ func (s *Server) handleApplyUpdate(w http.ResponseWriter, r *http.Request) {
 
 	go func() {
 		time.Sleep(100 * time.Millisecond)
-		updater.ApplyUpdateSudo(updater.TempBinary)
+		if pct.Helper != nil {
+			pct.Helper.ApplyUpdate()
+		} else {
+			updater.ApplyUpdateSudo(updater.TempBinary)
+		}
 	}()
 }
 

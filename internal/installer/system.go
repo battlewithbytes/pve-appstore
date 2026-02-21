@@ -39,12 +39,41 @@ appstore ALL=(root) NOPASSWD: /usr/bin/nsenter --mount=/proc/1/ns/mnt -- /usr/bi
 appstore ALL=(root) NOPASSWD: /usr/bin/nsenter --mount=/proc/1/ns/mnt -- /opt/pve-appstore/update.sh *
 `
 
+const helperSystemdUnit = `[Unit]
+Description=PVE App Store Helper (privileged)
+Documentation=https://github.com/battlewithbytes/pve-appstore
+After=network.target
+Before=pve-appstore.service
+
+[Service]
+Type=simple
+ExecStart=/opt/pve-appstore/pve-appstore-helper
+Restart=on-failure
+RestartSec=5
+RuntimeDirectory=pve-appstore
+RuntimeDirectoryMode=0750
+
+# Security hardening — even as root, restrict what we CAN
+NoNewPrivileges=yes
+ProtectHome=yes
+PrivateTmp=yes
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+RestrictAddressFamilies=AF_UNIX
+IPAddressDeny=any
+SystemCallFilter=@system-service @mount @privileged
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target
+`
+
 const systemdUnit = `[Unit]
 Description=PVE App Store
 Documentation=https://github.com/battlewithbytes/pve-appstore
-After=network-online.target pve-cluster.service pvedaemon.service
+After=network-online.target pve-cluster.service pvedaemon.service pve-appstore-helper.service
 Wants=network-online.target
-Requires=pve-cluster.service
+Requires=pve-cluster.service pve-appstore-helper.service
 
 [Service]
 Type=simple
@@ -55,7 +84,7 @@ Restart=on-failure
 RestartSec=5
 
 # Security hardening
-NoNewPrivileges=no
+NoNewPrivileges=yes
 ProtectSystem=strict
 ProtectHome=yes
 PrivateTmp=yes
@@ -79,7 +108,8 @@ func ApplySystem(answers *InstallerAnswers, res *DiscoveredResources, port int) 
 		{"Creating system user", createSystemUser},
 		{"Creating directories", createDirectories},
 		{"Writing configuration", func() error { return writeConfig(answers, port, res) }},
-		{"Installing sudoers", installSudoers},
+		{"Installing helper daemon", installHelperUnit},
+		{"Installing sudoers (legacy fallback)", installSudoers},
 		{"Installing update script", func() error { return updater.DeployUpdateScript() }},
 		{"Installing systemd unit", installSystemdUnit},
 		{"Starting service", startService},
@@ -362,6 +392,30 @@ func installSudoers() error {
 	return nil
 }
 
+func installHelperUnit() error {
+	// Copy helper binary if available
+	exe, _ := os.Executable()
+	helperSrc := strings.TrimSuffix(exe, "pve-appstore") + "pve-appstore-helper"
+	// Also check alongside current binary
+	if _, err := os.Stat(helperSrc); os.IsNotExist(err) {
+		helperSrc = config.DefaultInstallDir + "/pve-appstore-helper"
+	}
+	if _, err := os.Stat(helperSrc); os.IsNotExist(err) {
+		// Helper binary not found — skip, sudoers fallback will be used
+		return nil
+	}
+
+	unitPath := "/etc/systemd/system/pve-appstore-helper.service"
+	if err := os.WriteFile(unitPath, []byte(helperSystemdUnit), 0644); err != nil {
+		return fmt.Errorf("writing helper unit file: %w", err)
+	}
+
+	exec.Command("systemctl", "daemon-reload").CombinedOutput()
+	exec.Command("systemctl", "enable", "pve-appstore-helper.service").CombinedOutput()
+
+	return nil
+}
+
 func installSystemdUnit() error {
 	unitPath := "/etc/systemd/system/pve-appstore.service"
 
@@ -386,6 +440,11 @@ func startService() error {
 	if err == nil && exe != config.DefaultInstallDir+"/pve-appstore" {
 		exec.Command("cp", exe, config.DefaultInstallDir+"/pve-appstore").Run()
 		exec.Command("chmod", "0755", config.DefaultInstallDir+"/pve-appstore").Run()
+	}
+
+	// Start helper first (if unit exists)
+	if _, err := os.Stat("/etc/systemd/system/pve-appstore-helper.service"); err == nil {
+		exec.Command("systemctl", "start", "pve-appstore-helper.service").CombinedOutput()
 	}
 
 	if out, err := exec.Command("systemctl", "start", "pve-appstore.service").CombinedOutput(); err != nil {

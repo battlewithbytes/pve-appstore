@@ -62,9 +62,8 @@ func (s *Server) handleBrowseMkdir(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	cmd := pct.SudoNsenterCmd("/usr/bin/mkdir", "-p", cleaned)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		writeError(w, http.StatusInternalServerError, fmt.Sprintf("mkdir failed: %s: %v", strings.TrimSpace(string(out)), err))
+	if err := pct.Mkdir(cleaned); err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("mkdir failed: %v", err))
 		return
 	}
 
