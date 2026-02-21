@@ -73,6 +73,9 @@ func (m *Manager) Status(ctx context.Context, ctid int) (string, error) {
 func (m *Manager) StatusDetail(ctx context.Context, ctid int) (*engine.ContainerStatusDetail, error) {
 	cs, err := m.client.StatusDetail(ctx, ctid)
 	if err != nil {
+		if IsNotFound(err) {
+			return nil, fmt.Errorf("%w: CTID %d", engine.ErrContainerNotFound, ctid)
+		}
 		return nil, err
 	}
 	return &engine.ContainerStatusDetail{

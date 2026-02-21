@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"net/url"
 	"os"
@@ -18,6 +19,9 @@ import (
 	"github.com/battlewithbytes/pve-appstore/internal/config"
 	"github.com/battlewithbytes/pve-appstore/internal/pct"
 )
+
+// ErrContainerNotFound is returned when a container no longer exists on the host.
+var ErrContainerNotFound = errors.New("container not found")
 
 // ContainerStatusDetail holds detailed runtime information about a container.
 type ContainerStatusDetail struct {
@@ -963,19 +967,23 @@ func (e *Engine) GetInstallDetail(id string) (*InstallDetail, error) {
 
 	detail := &InstallDetail{Install: *inst}
 
-	// Only fetch live data for active installs (not uninstalled)
-	if inst.Status != "uninstalled" && inst.CTID > 0 {
+	// Only fetch live data for active installs (not uninstalled/destroyed)
+	if inst.Status != "uninstalled" && inst.Status != "destroyed" && inst.CTID > 0 {
 		ctx := context.Background()
 
 		// Fetch live status
-		if sd, err := e.cm.StatusDetail(ctx, inst.CTID); err == nil {
+		sd, err := e.cm.StatusDetail(ctx, inst.CTID)
+		if err != nil {
+			if errors.Is(err, ErrContainerNotFound) {
+				detail.Status = "destroyed"
+				_ = e.store.UpdateInstallStatus(id, "destroyed")
+			}
+		} else {
 			detail.Live = sd
 			detail.Status = sd.Status
-		}
-
-		// Fetch IP
-		if ip, err := e.cm.GetIP(inst.CTID); err == nil && ip != "" {
-			detail.IP = ip
+			if ip, err := e.cm.GetIP(inst.CTID); err == nil && ip != "" {
+				detail.IP = ip
+			}
 		}
 	}
 
@@ -1048,22 +1056,28 @@ func (e *Engine) ListInstallsEnriched() ([]*InstallListItem, error) {
 			}
 		}
 
-		if inst.Status == "uninstalled" || inst.CTID == 0 {
+		if inst.Status == "uninstalled" || inst.Status == "destroyed" || inst.CTID == 0 {
 			continue
 		}
 
 		wg.Add(1)
-		go func(item *InstallListItem, ctid int) {
+		go func(item *InstallListItem, instID string, ctid int) {
 			defer wg.Done()
-			if sd, err := e.cm.StatusDetail(ctx, ctid); err == nil {
-				item.Status = sd.Status
-				item.Uptime = sd.Uptime
-				item.Live = sd
+			sd, err := e.cm.StatusDetail(ctx, ctid)
+			if err != nil {
+				if errors.Is(err, ErrContainerNotFound) {
+					item.Status = "destroyed"
+					_ = e.store.UpdateInstallStatus(instID, "destroyed")
+				}
+				return
 			}
+			item.Status = sd.Status
+			item.Uptime = sd.Uptime
+			item.Live = sd
 			if ip, err := e.cm.GetIP(ctid); err == nil && ip != "" {
 				item.IP = ip
 			}
-		}(items[i], inst.CTID)
+		}(items[i], inst.ID, inst.CTID)
 	}
 
 	wg.Wait()
