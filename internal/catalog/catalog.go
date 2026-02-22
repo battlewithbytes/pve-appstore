@@ -20,6 +20,7 @@ type Catalog struct {
 	stacks      map[string]*StackManifest
 	shadowed    map[string]*AppManifest // original apps displaced by dev apps
 	lastRefresh time.Time
+	lastErr     error
 }
 
 // New creates a new Catalog instance.
@@ -49,11 +50,13 @@ func (c *Catalog) Refresh() error {
 	}
 
 	if err := c.fetchRepo(); err != nil {
-		return fmt.Errorf("fetching catalog: %w", err)
+		c.lastErr = fmt.Errorf("fetching catalog: %w", err)
+		return c.lastErr
 	}
 
 	if err := c.indexApps(); err != nil {
-		return fmt.Errorf("indexing catalog: %w", err)
+		c.lastErr = fmt.Errorf("indexing catalog: %w", err)
+		return c.lastErr
 	}
 
 	c.indexStacks()
@@ -83,6 +86,7 @@ func (c *Catalog) Refresh() error {
 	}
 
 	c.lastRefresh = time.Now()
+	c.lastErr = nil
 	return nil
 }
 
@@ -212,6 +216,13 @@ func (c *Catalog) LastRefresh() time.Time {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.lastRefresh
+}
+
+// LastError returns the error from the most recent refresh attempt, or nil if it succeeded.
+func (c *Catalog) LastError() error {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.lastErr
 }
 
 // IsStale checks whether the remote catalog has new commits by comparing

@@ -59,7 +59,7 @@ ProtectHome=yes
 PrivateTmp=yes
 ProtectKernelModules=yes
 ProtectKernelTunables=yes
-RestrictAddressFamilies=AF_UNIX
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK  # child procs (pct exec) need network inside containers; IPAddressDeny=any blocks the helper itself
 IPAddressDeny=any
 SystemCallFilter=@system-service @mount @privileged
 SystemCallArchitectures=native

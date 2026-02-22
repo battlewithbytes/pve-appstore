@@ -222,6 +222,13 @@ func stepValidateRequest(ctx *installContext) error {
 		if err := ValidateCPUPin(ctx.job.CPUPin); err != nil {
 			return err
 		}
+		// Auto-adjust cores to match pinned CPU count — you can't schedule
+		// more vCPUs than physical cores you're pinned to.
+		pinCount := CountPinnedCPUs(ctx.job.CPUPin)
+		if pinCount > 0 && ctx.job.Cores > pinCount {
+			ctx.info("Adjusting cores from %d to %d to match CPU pin %q", ctx.job.Cores, pinCount, ctx.job.CPUPin)
+			ctx.job.Cores = pinCount
+		}
 	}
 
 	ctx.info("Request validated for app %s", ctx.job.AppID)
@@ -354,6 +361,28 @@ func ValidateCPUPin(pin string) error {
 	return nil
 }
 
+// CountPinnedCPUs returns the number of individual CPUs in a pinning spec.
+// e.g. "0" -> 1, "0,2" -> 2, "0-3" -> 4, "0-3,8-11" -> 8.
+func CountPinnedCPUs(pin string) int {
+	pin = strings.TrimSpace(pin)
+	if pin == "" {
+		return 0
+	}
+	count := 0
+	for _, tok := range strings.Split(pin, ",") {
+		tok = strings.TrimSpace(tok)
+		if strings.Contains(tok, "-") {
+			parts := strings.SplitN(tok, "-", 2)
+			lo, _ := strconv.Atoi(strings.TrimSpace(parts[0]))
+			hi, _ := strconv.Atoi(strings.TrimSpace(parts[1]))
+			count += hi - lo + 1
+		} else {
+			count++
+		}
+	}
+	return count
+}
+
 func stepValidateManifest(ctx *installContext) error {
 	if err := ctx.manifest.Validate(); err != nil {
 		return fmt.Errorf("manifest validation: %w", err)
@@ -370,6 +399,37 @@ func stepValidatePlacement(ctx *installContext) error {
 	if ctx.job.Bridge == "" {
 		return fmt.Errorf("bridge is required")
 	}
+
+	// Verify storage exists on the host
+	bgCtx := context.Background()
+	if _, err := ctx.engine.cm.GetStorageInfo(bgCtx, ctx.job.Storage); err != nil {
+		available, _ := ctx.engine.cm.ListStorages(bgCtx)
+		names := make([]string, len(available))
+		for i, s := range available {
+			names[i] = s.ID
+		}
+		return fmt.Errorf("storage %q does not exist (available: %s)", ctx.job.Storage, strings.Join(names, ", "))
+	}
+
+	// Verify bridge exists on the host
+	bridges, err := ctx.engine.cm.ListBridges(bgCtx)
+	if err == nil {
+		found := false
+		for _, b := range bridges {
+			if b.Name == ctx.job.Bridge {
+				found = true
+				break
+			}
+		}
+		if !found {
+			names := make([]string, len(bridges))
+			for i, b := range bridges {
+				names[i] = b.Name
+			}
+			return fmt.Errorf("bridge %q does not exist (available: %s)", ctx.job.Bridge, strings.Join(names, ", "))
+		}
+	}
+
 	ctx.info("Placement: storage=%s bridge=%s pool=%s", ctx.job.Storage, ctx.job.Bridge, ctx.job.Pool)
 	return nil
 }
@@ -648,16 +708,40 @@ func stepStartContainer(ctx *installContext) error {
 func stepWaitForNetwork(ctx *installContext) error {
 	ctx.info("Waiting for network in container %d...", ctx.job.CTID)
 
-	for i := 0; i < 30; i++ {
-		ip, err := ctx.engine.cm.GetIP(ctx.job.CTID)
-		if err == nil && ip != "" && ip != "127.0.0.1" {
-			ctx.info("Container %d has IP: %s", ctx.job.CTID, ip)
-			return nil
+	// Phase 1: Wait for an IP address (up to 30s)
+	var ip string
+	for i := 0; i < 15; i++ {
+		got, err := ctx.engine.cm.GetIP(ctx.job.CTID)
+		if err == nil && got != "" && got != "127.0.0.1" {
+			ip = got
+			break
 		}
 		time.Sleep(2 * time.Second)
 	}
+	if ip == "" {
+		ctx.warn("No IP after 30s — continuing anyway")
+		return nil
+	}
+	ctx.info("Container %d has IP: %s", ctx.job.CTID, ip)
 
-	ctx.warn("Network wait timed out — continuing anyway")
+	// Phase 2: Verify DNS resolution works (up to 30s)
+	// This catches transient network/DNS outages that would cause
+	// install_base_packages to fail downloading packages.
+	for i := 0; i < 10; i++ {
+		result, err := ctx.engine.cm.Exec(ctx.job.CTID, []string{
+			"sh", "-c", "getent hosts deb.debian.org >/dev/null 2>&1 || host deb.debian.org >/dev/null 2>&1 || nslookup deb.debian.org >/dev/null 2>&1",
+		})
+		if err == nil && result.ExitCode == 0 {
+			ctx.info("DNS resolution verified")
+			return nil
+		}
+		if i == 0 {
+			ctx.info("Waiting for DNS resolution...")
+		}
+		time.Sleep(3 * time.Second)
+	}
+
+	ctx.warn("DNS resolution not verified after 30s — continuing anyway")
 	return nil
 }
 

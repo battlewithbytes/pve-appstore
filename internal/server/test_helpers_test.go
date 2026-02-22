@@ -248,6 +248,7 @@ func (s catalogSvcStub) Refresh() error {
 }
 
 func (s catalogSvcStub) LastRefresh() time.Time { return time.Time{} }
+func (s catalogSvcStub) LastError() error       { return nil }
 func (s catalogSvcStub) StackCount() int        { return 0 }
 func (s catalogSvcStub) RepoURL() string        { return "https://example.com/catalog.git" }
 func (s catalogSvcStub) Branch() string          { return "main" }

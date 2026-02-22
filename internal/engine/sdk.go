@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/battlewithbytes/pve-appstore/internal/catalog"
 	appstoresdk "github.com/battlewithbytes/pve-appstore/sdk"
@@ -91,11 +92,24 @@ func stepInstallBasePackages(ctx *installContext) error {
 
 		cmd := append([]string{"apt-get", "install", "-y", "--no-install-recommends"}, basePackages...)
 		ctx.info("Installing base packages (apt): %s", strings.Join(basePackages, ", "))
-		result, err = ctx.engine.cm.Exec(ctx.job.CTID, cmd)
-		if err != nil {
-			return fmt.Errorf("installing base packages: %w", err)
-		}
-		if result.ExitCode != 0 {
+
+		// Retry up to 3 times on transient DNS failures
+		const maxRetries = 3
+		for attempt := 1; attempt <= maxRetries; attempt++ {
+			result, err = ctx.engine.cm.Exec(ctx.job.CTID, cmd)
+			if err != nil {
+				return fmt.Errorf("installing base packages: %w", err)
+			}
+			if result.ExitCode == 0 {
+				break
+			}
+			if attempt < maxRetries && strings.Contains(result.Output, "Temporary failure resolving") {
+				ctx.warn("DNS resolution failed (attempt %d/%d), retrying in 10s...", attempt, maxRetries)
+				time.Sleep(10 * time.Second)
+				// Re-run apt-get update before retry
+				ctx.engine.cm.Exec(ctx.job.CTID, []string{"apt-get", "update", "-qq"})
+				continue
+			}
 			return fmt.Errorf("apt-get install base packages exited with %d: %s", result.ExitCode, result.Output)
 		}
 	}

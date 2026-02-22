@@ -44,14 +44,16 @@ type Server struct {
 	updateLock sync.Mutex
 }
 
-// NewServer creates a new helper server. The database is opened read-only
-// for CTID validation — the helper never writes to the install database.
+// NewServer creates a new helper server. The database is opened for CTID
+// validation only. We use query_only=ON instead of mode=ro so that the
+// connection sees current WAL frames written by the main service (mode=ro
+// can serve stale snapshots in WAL mode).
 func NewServer(cfg ServerConfig) (*Server, error) {
-	db, err := sql.Open("sqlite", cfg.DBPath+"?mode=ro")
+	db, err := sql.Open("sqlite", cfg.DBPath+"?_pragma=query_only(ON)")
 	if err != nil {
 		return nil, fmt.Errorf("opening database: %w", err)
 	}
-	// Verify read-only connection works
+	// Verify connection works
 	if err := db.Ping(); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("database ping failed: %w", err)

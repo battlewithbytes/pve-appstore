@@ -5,6 +5,22 @@ import { Badge, SectionTitle, FormRow, FormInput } from '../components/ui'
 import { DirectoryBrowser } from '../components/DirectoryBrowser'
 import { useEscapeKey } from '../hooks/useEscapeKey'
 
+function countPinnedCPUs(pin: string): number {
+  const trimmed = pin.trim()
+  if (!trimmed) return 0
+  let count = 0
+  for (const tok of trimmed.split(',')) {
+    const t = tok.trim()
+    if (t.includes('-')) {
+      const [lo, hi] = t.split('-').map(s => parseInt(s.trim(), 10))
+      if (!isNaN(lo) && !isNaN(hi) && hi >= lo) count += hi - lo + 1
+    } else if (t && !isNaN(parseInt(t, 10))) {
+      count++
+    }
+  }
+  return count
+}
+
 export function InstallWizard({ app, onClose, replaceExisting, keepVolumes, existingInstall }: { app: AppDetail; onClose: () => void; replaceExisting?: boolean; keepVolumes?: string[]; existingInstall?: Install | null }) {
   useEscapeKey(onClose)
   const prev = existingInstall // shorthand for previous install values
@@ -18,6 +34,14 @@ export function InstallWizard({ app, onClose, replaceExisting, keepVolumes, exis
   const [memory, setMemory] = useState(prev ? String(prev.memory_mb) : String(app.lxc.defaults.memory_mb))
   const [disk, setDisk] = useState(prev ? String(prev.disk_gb) : String(app.lxc.defaults.disk_gb))
   const [cpuPin, setCpuPin] = useState(prev?.cpu_pin || '')
+  const pinnedCount = countPinnedCPUs(cpuPin)
+
+  // Auto-adjust cores when CPU pin changes
+  useEffect(() => {
+    if (pinnedCount > 0) {
+      setCores(String(pinnedCount))
+    }
+  }, [pinnedCount])
   const [storage, setStorage] = useState(prev?.storage || '')
   const [bridge, setBridge] = useState(prev?.bridge || '')
   const [hostname, setHostname] = useState(prev?.hostname || '')
@@ -335,10 +359,10 @@ export function InstallWizard({ app, onClose, replaceExisting, keepVolumes, exis
         <h2 className="text-xl font-bold text-text-primary mb-5 font-mono">Install {app.name}</h2>
 
         <SectionTitle>Resources</SectionTitle>
-        <FormRow label="CPU Cores"><FormInput value={cores} onChange={setCores} type="number" /></FormRow>
+        <FormRow label="CPU Cores" help={pinnedCount > 0 ? `Set by CPU pin (${pinnedCount} core${pinnedCount !== 1 ? 's' : ''})` : undefined}><FormInput value={cores} onChange={setCores} type="number" disabled={pinnedCount > 0} /></FormRow>
         <FormRow label="Memory (MB)"><FormInput value={memory} onChange={setMemory} type="number" /></FormRow>
         <FormRow label="Disk (GB)" help="Root filesystem only — app data lives on separate volumes"><FormInput value={disk} onChange={setDisk} type="number" /></FormRow>
-        <FormRow label="CPU Pinning" help="Pin container to specific cores (e.g. 0-3 or 0,2,4,6). Leave empty for automatic scheduling."><FormInput value={cpuPin} onChange={setCpuPin} placeholder="e.g. 0-3" /></FormRow>
+        <FormRow label="CPU Pinning" help="Pin container to specific host cores (e.g. 0-3 or 0,2,4,6). Core count adjusts automatically."><FormInput value={cpuPin} onChange={setCpuPin} placeholder="e.g. 0-3" /></FormRow>
 
         <SectionTitle>Networking & Storage</SectionTitle>
         <FormRow label="Storage Pool" description="Proxmox storage where the container's virtual disk will be created." help={`Disk size: ${disk} GB`}>

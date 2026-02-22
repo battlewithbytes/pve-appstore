@@ -530,16 +530,33 @@ func (e *Engine) runStackInstall(bgCtx context.Context, job *Job, stackID, osTem
 	}
 	ctx.info("Container %d started", ctid)
 
-	// Step 5: Wait for network
+	// Step 5: Wait for network (IP + DNS)
 	ctx.transition(StateWaitForNetwork)
 	ctx.info("Waiting for network...")
-	for i := 0; i < 30; i++ {
+	gotIP := false
+	for i := 0; i < 15; i++ {
 		ip, err := e.cm.GetIP(ctid)
 		if err == nil && ip != "" && ip != "127.0.0.1" {
 			ctx.info("Container %d has IP: %s", ctid, ip)
+			gotIP = true
 			break
 		}
 		time.Sleep(2 * time.Second)
+	}
+	if gotIP {
+		for i := 0; i < 10; i++ {
+			result, err := e.cm.Exec(ctid, []string{
+				"sh", "-c", "getent hosts deb.debian.org >/dev/null 2>&1 || host deb.debian.org >/dev/null 2>&1 || nslookup deb.debian.org >/dev/null 2>&1",
+			})
+			if err == nil && result.ExitCode == 0 {
+				ctx.info("DNS resolution verified")
+				break
+			}
+			if i == 0 {
+				ctx.info("Waiting for DNS resolution...")
+			}
+			time.Sleep(3 * time.Second)
+		}
 	}
 
 	// Step 5.5: Setup GPU runtime if NVIDIA devices are present

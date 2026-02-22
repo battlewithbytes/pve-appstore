@@ -172,6 +172,7 @@ export interface HealthResponse {
   version: string;
   node: string;
   app_count: number;
+  catalog_error?: string;
 }
 
 export interface AppsResponse {

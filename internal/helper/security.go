@@ -32,11 +32,11 @@ func (s *Server) validateCTID(ctid int) error {
 	if count > 0 {
 		return nil
 	}
-	// Also check running jobs — a container being installed has a CTID but
+	// Also check active jobs — a container being installed has a CTID but
 	// may not yet be in the installs table.
 	count = 0
 	_ = s.db.QueryRow(
-		"SELECT COUNT(*) FROM jobs WHERE ctid=? AND status='running'",
+		"SELECT COUNT(*) FROM jobs WHERE ctid=? AND state NOT IN ('completed','failed','cancelled')",
 		ctid,
 	).Scan(&count)
 	if count > 0 {

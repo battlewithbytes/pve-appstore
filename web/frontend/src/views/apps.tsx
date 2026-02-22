@@ -15,6 +15,8 @@ export function AppList() {
   const [search, setSearch] = useState('')
   const [category, setCategory] = useState('')
   const [loading, setLoading] = useState(true)
+  const [catalogError, setCatalogError] = useState<string | null>(null)
+  const [refreshing, setRefreshing] = useState(false)
 
   const fetchApps = useCallback(async () => {
     setLoading(true)
@@ -24,9 +26,25 @@ export function AppList() {
       if (category) params.category = category
       const data = await api.apps(params)
       setApps(data.apps || [])
+      // Check for catalog error when no apps loaded
+      if (!data.apps || data.apps.length === 0) {
+        const health = await api.health()
+        setCatalogError(health.catalog_error || null)
+      } else {
+        setCatalogError(null)
+      }
     } catch { setApps([]) }
     setLoading(false)
   }, [search, category])
+
+  const handleRefresh = async () => {
+    setRefreshing(true)
+    try {
+      await api.catalogRefresh()
+      await fetchApps()
+    } catch { /* fetchApps will pick up the error */ }
+    setRefreshing(false)
+  }
 
   useEffect(() => { fetchApps() }, [fetchApps])
   useEffect(() => { api.categories().then(d => setCategories(d.categories || [])) }, [])
@@ -42,7 +60,18 @@ export function AppList() {
           {categories.map(c => <option key={c} value={c}>{c}</option>)}
         </select>
       </div>
-      {loading ? <Center>Loading...</Center> : apps.length === 0 ? <Center>No apps found</Center> : (() => {
+      {loading ? <Center>Loading...</Center> : apps.length === 0 ? (
+        <Center>
+          <div className="text-center">
+            <p className="text-text-secondary mb-2">{catalogError ? 'Catalog failed to load' : 'No apps found'}</p>
+            {catalogError && <p className="text-xs text-status-stopped font-mono mb-4 max-w-md mx-auto break-words">{catalogError}</p>}
+            <button onClick={handleRefresh} disabled={refreshing}
+              className="px-5 py-2.5 text-sm font-semibold border border-primary rounded-lg cursor-pointer text-primary bg-transparent hover:bg-primary/10 transition-colors font-mono disabled:opacity-50">
+              {refreshing ? 'Refreshing...' : 'Refresh Catalog'}
+            </button>
+          </div>
+        </Center>
+      ) : (() => {
         const devApps = apps.filter(a => a.source === 'developer')
         const catalogApps = apps.filter(a => a.source !== 'developer')
         return <>

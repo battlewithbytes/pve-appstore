@@ -18,6 +18,7 @@ type CatalogService interface {
 	Categories() []string
 	Refresh() error
 	LastRefresh() time.Time
+	LastError() error
 	MergeDevApp(app *catalog.AppManifest)
 	RemoveDevApp(id string)
 	GetShadowed(id string) (*catalog.AppManifest, bool)
@@ -54,6 +55,7 @@ func (s *defaultCatalogService) GetApp(id string) (*catalog.AppManifest, bool) {
 func (s *defaultCatalogService) Categories() []string  { return s.cat.Categories() }
 func (s *defaultCatalogService) Refresh() error        { return s.cat.Refresh() }
 func (s *defaultCatalogService) LastRefresh() time.Time { return s.cat.LastRefresh() }
+func (s *defaultCatalogService) LastError() error       { return s.cat.LastError() }
 func (s *defaultCatalogService) MergeDevApp(app *catalog.AppManifest) {
 	s.cat.MergeDevApp(app)
 }

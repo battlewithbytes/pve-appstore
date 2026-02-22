@@ -78,8 +78,8 @@ The helper daemon implements defense-in-depth at the privilege boundary:
 
 | Directive | Effect |
 |-----------|--------|
-| `RestrictAddressFamilies=AF_UNIX` | Helper **cannot make network connections** — TCP/UDP sockets are blocked |
-| `IPAddressDeny=any` | Additional network restriction |
+| `RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK` | Socket types limited to Unix, IPv4, IPv6, and Netlink — exotic families (Bluetooth, CAN, etc.) blocked. AF_INET/AF_INET6/AF_NETLINK are required because `pct exec` child processes inherit the seccomp filter and need network sockets inside containers. |
+| `IPAddressDeny=any` | Helper daemon itself **cannot bind or connect to any network address** — all IP traffic is blocked at the systemd level even though AF_INET sockets are technically creatable. Only child processes inside container namespaces can use the network. |
 | `NoNewPrivileges=yes` | No further privilege escalation |
 | `ProtectHome=yes` | No access to home directories |
 | `PrivateTmp=yes` | Isolated /tmp |
@@ -159,7 +159,7 @@ Even if the service process is compromised:
 - **Use dangerous pct set options**: Only `-dev[N]` and `-mp[N]` are permitted — no `-rootfs`, `-ostype`, etc.
 - **Inject arbitrary LXC config lines**: Config keys and values are validated against strict allowlists
 - **Traverse paths via symlinks**: All paths are resolved and validated against storage roots and a deny-list
-- **Make the helper daemon talk to the network**: `RestrictAddressFamilies=AF_UNIX` prevents TCP/UDP socket creation
+- **Make the helper daemon talk to the network**: `IPAddressDeny=any` blocks all IP traffic from the helper process. `RestrictAddressFamilies` allows AF_INET/AF_INET6/AF_NETLINK only because `pct exec` child processes (running inside container namespaces) inherit the seccomp filter and need network access — the helper daemon itself cannot connect anywhere.
 - **Access the helper socket**: It's owned `root:appstore 0660`, and the helper verifies peer UID via SO_PEERCRED
 - **Modify the audit log**: Owned `root:root 0640`, inaccessible to the `appstore` user
 - **Write to system binaries or config**: `/usr`, `/etc`, `/boot` are all read-only via `ProtectSystem=strict`

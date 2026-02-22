@@ -30,6 +30,9 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	if lr := s.catalogSvc.LastRefresh(); !lr.IsZero() {
 		resp["last_refresh"] = lr.Format(time.RFC3339)
 	}
+	if err := s.catalogSvc.LastError(); err != nil {
+		resp["catalog_error"] = err.Error()
+	}
 	writeJSON(w, http.StatusOK, resp)
 }
 
