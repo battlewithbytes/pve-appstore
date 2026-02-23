@@ -153,15 +153,26 @@ class Swag(BaseApp):
             "/config/dns-conf/",
         ], check=False)
 
-        # Copy fail2ban filter and action definitions
+        # Seed /config/fail2ban with Alpine's system defaults first,
+        # then overlay upstream SWAG filters on top.  This preserves
+        # bundled filters (nginx-http-auth, nginx-botsearch, etc.) and
+        # actions (iptables-allports) that our jail.local references.
         self.run_command([
-            "cp", "-r", "/tmp/_swag/root/defaults/fail2ban/filter.d",
-            "/config/fail2ban/",
+            "cp", "-rn", "/etc/fail2ban/filter.d", "/config/fail2ban/",
         ], check=False)
         self.run_command([
-            "cp", "-r", "/tmp/_swag/root/defaults/fail2ban/action.d",
-            "/config/fail2ban/",
+            "cp", "-rn", "/etc/fail2ban/action.d", "/config/fail2ban/",
         ], check=False)
+
+        # Overlay upstream SWAG-specific filters (nginx-badbots, etc.)
+        self.run_command(["sh", "-c",
+            "cp -r /tmp/_swag/root/defaults/fail2ban/filter.d/* "
+            "/config/fail2ban/filter.d/ 2>/dev/null || true",
+        ])
+        self.run_command(["sh", "-c",
+            "cp -r /tmp/_swag/root/defaults/fail2ban/action.d/* "
+            "/config/fail2ban/action.d/ 2>/dev/null || true",
+        ])
 
         self.run_command(["rm", "-rf", "/tmp/_swag"])
 
@@ -170,7 +181,7 @@ class Swag(BaseApp):
         self.deploy_provision_file("jail.local",
                                    "/config/fail2ban/jail.local")
 
-        # Symlink user configs into fail2ban expected paths
+        # Symlink /config dirs into /etc/fail2ban so changes persist
         self.run_command(["rm", "-rf", "/etc/fail2ban/filter.d"])
         self.run_command(["rm", "-rf", "/etc/fail2ban/action.d"])
         self.run_command([

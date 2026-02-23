@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/battlewithbytes/pve-appstore/internal/catalog"
+	"github.com/battlewithbytes/pve-appstore/internal/pct"
 )
 
 // StartStack creates a new stack job and runs it asynchronously.
@@ -449,6 +450,11 @@ func (e *Engine) runStackInstall(bgCtx context.Context, job *Job, stackID, osTem
 	// Apply bind mounts post-creation via pct set (requires sudo/nsenter)
 	for _, bm := range bindMounts {
 		ctx.info("Bind mount mp%d: %s → %s", bm.Index, bm.HostPath, bm.MountPath)
+		// Ensure host path exists before mounting (LXC pre-start hook fails otherwise)
+		if err := pct.Mkdir(bm.HostPath); err != nil {
+			ctx.failJob("bind mount mp%d: mkdir %s: %v", bm.Index, bm.HostPath, err)
+			return
+		}
 		if err := e.cm.MountHostPath(ctid, bm.Index, bm.HostPath, bm.MountPath, bm.ReadOnly); err != nil {
 			ctx.failJob("bind mount mp%d (%s): %v", bm.Index, bm.HostPath, err)
 			return

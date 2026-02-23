@@ -263,6 +263,11 @@ permissions:
     - /defaults
     - /etc/nginx
     - /etc/fail2ban
+    - /run/nginx
+    - /run/fail2ban
+    - /tmp/letsencrypt
+    - /lsiopy
+    - /etc/periodic
   commands:
     - git
     - cp
@@ -271,9 +276,11 @@ permissions:
     - sed
     - mv
     - tar
+    - touch
     - certbot
     - openssl
     - iptables
+    - sh
   services:
     - nginx
     - fail2ban

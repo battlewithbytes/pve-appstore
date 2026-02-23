@@ -147,13 +147,17 @@ func (c *Client) Shutdown(ctx context.Context, ctid int, timeout int) error {
 }
 
 // Destroy destroys an LXC container.
+// Always passes purge=1 (removes /var/lib/lxc/{ctid}, ACLs, firewall, HA config)
+// and force=1 (destroys even if still stopping) to prevent stale state.
 func (c *Client) Destroy(ctx context.Context, ctid int, keepVolumes ...bool) error {
 	path := fmt.Sprintf("/nodes/%s/lxc/%d", c.node, ctid)
+	params := url.Values{}
+	params.Set("purge", "1")
+	params.Set("force", "1")
 	if len(keepVolumes) > 0 && keepVolumes[0] {
-		// Preserve detached volumes by telling Proxmox not to destroy
-		// datasets that are no longer referenced in the container config.
-		path += "?destroy-unreferenced-disks=0"
+		params.Set("destroy-unreferenced-disks", "0")
 	}
+	path += "?" + params.Encode()
 	var upid string
 	if err := c.doRequest(ctx, "DELETE", path, nil, &upid); err != nil {
 		return fmt.Errorf("destroying container %d: %w", ctid, err)

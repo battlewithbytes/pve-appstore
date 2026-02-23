@@ -157,11 +157,20 @@ func (e *Engine) runInstall(bgCtx context.Context, job *Job) {
 				ctx.info("Cleaning up container %d after failure...", ctx.job.CTID)
 				cleanCtx := context.Background()
 				_ = e.cm.Stop(cleanCtx, ctx.job.CTID)
-				time.Sleep(2 * time.Second)
-				if dErr := e.cm.Destroy(cleanCtx, ctx.job.CTID); dErr != nil {
-					ctx.warn("Failed to destroy container %d: %v", ctx.job.CTID, dErr)
-				} else {
-					ctx.info("Container %d destroyed", ctx.job.CTID)
+				var destroyErr error
+				for attempt := 0; attempt < 5; attempt++ {
+					if attempt > 0 {
+						time.Sleep(3 * time.Second)
+					}
+					destroyErr = e.cm.Destroy(cleanCtx, ctx.job.CTID)
+					if destroyErr == nil || isContainerGone(destroyErr) {
+						ctx.info("Container %d destroyed", ctx.job.CTID)
+						destroyErr = nil
+						break
+					}
+				}
+				if destroyErr != nil {
+					ctx.warn("Failed to destroy container %d after retries: %v", ctx.job.CTID, destroyErr)
 				}
 			}
 			return
@@ -524,6 +533,10 @@ func stepCreateContainer(ctx *installContext) error {
 	// Apply bind mounts post-creation via pct set (requires sudo/nsenter)
 	for _, bm := range bindMounts {
 		ctx.info("Bind mount mp%d: %s → %s", bm.Index, bm.HostPath, bm.MountPath)
+		// Ensure host path exists before mounting (LXC pre-start hook fails otherwise)
+		if err := pct.Mkdir(bm.HostPath); err != nil {
+			return fmt.Errorf("bind mount mp%d: mkdir %s: %w", bm.Index, bm.HostPath, err)
+		}
 		if err := ctx.engine.cm.MountHostPath(ctx.job.CTID, bm.Index, bm.HostPath, bm.MountPath, bm.ReadOnly); err != nil {
 			return fmt.Errorf("bind mount mp%d (%s): %w", bm.Index, bm.HostPath, err)
 		}
@@ -998,11 +1011,20 @@ func (e *Engine) cleanupCancelledJob(ctx *installContext) {
 		cleanCtx := context.Background() // fresh context since the job context is cancelled
 		// Try stop first, ignore errors (may not be running)
 		_ = e.cm.Stop(cleanCtx, ctx.job.CTID)
-		time.Sleep(2 * time.Second)
-		if err := e.cm.Destroy(cleanCtx, ctx.job.CTID); err != nil {
-			ctx.warn("Failed to destroy container %d during cancel cleanup: %v", ctx.job.CTID, err)
-		} else {
-			ctx.info("Container %d destroyed", ctx.job.CTID)
+		var destroyErr error
+		for attempt := 0; attempt < 5; attempt++ {
+			if attempt > 0 {
+				time.Sleep(3 * time.Second)
+			}
+			destroyErr = e.cm.Destroy(cleanCtx, ctx.job.CTID)
+			if destroyErr == nil || isContainerGone(destroyErr) {
+				ctx.info("Container %d destroyed", ctx.job.CTID)
+				destroyErr = nil
+				break
+			}
+		}
+		if destroyErr != nil {
+			ctx.warn("Failed to destroy container %d during cancel cleanup: %v", ctx.job.CTID, destroyErr)
 		}
 	}
 

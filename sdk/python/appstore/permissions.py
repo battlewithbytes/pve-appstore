@@ -120,9 +120,14 @@ class AppPermissions:
             )
 
     def check_command(self, cmd: str) -> None:
-        """Verify a command binary is in the allowlist."""
+        """Verify a command binary is in the allowlist.
+
+        Matches against both the full command path and its basename,
+        so ``certbot`` in the allowlist matches ``/lsiopy/bin/certbot``.
+        """
+        basename = os.path.basename(cmd)
         for allowed in self.commands:
-            if fnmatch.fnmatch(cmd, allowed):
+            if fnmatch.fnmatch(cmd, allowed) or fnmatch.fnmatch(basename, allowed):
                 return
         raise PermissionDeniedError(
             f"command '{cmd}' is not in the allowed commands list: {self.commands}"

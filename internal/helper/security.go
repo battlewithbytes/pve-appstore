@@ -248,6 +248,7 @@ func (s *Server) validateStoragePath(path string) error {
 		"/tank/",  // common ZFS pool
 		"/data/",  // common generic data dir
 		"/rpool/", // common root ZFS pool
+		"/tmp/",   // transient cache dirs (e.g. plex transcode, jellyfin cache)
 	}
 	allowedRoots = append(allowedRoots, commonStorageRoots...)
 
