@@ -268,10 +268,14 @@ func (s *Server) handleFsChown(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if req.Recursive {
-		// Use filepath.Walk for recursive chown (Go stdlib, no shell)
-		err := filepath.Walk(req.Path, func(path string, info os.FileInfo, err error) error {
+		// Use filepath.WalkDir (not Walk) — WalkDir does not follow symlinks,
+		// preventing chown from escaping the target tree via planted symlinks.
+		err := filepath.WalkDir(req.Path, func(path string, d os.DirEntry, err error) error {
 			if err != nil {
 				return nil // skip errors (e.g. permission denied on individual files)
+			}
+			if d.Type()&os.ModeSymlink != 0 {
+				return nil // skip symlinks entirely
 			}
 			return os.Chown(path, req.UID, req.GID)
 		})

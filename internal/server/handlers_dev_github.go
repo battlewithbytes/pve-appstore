@@ -83,7 +83,8 @@ func (s *Server) handleDevGitHubConnect(w http.ResponseWriter, r *http.Request) 
 	// Encrypt and store token
 	hmacSecret := s.cfg.Auth.HMACSecret
 	if hmacSecret == "" {
-		hmacSecret = "pve-appstore-default-key"
+		writeError(w, http.StatusInternalServerError, "HMAC secret not configured — cannot encrypt token")
+		return
 	}
 
 	encrypted, err := gh.EncryptToken(token, hmacSecret)
@@ -152,7 +153,8 @@ func (s *Server) handleDevGitHubRepoInfo(w http.ResponseWriter, r *http.Request)
 	// Decrypt token
 	hmacSecret := s.cfg.Auth.HMACSecret
 	if hmacSecret == "" {
-		hmacSecret = "pve-appstore-default-key"
+		writeError(w, http.StatusInternalServerError, "HMAC secret not configured — cannot encrypt token")
+		return
 	}
 	token, err := gh.DecryptToken(tokenEnc, hmacSecret)
 	if err != nil {
@@ -300,7 +302,8 @@ func (s *Server) handleDevGitHubDeleteBranch(w http.ResponseWriter, r *http.Requ
 	}
 	hmacSecret := s.cfg.Auth.HMACSecret
 	if hmacSecret == "" {
-		hmacSecret = "pve-appstore-default-key"
+		writeError(w, http.StatusInternalServerError, "HMAC secret not configured — cannot encrypt token")
+		return
 	}
 	token, err := gh.DecryptToken(tokenEnc, hmacSecret)
 	if err != nil {
@@ -415,7 +418,8 @@ func (s *Server) handleDevPublish(w http.ResponseWriter, r *http.Request) {
 	// Decrypt token
 	hmacSecret := s.cfg.Auth.HMACSecret
 	if hmacSecret == "" {
-		hmacSecret = "pve-appstore-default-key"
+		writeError(w, http.StatusInternalServerError, "HMAC secret not configured — cannot encrypt token")
+		return
 	}
 	token, err := gh.DecryptToken(tokenEnc, hmacSecret)
 	if err != nil {
@@ -684,7 +688,7 @@ func (s *Server) getPRState(prURL string) string {
 
 	hmacSecret := s.cfg.Auth.HMACSecret
 	if hmacSecret == "" {
-		hmacSecret = "pve-appstore-default-key"
+		return ""
 	}
 	token, err := gh.DecryptToken(tokenEnc, hmacSecret)
 	if err != nil {

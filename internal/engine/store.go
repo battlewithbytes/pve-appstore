@@ -390,6 +390,12 @@ func (s *Store) UpdateInstallStatus(id, status string) error {
 	return err
 }
 
+// DeleteInstall removes an install record from the database.
+func (s *Store) DeleteInstall(id string) error {
+	_, err := s.db.Exec(`DELETE FROM installs WHERE id=?`, id)
+	return err
+}
+
 // GetInstall retrieves a single install by ID.
 func (s *Store) GetInstall(id string) (*Install, error) {
 	row := s.db.QueryRow(`SELECT id, app_id, app_name, app_version, ctid, node, pool, storage, bridge, cores, memory_mb, disk_gb, hostname, ip_address, mac_address, onboot, unprivileged, inputs_json, outputs_json, mounts_json, devices_json, env_vars_json, app_source, cpu_pin, status, created_at FROM installs WHERE id=?`, id)

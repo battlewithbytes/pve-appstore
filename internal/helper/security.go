@@ -228,6 +228,13 @@ func (s *Server) validatePath(path string) error {
 	}
 
 	// Check that resolved path is under an allowed storage root
+	// Also allow /tmp/ for bind-mount host dirs (e.g. /tmp/jellyfin-cache,
+	// /tmp/plex-transcode). This is safe for mkdir/chown but /tmp/ is NOT
+	// in the general validateStoragePath allowlist, so rm operations on
+	// /tmp/ paths are still blocked via validateRmPath.
+	if strings.HasPrefix(resolvedPath, "/tmp/") {
+		return nil
+	}
 	return s.validateStoragePath(resolvedPath)
 }
 
@@ -248,7 +255,6 @@ func (s *Server) validateStoragePath(path string) error {
 		"/tank/",  // common ZFS pool
 		"/data/",  // common generic data dir
 		"/rpool/", // common root ZFS pool
-		"/tmp/",   // transient cache dirs (e.g. plex transcode, jellyfin cache)
 	}
 	allowedRoots = append(allowedRoots, commonStorageRoots...)
 

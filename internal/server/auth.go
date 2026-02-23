@@ -208,6 +208,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		Path:     "/",
 		MaxAge:   int(sessionMaxAge.Seconds()),
 		HttpOnly: true,
+		Secure:   r.TLS != nil,
 		SameSite: http.SameSiteLaxMode,
 	})
 

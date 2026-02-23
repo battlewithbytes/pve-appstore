@@ -617,8 +617,7 @@ func (e *Engine) PurgeInstall(installID string) error {
 	if inst.Status != "uninstalled" {
 		return fmt.Errorf("can only purge uninstalled records (status is %q)", inst.Status)
 	}
-	_, err = e.store.db.Exec("DELETE FROM installs WHERE id=?", inst.ID)
-	return err
+	return e.store.DeleteInstall(inst.ID)
 }
 
 // syncUninstall stops and destroys an existing install synchronously.
@@ -700,7 +699,7 @@ func (e *Engine) syncUninstall(inst *Install, keepVolumeNames []string) ([]Mount
 	}
 
 	// Delete the old install record (the new install will create a fresh one)
-	e.store.db.Exec("DELETE FROM installs WHERE id=?", inst.ID)
+	e.store.DeleteInstall(inst.ID)
 
 	// Return only the mount points that were kept (with VolumeIDs)
 	if hasDetachedVolumes {
@@ -909,7 +908,7 @@ func (e *Engine) runUninstall(job *Job, inst *Install, keepVolumeNames []string,
 		ctx.info("Install record preserved with managed volume(s)")
 	} else {
 		// Remove install record entirely
-		e.store.db.Exec("DELETE FROM installs WHERE id=?", inst.ID)
+		e.store.DeleteInstall(inst.ID)
 	}
 
 	ctx.transition(StateCompleted)

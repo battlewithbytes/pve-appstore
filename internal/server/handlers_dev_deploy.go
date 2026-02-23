@@ -271,7 +271,7 @@ func (s *Server) handleDevImportZip(w http.ResponseWriter, r *http.Request) {
 			rc.Close()
 			continue
 		}
-		io.Copy(out, rc)
+		io.Copy(out, io.LimitReader(rc, 50<<20)) // 50 MB per file max (zip bomb protection)
 		out.Close()
 		rc.Close()
 	}
@@ -431,7 +431,8 @@ func (s *Server) handleDevPublishStack(w http.ResponseWriter, r *http.Request) {
 
 	hmacSecret := s.cfg.Auth.HMACSecret
 	if hmacSecret == "" {
-		hmacSecret = "pve-appstore-default-key"
+		writeError(w, http.StatusInternalServerError, "HMAC secret not configured — cannot decrypt token")
+		return
 	}
 	token, err := gh.DecryptToken(tokenEnc, hmacSecret)
 	if err != nil {
