@@ -67,6 +67,7 @@ permissions:
     - libicu72
   urls:
     - "https://readarr.servarr.com/*"
+    - "http://127.0.0.1:*"
   paths:
     - "/opt/Readarr/"
     - "/var/lib/readarr/"

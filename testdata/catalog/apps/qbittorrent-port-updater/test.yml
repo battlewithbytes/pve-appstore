@@ -1,0 +1,4 @@
+# Test configuration for qBittorrent Port Updater
+# The service will start but fail to connect — that's fine for provisioning test.
+inputs:
+  qbt_password: "testpass123"

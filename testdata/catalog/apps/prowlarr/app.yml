@@ -57,6 +57,7 @@ permissions:
     - libicu72
   urls:
     - "https://prowlarr.servarr.com/*"
+    - "http://127.0.0.1:*"
   paths:
     - "/opt/Prowlarr/"
     - "/var/lib/prowlarr/"

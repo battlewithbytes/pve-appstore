@@ -11,10 +11,13 @@ class AudiobookshelfApp(BaseApp):
         self.apt_install("gnupg", "curl")
 
         # Add Audiobookshelf APT repository
-        self.add_apt_key("https://advplyr.github.io/audiobookshelf-ppa/KEY.gpg")
+        self.add_apt_key(
+            "https://advplyr.github.io/audiobookshelf-ppa/KEY.gpg",
+            "/usr/share/keyrings/audiobookshelf.gpg",
+        )
         self.add_apt_repo(
-            "audiobookshelf",
-            "deb https://advplyr.github.io/audiobookshelf-ppa ./",
+            "deb [signed-by=/usr/share/keyrings/audiobookshelf.gpg] https://advplyr.github.io/audiobookshelf-ppa ./",
+            "audiobookshelf.list",
         )
 
         # Install audiobookshelf from PPA

@@ -1,0 +1,3 @@
+# Test configuration for Readarr
+# Bind mounts require root@pam which the API token may not have.
+skip_bind_mounts: true

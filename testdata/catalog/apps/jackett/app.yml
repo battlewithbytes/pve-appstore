@@ -60,6 +60,7 @@ permissions:
     - "https://github.com/Jackett/Jackett/*"
     - "https://objects.githubusercontent.com/*"
     - "https://api.github.com/*"
+    - "http://127.0.0.1:*"
   paths:
     - "/opt/Jackett/"
     - "/var/lib/jackett/"
@@ -72,6 +73,7 @@ permissions:
   commands:
     - tar
     - chmod
+    - curl
 
 provisioning:
   script: provision/install.py

@@ -73,12 +73,14 @@ permissions:
     - curl
     - audiobookshelf
   apt_repos:
-    - "deb https://advplyr.github.io/audiobookshelf-ppa ./"
+    - "https://advplyr.github.io/audiobookshelf-ppa"
   urls:
     - "https://advplyr.github.io/*"
     - "https://github.com/advplyr/*"
+    - "http://127.0.0.1:*"
   paths:
     - "/usr/share/audiobookshelf/"
+    - "/usr/share/keyrings/"
     - "/etc/default/"
     - "/etc/apt/"
     - "/audiobooks/"
@@ -89,6 +91,7 @@ permissions:
   commands:
     - gpg
     - tee
+    - curl
 
 provisioning:
   script: provision/install.py
