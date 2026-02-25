@@ -236,6 +236,14 @@ func (s *Server) handleFsMkdir(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// TOCTOU mitigation: if the path already exists, reject symlinks
+	if info, err := os.Lstat(req.Path); err == nil {
+		if info.Mode()&os.ModeSymlink != 0 {
+			writeHelperError(w, http.StatusForbidden, "refusing to mkdir through symlink")
+			return
+		}
+	}
+
 	if err := os.MkdirAll(req.Path, 0755); err != nil {
 		writeHelperError(w, http.StatusInternalServerError, fmt.Sprintf("mkdir: %v", err))
 		return
@@ -277,14 +285,17 @@ func (s *Server) handleFsChown(w http.ResponseWriter, r *http.Request) {
 			if d.Type()&os.ModeSymlink != 0 {
 				return nil // skip symlinks entirely
 			}
-			return os.Chown(path, req.UID, req.GID)
+			// Use Lchown to avoid following symlinks that appear during traversal
+			return os.Lchown(path, req.UID, req.GID)
 		})
 		if err != nil {
 			writeHelperError(w, http.StatusInternalServerError, fmt.Sprintf("chown: %v", err))
 			return
 		}
 	} else {
-		if err := os.Chown(req.Path, req.UID, req.GID); err != nil {
+		// Use Lchown (not Chown) to prevent TOCTOU symlink swap attacks.
+		// Lchown operates on the path itself without following symlinks.
+		if err := os.Lchown(req.Path, req.UID, req.GID); err != nil {
 			writeHelperError(w, http.StatusInternalServerError, fmt.Sprintf("chown: %v", err))
 			return
 		}
@@ -306,6 +317,26 @@ func (s *Server) handleFsRm(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := s.validateRmPath(req.Path); err != nil {
 		writeHelperError(w, http.StatusForbidden, err.Error())
+		return
+	}
+
+	// TOCTOU mitigation: re-verify with Lstat immediately before removal.
+	// If the leaf is now a symlink (swapped after validation), resolve the
+	// target and re-check against the deny list.
+	if info, err := os.Lstat(req.Path); err == nil {
+		if info.Mode()&os.ModeSymlink != 0 {
+			target, err := filepath.EvalSymlinks(req.Path)
+			if err != nil {
+				writeHelperError(w, http.StatusForbidden, fmt.Sprintf("refusing to remove dangling symlink: %v", err))
+				return
+			}
+			if err := checkDenyList(target); err != nil {
+				writeHelperError(w, http.StatusForbidden, fmt.Sprintf("symlink target: %v", err))
+				return
+			}
+		}
+	} else if !os.IsNotExist(err) {
+		writeHelperError(w, http.StatusInternalServerError, fmt.Sprintf("stat before rm: %v", err))
 		return
 	}
 

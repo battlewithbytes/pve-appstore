@@ -462,126 +462,17 @@ func (e *Engine) StartInstall(req InstallRequest) (*Job, error) {
 		UpdatedAt:    now,
 	}
 
-	// Determine GPU devices from request profile or manifest profiles.
-	// Validate that device nodes actually exist on the host before adding.
-	if req.GPUProfile != "" && e.cfg.GPU.Policy != config.GPUPolicyNone {
-		if devs, ok := gpuProfiles[req.GPUProfile]; ok {
-			available, missing := validateGPUDevices(devs)
-			if len(missing) > 0 && app.GPU.Required {
-				return nil, fmt.Errorf("GPU profile %q requires device(s) not found on host: %s", req.GPUProfile, strings.Join(missing, ", "))
-			}
-			job.Devices = available
-		} else {
-			return nil, fmt.Errorf("invalid GPU profile requested: %s", req.GPUProfile)
-		}
-	} else if len(app.GPU.Profiles) > 0 && e.cfg.GPU.Policy != config.GPUPolicyNone {
-		// Auto-select from manifest if no profile requested
-		for _, profile := range app.GPU.Profiles {
-			if devs, ok := gpuProfiles[profile]; ok {
-				available, missing := validateGPUDevices(devs)
-				if len(missing) > 0 && app.GPU.Required {
-					return nil, fmt.Errorf("GPU required but device(s) not found on host: %s", strings.Join(missing, ", "))
-				}
-				job.Devices = available
-				break // use first matching profile
-			}
-			// If app.GPU.Required is true, and the profile is not found, it should error here,
-			// but we can't do that as the loop `break`s after the first matching profile.
-			// The manifest validation should catch invalid profiles anyway.
-		}
+	// Resolve GPU devices and mount points
+	devices, err := resolveGPUDevices(req, app, e.cfg)
+	if err != nil {
+		return nil, err
 	}
-
-	// Filter devices against allowed list when policy is allowlist
+	job.Devices = devices
 	if len(job.Devices) > 0 && e.cfg.GPU.Policy == config.GPUPolicyAllowlist {
 		job.Devices = filterAllowedDevices(job.Devices, e.cfg.GPU.AllowedDevices)
 	}
 
-	if job.Inputs == nil {
-		job.Inputs = make(map[string]string)
-	}
-
-	// Apply input defaults from manifest
-	for _, input := range app.Inputs {
-		if _, exists := job.Inputs[input.Key]; !exists && input.Default != nil {
-			job.Inputs[input.Key] = fmt.Sprintf("%v", input.Default)
-		}
-	}
-
-	// Build mount points from manifest volumes + request bind mounts + extra mounts
-	mpIndex := 0
-	for _, vol := range app.Volumes {
-		volType := vol.Type
-		if volType == "" {
-			volType = "volume"
-		}
-		mp := MountPoint{
-			Index:     mpIndex,
-			Name:      vol.Name,
-			Type:      volType,
-			MountPath: vol.MountPath,
-			SizeGB:    vol.SizeGB,
-			ReadOnly:  vol.ReadOnly,
-		}
-		// For volume types: allow user override to bind mount, or per-volume storage
-		if volType == "volume" {
-			if hp, ok := req.BindMounts[vol.Name]; ok && hp != "" {
-				// User wants to use a host path instead of Proxmox volume
-				mp.Type = "bind"
-				mp.HostPath = hp
-				mp.SizeGB = 0
-				mp.Storage = ""
-			} else if vs, ok := req.VolumeStorages[vol.Name]; ok && vs != "" {
-				mp.Storage = vs
-			}
-		}
-		if volType == "bind" {
-			// Get host path from request, fall back to default.
-			// An explicit empty string in BindMounts ("media": "") clears the
-			// default, allowing optional bind mounts to be skipped at request time.
-			if hp, ok := req.BindMounts[vol.Name]; ok {
-				mp.HostPath = hp // may be empty to clear default
-			} else if vol.DefaultHostPath != "" {
-				mp.HostPath = vol.DefaultHostPath
-			}
-			// Skip optional bind mounts with no host path
-			if !vol.Required && mp.HostPath == "" {
-				continue
-			}
-		}
-		job.MountPoints = append(job.MountPoints, mp)
-		mpIndex++
-	}
-	// Add extra user-defined mounts
-	for _, em := range req.ExtraMounts {
-		if em.HostPath == "" || em.MountPath == "" {
-			continue
-		}
-		job.MountPoints = append(job.MountPoints, MountPoint{
-			Index:     mpIndex,
-			Name:      fmt.Sprintf("extra-%d", mpIndex),
-			Type:      "bind",
-			MountPath: em.MountPath,
-			HostPath:  em.HostPath,
-			ReadOnly:  em.ReadOnly,
-		})
-		mpIndex++
-	}
-
-	// If replacing with keep_data, carry forward preserved volume IDs so they get
-	// reattached rather than recreated. Match by volume name and mount path.
-	if len(preservedMountPoints) > 0 {
-		preserved := make(map[string]MountPoint)
-		for _, mp := range preservedMountPoints {
-			preserved[mp.Name] = mp
-		}
-		for i := range job.MountPoints {
-			if job.MountPoints[i].Type == "volume" {
-				if old, ok := preserved[job.MountPoints[i].Name]; ok && old.VolumeID != "" {
-					job.MountPoints[i].VolumeID = old.VolumeID
-				}
-			}
-		}
-	}
+	job.MountPoints = buildMountPoints(app, req, preservedMountPoints)
 
 	if err := e.store.CreateJob(job); err != nil {
 		return nil, fmt.Errorf("creating job: %w", err)
@@ -606,7 +497,108 @@ func (e *Engine) StartInstall(req InstallRequest) (*Job, error) {
 	return job, nil
 }
 
-// Uninstall stops and destroys a container for an installed app.
+// resolveGPUDevices determines GPU devices from the request profile or manifest profiles.
+func resolveGPUDevices(req InstallRequest, app *catalog.AppManifest, cfg *config.Config) ([]DevicePassthrough, error) {
+	if cfg.GPU.Policy == config.GPUPolicyNone {
+		return nil, nil
+	}
+	if req.GPUProfile != "" {
+		devs, ok := gpuProfiles[req.GPUProfile]
+		if !ok {
+			return nil, fmt.Errorf("invalid GPU profile requested: %s", req.GPUProfile)
+		}
+		available, missing := validateGPUDevices(devs)
+		if len(missing) > 0 && app.GPU.Required {
+			return nil, fmt.Errorf("GPU profile %q requires device(s) not found on host: %s", req.GPUProfile, strings.Join(missing, ", "))
+		}
+		return available, nil
+	}
+	if len(app.GPU.Profiles) > 0 {
+		for _, profile := range app.GPU.Profiles {
+			if devs, ok := gpuProfiles[profile]; ok {
+				available, missing := validateGPUDevices(devs)
+				if len(missing) > 0 && app.GPU.Required {
+					return nil, fmt.Errorf("GPU required but device(s) not found on host: %s", strings.Join(missing, ", "))
+				}
+				return available, nil
+			}
+		}
+	}
+	return nil, nil
+}
+
+// buildMountPoints assembles mount points from manifest volumes, bind mount
+// overrides, extra mounts, and preserved volumes from a replaced install.
+func buildMountPoints(app *catalog.AppManifest, req InstallRequest, preserved []MountPoint) []MountPoint {
+	var mps []MountPoint
+	mpIndex := 0
+	for _, vol := range app.Volumes {
+		volType := vol.Type
+		if volType == "" {
+			volType = "volume"
+		}
+		mp := MountPoint{
+			Index:     mpIndex,
+			Name:      vol.Name,
+			Type:      volType,
+			MountPath: vol.MountPath,
+			SizeGB:    vol.SizeGB,
+			ReadOnly:  vol.ReadOnly,
+		}
+		if volType == "volume" {
+			if hp, ok := req.BindMounts[vol.Name]; ok && hp != "" {
+				mp.Type = "bind"
+				mp.HostPath = hp
+				mp.SizeGB = 0
+				mp.Storage = ""
+			} else if vs, ok := req.VolumeStorages[vol.Name]; ok && vs != "" {
+				mp.Storage = vs
+			}
+		}
+		if volType == "bind" {
+			if hp, ok := req.BindMounts[vol.Name]; ok {
+				mp.HostPath = hp
+			} else if vol.DefaultHostPath != "" {
+				mp.HostPath = vol.DefaultHostPath
+			}
+			if !vol.Required && mp.HostPath == "" {
+				continue
+			}
+		}
+		mps = append(mps, mp)
+		mpIndex++
+	}
+	for _, em := range req.ExtraMounts {
+		if em.HostPath == "" || em.MountPath == "" {
+			continue
+		}
+		mps = append(mps, MountPoint{
+			Index:     mpIndex,
+			Name:      fmt.Sprintf("extra-%d", mpIndex),
+			Type:      "bind",
+			MountPath: em.MountPath,
+			HostPath:  em.HostPath,
+			ReadOnly:  em.ReadOnly,
+		})
+		mpIndex++
+	}
+	// Carry forward preserved volume IDs from a replaced install
+	if len(preserved) > 0 {
+		pm := make(map[string]MountPoint, len(preserved))
+		for _, mp := range preserved {
+			pm[mp.Name] = mp
+		}
+		for i := range mps {
+			if mps[i].Type == "volume" {
+				if old, ok := pm[mps[i].Name]; ok && old.VolumeID != "" {
+					mps[i].VolumeID = old.VolumeID
+				}
+			}
+		}
+	}
+	return mps
+}
+
 // PurgeInstall deletes an "uninstalled" install record from the database.
 // Only works on installs with status "uninstalled" (container already destroyed).
 func (e *Engine) PurgeInstall(installID string) error {

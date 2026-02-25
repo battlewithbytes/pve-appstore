@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"sync"
 )
 
 const (
@@ -41,8 +42,27 @@ type HelperClient interface {
 	ApplyUpdate() error
 }
 
-// Helper is the global helper client, set at startup if the helper socket exists.
-var Helper HelperClient
+// helper holds the global helper client, set once at startup via SetHelper.
+var (
+	helper   HelperClient
+	helperMu sync.RWMutex
+)
+
+// SetHelper sets the global helper client. Safe for concurrent use.
+// Should be called once at startup before any pct operations.
+func SetHelper(h HelperClient) {
+	helperMu.Lock()
+	helper = h
+	helperMu.Unlock()
+}
+
+// GetHelper returns the current helper client. Safe for concurrent use.
+func GetHelper() HelperClient {
+	helperMu.RLock()
+	h := helper
+	helperMu.RUnlock()
+	return h
+}
 
 // SudoNsenterCmd builds an exec.Cmd that runs:
 //
@@ -93,8 +113,8 @@ var (
 // RemoveAll deletes a path on the real host filesystem.
 // Uses the helper daemon when available, otherwise falls back to sudo.
 func RemoveAll(path string) error {
-	if Helper != nil {
-		return Helper.RemoveAll(path)
+	if h := GetHelper(); h != nil {
+		return h.RemoveAll(path)
 	}
 	cmd := SudoNsenterCmd("/usr/bin/rm", "-rf", path)
 	if out, err := cmd.CombinedOutput(); err != nil {
@@ -106,8 +126,8 @@ func RemoveAll(path string) error {
 // Mkdir creates a directory on the real host filesystem.
 // Uses the helper daemon when available, otherwise falls back to sudo.
 func Mkdir(path string) error {
-	if Helper != nil {
-		return Helper.Mkdir(path)
+	if h := GetHelper(); h != nil {
+		return h.Mkdir(path)
 	}
 	cmd := SudoNsenterCmd("/usr/bin/mkdir", "-p", path)
 	if out, err := cmd.CombinedOutput(); err != nil {
@@ -119,8 +139,8 @@ func Mkdir(path string) error {
 // Chown changes ownership of a path on the real host filesystem.
 // Uses the helper daemon when available, otherwise falls back to sudo.
 func Chown(path string, uid, gid int, recursive bool) error {
-	if Helper != nil {
-		return Helper.Chown(path, uid, gid, recursive)
+	if h := GetHelper(); h != nil {
+		return h.Chown(path, uid, gid, recursive)
 	}
 	ownership := fmt.Sprintf("%d:%d", uid, gid)
 	args := []string{}
@@ -138,8 +158,8 @@ func Chown(path string, uid, gid int, recursive bool) error {
 // Set runs `pct set <ctid> <args...>` to modify container configuration.
 // Uses the helper daemon when available for validated operations.
 func Set(ctid int, args ...string) error {
-	if Helper != nil && len(args) == 2 {
-		return Helper.PctSet(ctid, args[0], args[1])
+	if h := GetHelper(); h != nil && len(args) == 2 {
+		return h.PctSet(ctid, args[0], args[1])
 	}
 	cmdArgs := append([]string{"set", strconv.Itoa(ctid)}, args...)
 	out, err := pctRun(cmdArgs...)
@@ -161,8 +181,8 @@ func Exec(ctid int, command []string) (*ExecResult, error) {
 	if len(command) == 0 {
 		return nil, fmt.Errorf("empty command")
 	}
-	if Helper != nil {
-		output, exitCode, err := Helper.PctExec(ctid, command)
+	if h := GetHelper(); h != nil {
+		output, exitCode, err := h.PctExec(ctid, command)
 		if err != nil {
 			return nil, err
 		}
@@ -179,8 +199,8 @@ func ExecStream(ctid int, command []string, onLine func(line string)) (*ExecResu
 		return nil, fmt.Errorf("empty command")
 	}
 
-	if Helper != nil {
-		output, exitCode, err := Helper.PctExecStream(ctid, command, onLine)
+	if h := GetHelper(); h != nil {
+		output, exitCode, err := h.PctExecStream(ctid, command, onLine)
 		if err != nil {
 			return nil, err
 		}
@@ -230,8 +250,8 @@ func ExecStream(ctid int, command []string, onLine func(line string)) (*ExecResu
 // Push copies a file from the host into the container.
 // Uses the helper daemon when available.
 func Push(ctid int, src, dst string, perms string) error {
-	if Helper != nil {
-		return Helper.PctPush(ctid, src, dst, perms)
+	if h := GetHelper(); h != nil {
+		return h.PctPush(ctid, src, dst, perms)
 	}
 	args := []string{"push", strconv.Itoa(ctid), src, dst}
 	if perms != "" {
@@ -251,8 +271,8 @@ func Push(ctid int, src, dst string, perms string) error {
 // AppendConf appends raw LXC config lines to /etc/pve/lxc/<ctid>.conf.
 // Uses the helper daemon when available, otherwise falls back to sudo tee -a.
 func AppendConf(ctid int, lines []string) error {
-	if Helper != nil {
-		return Helper.AppendConf(ctid, lines)
+	if h := GetHelper(); h != nil {
+		return h.AppendConf(ctid, lines)
 	}
 	confPath := fmt.Sprintf("/etc/pve/lxc/%d.conf", ctid)
 	cmd := SudoNsenterCmd("/usr/bin/tee", "-a", confPath)

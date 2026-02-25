@@ -56,8 +56,8 @@ func (s *Server) handleApplyUpdate(w http.ResponseWriter, r *http.Request) {
 
 	go func() {
 		time.Sleep(100 * time.Millisecond)
-		if pct.Helper != nil {
-			pct.Helper.ApplyUpdate()
+		if h := pct.GetHelper(); h != nil {
+			h.ApplyUpdate()
 		} else {
 			updater.ApplyUpdateSudo(updater.TempBinary)
 		}

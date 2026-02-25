@@ -410,9 +410,8 @@ func stepValidatePlacement(ctx *installContext) error {
 	}
 
 	// Verify storage exists on the host
-	bgCtx := context.Background()
-	if _, err := ctx.engine.cm.GetStorageInfo(bgCtx, ctx.job.Storage); err != nil {
-		available, _ := ctx.engine.cm.ListStorages(bgCtx)
+	if _, err := ctx.engine.cm.GetStorageInfo(ctx.ctx, ctx.job.Storage); err != nil {
+		available, _ := ctx.engine.cm.ListStorages(ctx.ctx)
 		names := make([]string, len(available))
 		for i, s := range available {
 			names[i] = s.ID
@@ -421,7 +420,7 @@ func stepValidatePlacement(ctx *installContext) error {
 	}
 
 	// Verify bridge exists on the host
-	bridges, err := ctx.engine.cm.ListBridges(bgCtx)
+	bridges, err := ctx.engine.cm.ListBridges(ctx.ctx)
 	if err == nil {
 		found := false
 		for _, b := range bridges {
@@ -450,7 +449,7 @@ func stepAllocateCTID(ctx *installContext) error {
 	ctx.engine.ctidMu.Lock()
 	ctx.ctidLocked = true
 
-	ctid, err := ctx.engine.cm.AllocateCTID(context.Background())
+	ctid, err := ctx.engine.cm.AllocateCTID(ctx.ctx)
 	if err != nil {
 		ctx.engine.ctidMu.Unlock()
 		ctx.ctidLocked = false
@@ -474,7 +473,7 @@ func stepCreateContainer(ctx *installContext) error {
 	// full volid paths — auto-downloads if not found locally)
 	template := ctx.manifest.LXC.OSTemplate
 	ctx.info("Resolving template %q (will download if needed)...", template)
-	template = ctx.engine.cm.ResolveTemplate(context.Background(), template, ctx.job.Storage)
+	template = ctx.engine.cm.ResolveTemplate(ctx.ctx, template, ctx.job.Storage)
 
 	opts := CreateOptions{
 		CTID:         ctx.job.CTID,
@@ -526,7 +525,7 @@ func stepCreateContainer(ctx *installContext) error {
 	ctx.info("Creating container %d (template=%s, %d cores, %d MB, %d GB)",
 		opts.CTID, template, opts.Cores, opts.MemoryMB, opts.RootFSSize)
 
-	if err := ctx.engine.cm.Create(context.Background(), opts); err != nil {
+	if err := ctx.engine.cm.Create(ctx.ctx, opts); err != nil {
 		return err
 	}
 
@@ -582,7 +581,7 @@ func stepReadVolumeIDs(ctx *installContext) error {
 		return nil
 	}
 
-	config, err := ctx.engine.cm.GetConfig(context.Background(), ctx.job.CTID)
+	config, err := ctx.engine.cm.GetConfig(ctx.ctx, ctx.job.CTID)
 	if err != nil {
 		ctx.warn("Failed to read container config for volume IDs: %v", err)
 		return nil // non-fatal
@@ -711,7 +710,7 @@ func stepSetupGPURuntime(ctx *installContext) error {
 
 func stepStartContainer(ctx *installContext) error {
 	ctx.info("Starting container %d...", ctx.job.CTID)
-	if err := ctx.engine.cm.Start(context.Background(), ctx.job.CTID); err != nil {
+	if err := ctx.engine.cm.Start(ctx.ctx, ctx.job.CTID); err != nil {
 		return err
 	}
 	ctx.info("Container %d started", ctx.job.CTID)

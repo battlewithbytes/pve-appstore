@@ -60,7 +60,7 @@ func (s *Server) handleTerminalForCTID(w http.ResponseWriter, r *http.Request, c
 	}
 
 	// Use helper daemon if available for terminal
-	if pctpkg.Helper != nil {
+	if pctpkg.GetHelper() != nil {
 		s.handleTerminalViaHelper(conn, ctx, ctid, shell)
 		return
 	}
@@ -138,7 +138,7 @@ func (s *Server) handleTerminalForCTID(w http.ResponseWriter, r *http.Request, c
 
 // handleTerminalViaHelper bridges a WebSocket to the helper daemon's terminal.
 func (s *Server) handleTerminalViaHelper(conn *websocket.Conn, ctx context.Context, ctid int, shell string) {
-	termConn, err := pctpkg.Helper.StartTerminal(ctid, shell)
+	termConn, err := pctpkg.GetHelper().StartTerminal(ctid, shell)
 	if err != nil {
 		conn.Close(websocket.StatusInternalError, fmt.Sprintf("helper terminal: %v", err))
 		return

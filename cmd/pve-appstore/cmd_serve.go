@@ -82,7 +82,7 @@ var serveCmd = &cobra.Command{
 			if _, err := os.Stat(helperSocket); err == nil {
 				helperClient := helper.NewClient(helperSocket)
 				if err := helperClient.Health(); err == nil {
-					pct.Helper = helperClient
+					pct.SetHelper(helperClient)
 					fmt.Printf("  helper:  connected (%s)\n", helperSocket)
 					helperConnected = true
 					break

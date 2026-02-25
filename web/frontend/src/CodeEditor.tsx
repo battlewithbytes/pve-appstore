@@ -61,11 +61,12 @@ interface SDKDocEntry {
   description: string // first paragraph of docstring
 }
 
-// Module-level state populated asynchronously from the API.
+// Lazy-loaded state populated from the API on first use.
 // Completions and hover handlers read from these — they return empty
 // results until the fetch completes (typically <100ms on localhost).
 let sdkCompletionOptions: { label: string; type: string; detail: string; info: string }[] = []
 let sdkHoverDocs: Record<string, { signature: string; description: string }> = {}
+let sdkDocsFetched = false
 
 function extractDetail(sig: string): string {
   const start = sig.indexOf('(')
@@ -79,22 +80,27 @@ function extractDetail(sig: string): string {
   return sig.substring(start)
 }
 
-// Fetch SDK docs once when module loads — populates completions + hover
-fetch('/api/dev/sdk-docs')
-  .then(r => r.ok ? r.json() as Promise<SDKDocEntry[]> : [])
-  .then(docs => {
-    sdkCompletionOptions = docs.map(d => ({
-      label: 'self.' + d.name,
-      type: 'method',
-      detail: extractDetail(d.signature),
-      info: d.description,
-    }))
-    sdkHoverDocs = {}
-    for (const d of docs) {
-      sdkHoverDocs[d.name] = { signature: d.signature, description: d.description }
-    }
-  })
-  .catch(() => {})
+// Fetch SDK docs lazily on first editor mount — avoids network requests
+// when the CodeEditor module is imported but dev mode is not active.
+function ensureSDKDocs() {
+  if (sdkDocsFetched) return
+  sdkDocsFetched = true
+  fetch('/api/dev/sdk-docs')
+    .then(r => r.ok ? r.json() as Promise<SDKDocEntry[]> : [])
+    .then(docs => {
+      sdkCompletionOptions = docs.map(d => ({
+        label: 'self.' + d.name,
+        type: 'method',
+        detail: extractDetail(d.signature),
+        info: d.description,
+      }))
+      sdkHoverDocs = {}
+      for (const d of docs) {
+        sdkHoverDocs[d.name] = { signature: d.signature, description: d.description }
+      }
+    })
+    .catch(() => {})
+}
 
 // --- OS template completions for YAML manifest files ---
 
@@ -105,18 +111,23 @@ interface OSTemplateEntry {
 }
 
 let osTemplateOptions: { label: string; type: string; detail: string }[] = []
+let osTemplatesFetched = false
 
-// Fetch available OS templates once when module loads
-fetch('/api/dev/ostemplates')
-  .then(r => r.ok ? r.json() as Promise<{ templates: OSTemplateEntry[] }> : { templates: [] })
-  .then(data => {
-    osTemplateOptions = (data.templates || []).map(t => ({
-      label: t.short_name,
-      type: 'keyword',
-      detail: t.template,
-    }))
-  })
-  .catch(() => {})
+// Fetch available OS templates lazily on first editor mount
+function ensureOSTemplates() {
+  if (osTemplatesFetched) return
+  osTemplatesFetched = true
+  fetch('/api/dev/ostemplates')
+    .then(r => r.ok ? r.json() as Promise<{ templates: OSTemplateEntry[] }> : { templates: [] })
+    .then(data => {
+      osTemplateOptions = (data.templates || []).map(t => ({
+        label: t.short_name,
+        type: 'keyword',
+        detail: t.template,
+      }))
+    })
+    .catch(() => {})
+}
 
 function yamlCompletions(context: CompletionContext): CompletionResult | null {
   const line = context.state.doc.lineAt(context.pos)
@@ -313,6 +324,10 @@ export function CodeEditor({ value, onChange, filename, onSave, gotoLine }: Code
   // Create editor on mount
   useEffect(() => {
     if (!containerRef.current) return
+
+    // Lazily fetch SDK docs and OS templates on first editor mount
+    ensureSDKDocs()
+    ensureOSTemplates()
 
     const isPython = filename.endsWith('.py')
     const isYaml = filename.endsWith('.yml') || filename.endsWith('.yaml')

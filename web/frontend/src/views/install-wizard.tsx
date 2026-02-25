@@ -21,6 +21,9 @@ function countPinnedCPUs(pin: string): number {
   return count
 }
 
+let _nextId = 1
+function uid() { return _nextId++ }
+
 export function InstallWizard({ app, onClose, replaceExisting, keepVolumes, existingInstall }: { app: AppDetail; onClose: () => void; replaceExisting?: boolean; keepVolumes?: string[]; existingInstall?: Install | null }) {
   useEscapeKey(onClose)
   const prev = existingInstall // shorthand for previous install values
@@ -66,7 +69,7 @@ export function InstallWizard({ app, onClose, replaceExisting, keepVolumes, exis
     app.volumes?.filter(v => v.type === 'bind' && v.default_host_path).forEach(v => { d[v.name] = v.default_host_path! })
     return d
   })
-  const [extraMounts, setExtraMounts] = useState<{ host_path: string; mount_path: string; read_only: boolean }[]>([])
+  const [extraMounts, setExtraMounts] = useState<{ _id: number; host_path: string; mount_path: string; read_only: boolean }[]>([])
   const [storageInputMounts, setStorageInputMounts] = useState<Record<string, string>>({})
   const [volumeStorages, setVolumeStorages] = useState<Record<string, string>>(() => {
     // Pre-fill per-volume storage from existing install
@@ -80,10 +83,10 @@ export function InstallWizard({ app, onClose, replaceExisting, keepVolumes, exis
     return {}
   })
   const [volumeBindOverrides, setVolumeBindOverrides] = useState<Record<string, string>>({})
-  const [customVars, setCustomVars] = useState<{key: string; value: string}[]>([])
+  const [customVars, setCustomVars] = useState<{_id: number; key: string; value: string}[]>([])
   const [devices, setDevices] = useState<DevicePassthrough[]>(prev?.devices || [])
   const [envVars] = useState<Record<string, string>>(prev?.env_vars || {})
-  const [envVarList, setEnvVarList] = useState<{key: string; value: string}[]>([])
+  const [envVarList, setEnvVarList] = useState<{_id: number; key: string; value: string}[]>([])
   const [browseTarget, setBrowseTarget] = useState<string | null>(null)
   const [browseInitPath, setBrowseInitPath] = useState('/')
   const [availableGPUs, setAvailableGPUs] = useState<GPUInfo[]>([])
@@ -298,7 +301,7 @@ export function InstallWizard({ app, onClose, replaceExisting, keepVolumes, exis
       }
       if (Object.keys(vs).length > 0) req.volume_storages = vs
       // Merge storage input mounts into extra mounts
-      const allExtras = [...extraMounts.filter(em => em.host_path && em.mount_path)]
+      const allExtras = extraMounts.filter(em => em.host_path && em.mount_path).map(({ _id, ...rest }) => rest)
       for (const [key, hostPath] of Object.entries(storageInputMounts)) {
         if (hostPath) {
           const inp = app.inputs?.find(i => i.key === key)
@@ -493,7 +496,7 @@ export function InstallWizard({ app, onClose, replaceExisting, keepVolumes, exis
 
             {/* Extra user-added mounts (stacked card layout) */}
             {extraMounts.map((em, i) => (
-              <div key={i} className="bg-bg-secondary rounded-lg p-3 mb-2">
+              <div key={em._id} className="bg-bg-secondary rounded-lg p-3 mb-2">
                 <div className="flex items-center justify-between mb-2">
                   <span className="text-xs text-text-muted font-mono">Extra Path #{i + 1}</span>
                   <button type="button" onClick={() => setExtraMounts(p => p.filter((_, j) => j !== i))}
@@ -518,7 +521,7 @@ export function InstallWizard({ app, onClose, replaceExisting, keepVolumes, exis
               </div>
             ))}
 
-            <button type="button" onClick={() => setExtraMounts(p => [...p, { host_path: '', mount_path: '', read_only: false }])}
+            <button type="button" onClick={() => setExtraMounts(p => [...p, { _id: uid(), host_path: '', mount_path: '', read_only: false }])}
               className="text-primary text-xs font-mono bg-transparent border-none cursor-pointer hover:underline p-0">
               + Add Path
             </button>
@@ -605,7 +608,7 @@ export function InstallWizard({ app, onClose, replaceExisting, keepVolumes, exis
         {/* Custom variables */}
         <SectionTitle>Custom Config</SectionTitle>
         {customVars.map((v, i) => (
-          <div key={i} className="flex gap-2 mb-1.5 items-center">
+          <div key={v._id} className="flex gap-2 mb-1.5 items-center">
             <input type="text" value={v.key} onChange={e => setCustomVars(p => p.map((x, j) => j === i ? { ...x, key: e.target.value } : x))} placeholder="KEY"
               className="w-1/3 px-3 py-2 bg-bg-secondary border border-border rounded-md text-text-primary text-sm outline-none focus:border-primary font-mono placeholder:text-text-muted uppercase" />
             <input type="text" value={v.value} onChange={e => setCustomVars(p => p.map((x, j) => j === i ? { ...x, value: e.target.value } : x))} placeholder="value"
@@ -614,7 +617,7 @@ export function InstallWizard({ app, onClose, replaceExisting, keepVolumes, exis
               className="text-status-stopped text-sm bg-transparent border-none cursor-pointer hover:text-status-stopped/80 leading-none px-1">&times;</button>
           </div>
         ))}
-        <button type="button" onClick={() => setCustomVars(p => [...p, { key: '', value: '' }])}
+        <button type="button" onClick={() => setCustomVars(p => [...p, { _id: uid(), key: '', value: '' }])}
           className="text-primary text-xs font-mono bg-transparent border-none cursor-pointer hover:underline p-0">
           + Add Variable
         </button>
@@ -690,7 +693,7 @@ export function InstallWizard({ app, onClose, replaceExisting, keepVolumes, exis
             )}
             {/* Manual device entries */}
             {devices.map((dev, i) => (
-              <div key={i} className="flex gap-2 mb-1.5 items-center">
+              <div key={`dev-${dev.path || i}`} className="flex gap-2 mb-1.5 items-center">
                 <input type="text" value={dev.path} onChange={e => setDevices(p => p.map((x, j) => j === i ? { ...x, path: e.target.value } : x))} placeholder="/dev/dri/renderD128"
                   className="flex-1 px-3 py-2 bg-bg-secondary border border-border rounded-md text-text-primary text-sm outline-none focus:border-primary font-mono placeholder:text-text-muted" readOnly={availableGPUs.some(g => g.path === dev.path || dev.path === '/dev/nvidiactl' || dev.path === '/dev/nvidia-uvm')} />
                 {!availableGPUs.some(g => g.path === dev.path) && dev.path !== '/dev/nvidiactl' && dev.path !== '/dev/nvidia-uvm' && (
@@ -725,7 +728,7 @@ export function InstallWizard({ app, onClose, replaceExisting, keepVolumes, exis
           <>
             {!((app.provisioning as { env?: Record<string, string> }).env && Object.keys((app.provisioning as { env?: Record<string, string> }).env || {}).length > 0) && <SectionTitle>Environment Variables</SectionTitle>}
             {envVarList.map((ev, i) => (
-              <div key={i} className="flex gap-2 mb-1.5 items-center">
+              <div key={ev._id} className="flex gap-2 mb-1.5 items-center">
                 <input type="text" value={ev.key} onChange={e => setEnvVarList(p => p.map((x, j) => j === i ? { ...x, key: e.target.value } : x))} placeholder="ENV_KEY"
                   className="w-1/3 px-3 py-2 bg-bg-secondary border border-border rounded-md text-text-primary text-sm outline-none focus:border-primary font-mono placeholder:text-text-muted uppercase" />
                 <input type="text" value={ev.value} onChange={e => setEnvVarList(p => p.map((x, j) => j === i ? { ...x, value: e.target.value } : x))} placeholder="value"
@@ -736,7 +739,7 @@ export function InstallWizard({ app, onClose, replaceExisting, keepVolumes, exis
             ))}
           </>
         )}
-        <button type="button" onClick={() => setEnvVarList(p => [...p, { key: '', value: '' }])}
+        <button type="button" onClick={() => setEnvVarList(p => [...p, { _id: uid(), key: '', value: '' }])}
           className="text-primary text-xs font-mono bg-transparent border-none cursor-pointer hover:underline p-0 mt-1">
           + Add Env Var
         </button>
