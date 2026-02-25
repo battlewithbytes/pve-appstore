@@ -35,8 +35,8 @@ func TestHealthEndpoint(t *testing.T) {
 		t.Errorf("node = %v, want %q", body["node"], "testnode")
 	}
 	count := body["app_count"].(float64)
-	if count != 12 {
-		t.Errorf("app_count = %v, want 12", count)
+	if count != 17 {
+		t.Errorf("app_count = %v, want 17", count)
 	}
 }
 
@@ -52,12 +52,12 @@ func TestListAppsEndpoint(t *testing.T) {
 
 	body := decodeJSON(t, w)
 	total := body["total"].(float64)
-	if total != 12 {
-		t.Errorf("total = %v, want 12", total)
+	if total != 17 {
+		t.Errorf("total = %v, want 17", total)
 	}
 	apps := body["apps"].([]interface{})
-	if len(apps) != 12 {
-		t.Errorf("apps count = %d, want 12", len(apps))
+	if len(apps) != 17 {
+		t.Errorf("apps count = %d, want 17", len(apps))
 	}
 }
 
@@ -119,9 +119,9 @@ func TestListAppsCategoryFilter(t *testing.T) {
 
 	body := decodeJSON(t, w)
 	total := body["total"].(float64)
-	// jellyfin, plex, and qbittorrent are in "media"
-	if total != 3 {
-		t.Errorf("total = %v, want 3", total)
+	// jellyfin, plex, qbittorrent, prowlarr, jackett, readarr, audiobookshelf are in "media"
+	if total != 7 {
+		t.Errorf("total = %v, want 7", total)
 	}
 }
 
@@ -138,10 +138,10 @@ func TestListAppsSort(t *testing.T) {
 	if len(apps) < 2 {
 		t.Fatal("expected at least 2 apps")
 	}
-	// Verify sorted by name (first should be Crawl4AI)
+	// Verify sorted by name (first should be Audiobookshelf)
 	first := apps[0].(map[string]interface{})
-	if first["name"] != "Crawl4AI" {
-		t.Errorf("first app = %q, want %q", first["name"], "Crawl4AI")
+	if first["name"] != "Audiobookshelf" {
+		t.Errorf("first app = %q, want %q", first["name"], "Audiobookshelf")
 	}
 }
 

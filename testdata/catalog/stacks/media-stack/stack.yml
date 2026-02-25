@@ -1,0 +1,30 @@
+id: media-stack
+name: Media Download Stack
+description: VPN-protected media download stack with indexers, book management, and audiobook server
+version: "1.0.0"
+categories:
+  - media
+tags:
+  - vpn
+  - torrent
+  - indexer
+  - audiobook
+  - servarr
+apps:
+  - app_id: gluetun
+  - app_id: qbittorrent
+  - app_id: prowlarr
+  - app_id: jackett
+  - app_id: readarr
+  - app_id: audiobookshelf
+  - app_id: qbittorrent-port-updater
+    inputs:
+      qbt_host: "127.0.0.1"
+      gluetun_host: "127.0.0.1"
+lxc:
+  ostemplate: debian-12
+  defaults:
+    unprivileged: false
+    cores: 4
+    memory_mb: 4096
+    disk_gb: 16

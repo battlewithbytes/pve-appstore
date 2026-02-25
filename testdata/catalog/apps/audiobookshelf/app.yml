@@ -1,0 +1,104 @@
+id: audiobookshelf
+name: Audiobookshelf
+description: Self-hosted audiobook and podcast server with a sleek web player, mobile apps, and multi-user library management.
+overview: |
+  Audiobookshelf is a self-hosted audiobook and podcast server that provides a beautiful web
+  interface and native mobile apps for managing and listening to your media collection. It
+  supports M4B, MP3, M4A, FLAC, and many other audio formats.
+
+  Features include multi-user support with per-user progress tracking, chapter detection,
+  series and collection grouping, podcast RSS feed subscriptions with automatic episode
+  downloads, bookmarks, sleep timer, and playback speed controls.
+
+  The server handles metadata fetching from Audible, iTunes, and other sources. Library
+  scanning is automatic and non-destructive — your files stay organized however you like.
+  After installation, access the WebUI to create your first user account and add library folders.
+version: "2.19.4"
+categories:
+  - media
+tags:
+  - audiobook
+  - podcast
+  - media-server
+  - streaming
+homepage: https://www.audiobookshelf.org
+license: GPL-3.0
+maintainers:
+  - PVE App Store
+
+official: true
+lxc:
+  ostemplate: debian-12
+  defaults:
+    unprivileged: true
+    cores: 2
+    memory_mb: 1024
+    disk_gb: 8
+    features:
+      - nesting
+    onboot: true
+
+volumes:
+  - name: audiobooks
+    type: bind
+    mount_path: /audiobooks
+    label: Audiobooks Library
+    default_host_path: /mnt/storage/audiobooks
+    required: false
+    description: Root folder for your audiobook library
+  - name: podcasts
+    type: bind
+    mount_path: /podcasts
+    label: Podcasts Library
+    default_host_path: /mnt/storage/podcasts
+    required: false
+    description: Root folder for podcast downloads
+
+inputs:
+  - key: port
+    label: Server Port
+    type: number
+    default: 13378
+    required: false
+    group: Network
+    description: Port for the Audiobookshelf web interface.
+    help: Default 13378; must be between 1024-65535
+    validation:
+      min: 1024
+      max: 65535
+
+permissions:
+  packages:
+    - gnupg
+    - curl
+    - audiobookshelf
+  apt_repos:
+    - "deb https://advplyr.github.io/audiobookshelf-ppa ./"
+  urls:
+    - "https://advplyr.github.io/*"
+    - "https://github.com/advplyr/*"
+  paths:
+    - "/usr/share/audiobookshelf/"
+    - "/etc/default/"
+    - "/etc/apt/"
+    - "/audiobooks/"
+    - "/podcasts/"
+    - "/etc/systemd/system/"
+  services:
+    - audiobookshelf
+  commands:
+    - gpg
+    - tee
+
+provisioning:
+  script: provision/install.py
+  timeout_sec: 300
+
+outputs:
+  - key: webui_url
+    label: WebUI
+    value: "http://{{ip}}:{{port}}"
+
+gpu:
+  supported: []
+  required: false

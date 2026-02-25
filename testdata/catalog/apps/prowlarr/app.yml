@@ -1,0 +1,85 @@
+id: prowlarr
+name: Prowlarr
+description: Indexer manager for Sonarr, Radarr, Readarr, and other *arr applications with Usenet and torrent tracker support.
+overview: |
+  Prowlarr is an indexer manager that integrates with Sonarr, Radarr, Readarr, Lidarr, and other
+  PVR applications. It manages both Usenet indexers and torrent trackers from a single interface,
+  syncing configurations automatically to all connected apps.
+
+  Features include automatic indexer sync, search support for all connected apps, manual search
+  and category-based browsing, indexer health monitoring, and per-app tag-based indexer assignment.
+
+  Built on the Servarr platform (.NET), Prowlarr runs natively on Linux with minimal resources.
+  After installation, access the WebUI to add your indexers and connect your *arr applications.
+version: "1.31.2"
+categories:
+  - media
+  - tools
+tags:
+  - indexer
+  - usenet
+  - torrent
+  - servarr
+homepage: https://prowlarr.com
+license: GPL-3.0
+maintainers:
+  - PVE App Store
+
+official: true
+lxc:
+  ostemplate: debian-12
+  defaults:
+    unprivileged: true
+    cores: 1
+    memory_mb: 512
+    disk_gb: 4
+    features:
+      - nesting
+    onboot: true
+
+inputs:
+  - key: webui_port
+    label: WebUI Port
+    type: number
+    default: 9696
+    required: false
+    group: Network
+    description: Port for the Prowlarr web interface.
+    help: Default 9696; must be between 1024-65535
+    validation:
+      min: 1024
+      max: 65535
+
+permissions:
+  packages:
+    - curl
+    - sqlite3
+    - libicu72
+  urls:
+    - "https://prowlarr.servarr.com/*"
+  paths:
+    - "/opt/Prowlarr/"
+    - "/var/lib/prowlarr/"
+    - "/etc/systemd/system/"
+    - "/tmp/"
+  services:
+    - prowlarr
+  users:
+    - prowlarr
+  commands:
+    - tar
+    - chmod
+    - ln
+
+provisioning:
+  script: provision/install.py
+  timeout_sec: 300
+
+outputs:
+  - key: webui_url
+    label: WebUI
+    value: "http://{{ip}}:{{webui_port}}"
+
+gpu:
+  supported: []
+  required: false

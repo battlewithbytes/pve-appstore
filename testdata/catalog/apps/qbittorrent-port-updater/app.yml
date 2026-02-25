@@ -1,0 +1,127 @@
+id: qbittorrent-port-updater
+name: qBittorrent Port Updater
+description: Automatically syncs the VPN forwarded port from Gluetun to qBittorrent for optimal torrent connectivity.
+overview: |
+  This utility monitors the Gluetun VPN client's control API for forwarded port changes and
+  automatically updates qBittorrent's listening port to match. This ensures your torrents
+  always use the correct VPN-forwarded port for incoming connections.
+
+  The service polls Gluetun every 60 seconds, checking for port changes. When a new port is
+  detected, it authenticates with qBittorrent's WebAPI and updates the listen port setting.
+  All activity is logged to the systemd journal.
+
+  Designed to run alongside Gluetun and qBittorrent in a media stack. Configure the hosts
+  and credentials during installation — in a stack deployment, all services share localhost.
+version: "1.0.0"
+categories:
+  - tools
+tags:
+  - vpn
+  - qbittorrent
+  - gluetun
+  - automation
+homepage: https://github.com/qdm12/gluetun
+license: MIT
+maintainers:
+  - PVE App Store
+
+official: true
+lxc:
+  ostemplate: debian-12
+  defaults:
+    unprivileged: true
+    cores: 1
+    memory_mb: 128
+    disk_gb: 2
+    onboot: true
+
+inputs:
+  - key: qbt_host
+    label: qBittorrent Host
+    type: string
+    default: "127.0.0.1"
+    required: true
+    group: qBittorrent
+    description: Hostname or IP address of the qBittorrent instance.
+    help: Use 127.0.0.1 when running in the same container (stack mode)
+  - key: qbt_port
+    label: qBittorrent WebUI Port
+    type: number
+    default: 8080
+    required: false
+    group: qBittorrent
+    description: Port of the qBittorrent WebUI API.
+    help: Must match the WebUI port configured in qBittorrent
+    validation:
+      min: 1024
+      max: 65535
+  - key: qbt_user
+    label: qBittorrent Username
+    type: string
+    default: admin
+    required: false
+    group: qBittorrent
+    description: Username for qBittorrent WebUI authentication.
+  - key: qbt_password
+    label: qBittorrent Password
+    type: secret
+    default: ""
+    required: true
+    group: qBittorrent
+    description: Password for qBittorrent WebUI authentication.
+    help: Must match the password configured in qBittorrent
+  - key: gluetun_host
+    label: Gluetun Host
+    type: string
+    default: "127.0.0.1"
+    required: true
+    group: Gluetun
+    description: Hostname or IP address of the Gluetun instance.
+    help: Use 127.0.0.1 when running in the same container (stack mode)
+  - key: gluetun_port
+    label: Gluetun Control Port
+    type: number
+    default: 8000
+    required: false
+    group: Gluetun
+    description: Port of the Gluetun control API.
+    help: Default is 8000
+    validation:
+      min: 1024
+      max: 65535
+  - key: poll_interval
+    label: Poll Interval (seconds)
+    type: number
+    default: 60
+    required: false
+    group: Advanced
+    description: How often to check Gluetun for port changes.
+    help: Lower values detect changes faster but increase API calls
+    validation:
+      min: 10
+      max: 3600
+
+permissions:
+  packages:
+    - curl
+    - jq
+  paths:
+    - "/opt/port-updater/"
+    - "/etc/systemd/system/"
+  services:
+    - qbt-port-updater
+  commands:
+    - chmod
+
+provisioning:
+  script: provision/install.py
+  timeout_sec: 120
+
+outputs:
+  - key: status
+    label: Status
+    value: "Monitoring gluetun port changes"
+
+gpu:
+  supported: []
+  required: false

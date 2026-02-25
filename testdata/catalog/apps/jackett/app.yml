@@ -1,0 +1,87 @@
+id: jackett
+name: Jackett
+description: API proxy server that translates queries from *arr apps into tracker-specific searches across 500+ public and private trackers.
+overview: |
+  Jackett works as a proxy server that translates standardized Torznab/Potato queries from
+  applications like Sonarr, Radarr, and Readarr into tracker-site-specific HTTP requests.
+  It parses the HTML or JSON response, then sends the results back in a unified format.
+
+  With support for over 500 public and private trackers, Jackett eliminates the need to
+  configure each tracker individually in every application. Add trackers once in Jackett,
+  then point your *arr apps at Jackett's Torznab endpoints.
+
+  Features include automatic tracker testing, FlareSolverr integration for Cloudflare-protected
+  sites, per-tracker category mapping, and a built-in search interface for manual queries.
+version: "0.22.1"
+categories:
+  - media
+  - tools
+tags:
+  - indexer
+  - torrent
+  - tracker
+  - proxy
+homepage: https://github.com/Jackett/Jackett
+license: GPL-2.0
+maintainers:
+  - PVE App Store
+
+official: true
+lxc:
+  ostemplate: debian-12
+  defaults:
+    unprivileged: true
+    cores: 1
+    memory_mb: 512
+    disk_gb: 4
+    features:
+      - nesting
+    onboot: true
+
+inputs:
+  - key: webui_port
+    label: WebUI Port
+    type: number
+    default: 9117
+    required: false
+    group: Network
+    description: Port for the Jackett web interface.
+    help: Default 9117; must be between 1024-65535
+    validation:
+      min: 1024
+      max: 65535
+
+permissions:
+  packages:
+    - curl
+    - libicu72
+    - libssl3
+  urls:
+    - "https://github.com/Jackett/Jackett/*"
+    - "https://objects.githubusercontent.com/*"
+    - "https://api.github.com/*"
+  paths:
+    - "/opt/Jackett/"
+    - "/var/lib/jackett/"
+    - "/etc/systemd/system/"
+    - "/tmp/"
+  services:
+    - jackett
+  users:
+    - jackett
+  commands:
+    - tar
+    - chmod
+
+provisioning:
+  script: provision/install.py
+  timeout_sec: 300
+
+outputs:
+  - key: webui_url
+    label: WebUI
+    value: "http://{{ip}}:{{webui_port}}"
+
+gpu:
+  supported: []
+  required: false

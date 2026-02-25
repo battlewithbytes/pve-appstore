@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { api } from '../api'
 import type { InstallDetail, AppDetail, MountPoint, EditRequest, ReconfigureRequest, ConfigDefaultsResponse, DevicePassthrough, GPUInfo, GPUDriverStatus } from '../types'
-import { Center, BackLink, Badge, StatusDot, ResourceCard, InfoCard, InfoRow } from '../components/ui'
+import { Center, BackLink, Badge, StatusDot, ResourceCard, InfoCard, InfoRow, FormInput } from '../components/ui'
 import { formatUptime, formatBytes, formatBytesShort } from '../lib/format'
 import { TerminalModal } from '../components/terminal'
 import { useEscapeKey } from '../hooks/useEscapeKey'
@@ -642,11 +642,10 @@ export function ConfigureDialog({ detail, appInfo, isRunning, onConfirm, onCance
                         <option value="false">false</option>
                       </select>
                     ) : (
-                      <input
-                        type={inp.type === 'number' ? 'number' : inp.type === 'secret' ? 'password' : 'text'}
+                      <FormInput
                         value={inputs[inp.key] || ''}
-                        onChange={e => setInputs({ ...inputs, [inp.key]: e.target.value })}
-                        className="w-full bg-bg-secondary border border-border rounded-lg px-3 py-2 text-sm text-text-primary font-mono focus:border-primary outline-none"
+                        onChange={v => setInputs({ ...inputs, [inp.key]: v })}
+                        type={inp.type === 'number' ? 'number' : inp.type === 'secret' ? 'password' : 'text'}
                       />
                     )}
                     {inp.help && <p className="text-xs text-text-muted mt-0.5">{inp.help}</p>}

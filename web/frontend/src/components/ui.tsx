@@ -1,4 +1,4 @@
-import React from 'react'
+import React, { useState } from 'react'
 
 export function Center({ children, className }: { children: React.ReactNode; className?: string }) {
   return <div className={`text-center py-12 text-text-muted ${className || ''}`}>{children}</div>
@@ -97,7 +97,20 @@ export function FormRow({ label, help, description, children }: { label: string;
 }
 
 export function FormInput({ value, onChange, type = 'text', placeholder, disabled }: { value: string; onChange: (v: string) => void; type?: string; placeholder?: string; disabled?: boolean }) {
-  return <input type={type} value={value} onChange={e => onChange(e.target.value)} placeholder={placeholder} disabled={disabled} className={`w-full px-3 py-2 bg-bg-secondary border border-border rounded-md text-text-primary text-sm outline-none focus:border-primary focus:ring-1 focus:ring-primary transition-colors font-mono placeholder:text-text-muted${disabled ? ' opacity-50 cursor-not-allowed' : ''}`} />
+  const [showSecret, setShowSecret] = useState(false)
+  const isSecret = type === 'password'
+  const inputClass = `w-full px-3 py-2 bg-bg-secondary border border-border rounded-md text-text-primary text-sm outline-none focus:border-primary focus:ring-1 focus:ring-primary transition-colors font-mono placeholder:text-text-muted${disabled ? ' opacity-50 cursor-not-allowed' : ''}`
+  if (isSecret) {
+    return (
+      <div className="relative">
+        <input type={showSecret ? 'text' : 'password'} value={value} onChange={e => onChange(e.target.value)} placeholder={placeholder} disabled={disabled} className={`${inputClass} pr-10`} />
+        {value && <button type="button" tabIndex={-1} onClick={() => setShowSecret(s => !s)}
+          className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-text-muted hover:text-text-primary transition-colors bg-transparent border-none cursor-pointer text-sm leading-none"
+          title={showSecret ? 'Hide' : 'Show'}>{showSecret ? '\u25C9' : '\u25CE'}</button>}
+      </div>
+    )
+  }
+  return <input type={type} value={value} onChange={e => onChange(e.target.value)} placeholder={placeholder} disabled={disabled} className={inputClass} />
 }
 
 export function FormField({ label, description, help, children }: { label: string; description?: string; help?: string; children: React.ReactNode }) {
