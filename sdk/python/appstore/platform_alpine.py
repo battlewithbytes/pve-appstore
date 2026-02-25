@@ -70,6 +70,17 @@ def create_user(app, name, system=True, home=None, shell="/bin/false"):
         )
 
 
+def add_user_to_group(app, username, group):
+    """Add a user to a group via addgroup (Alpine)."""
+    result = subprocess.run(
+        ["addgroup", username, group], capture_output=True
+    )
+    if result.returncode != 0 and b"already" not in result.stderr:
+        raise RuntimeError(
+            f"addgroup failed: {result.stderr.decode().strip()}"
+        )
+
+
 def enable_repo(app, repo_name):
     """Enable a named repository by uncommenting it in /etc/apk/repositories."""
     repo_file = "/etc/apk/repositories"

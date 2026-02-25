@@ -70,11 +70,6 @@ permissions:
     - jackett
   users:
     - jackett
-  commands:
-    - tar
-    - chmod
-    - curl
-
 provisioning:
   script: provision/install.py
   timeout_sec: 300

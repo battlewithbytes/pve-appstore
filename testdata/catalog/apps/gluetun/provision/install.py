@@ -129,7 +129,7 @@ class GluetunApp(BaseApp):
         # Alpine compatibility — Gluetun is built for Alpine Linux
         self.log.info("Setting up Alpine compatibility layer...")
         self.write_config("/etc/alpine-release", "3.20.0\n")
-        self.run_command(["ln", "-sf", "/usr/sbin/openvpn", "/usr/sbin/openvpn2.6"])
+        self.create_symlink("/usr/sbin/openvpn", "/usr/sbin/openvpn2.6")
 
         # Create data directories
         self.create_dir("/gluetun/")
@@ -153,7 +153,7 @@ class GluetunApp(BaseApp):
         self.status_page(
             port=self.inputs.integer("status_port", 8001),
             title="Gluetun",
-            api_url="http://127.0.0.1:8000/v1/publicip/ip",
+            api_url="http://127.0.0.1:8000/v1/vpn/status",
             fields={
                 "public_ip": "Public IP",
                 "country": "Country",
@@ -162,8 +162,24 @@ class GluetunApp(BaseApp):
             },
         )
 
-        # Wait for VPN to connect
-        self.wait_for_http("http://127.0.0.1:8000/v1/publicip/ip", timeout=60)
+        # Wait for VPN control API (non-fatal — VPN may take time to negotiate)
+        if not self.wait_for_http("http://127.0.0.1:8000/v1/vpn/status", timeout=120):
+            self.log.warn("VPN control API not ready within timeout — VPN may still be connecting")
+
+        # Wait for DNS forwarder to be ready (critical for stack installs where
+        # subsequent apps need DNS resolution through the VPN tunnel)
+        import subprocess, time
+        for attempt in range(30):
+            result = subprocess.run(
+                ["nslookup", "debian.org", "127.0.0.1"],
+                capture_output=True, timeout=5,
+            )
+            if result.returncode == 0:
+                self.log.info("DNS forwarder is ready")
+                break
+            time.sleep(2)
+        else:
+            self.log.warn("DNS forwarder not responding — subsequent apps may fail")
 
         self.log.info("Gluetun VPN client installed successfully")
 

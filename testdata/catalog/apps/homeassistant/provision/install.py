@@ -19,9 +19,7 @@ class HomeAssistantApp(BaseApp):
         )
 
         # Set container timezone
-        self.run_command(["ln", "-sf", f"/usr/share/zoneinfo/{timezone}", "/etc/localtime"])
-        self.write_config("/etc/timezone", timezone + "\n")
-        self.run_command(["dpkg-reconfigure", "-f", "noninteractive", "tzdata"])
+        self.set_timezone(timezone)
 
         # Create app user and directories
         self.create_user("homeassistant", system=True, home="/opt/homeassistant")

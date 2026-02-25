@@ -1,4 +1,4 @@
-"""qBittorrent — lightweight BitTorrent client with WebUI (Alpine Linux)."""
+"""qBittorrent — lightweight BitTorrent client with WebUI."""
 
 import base64
 import hashlib
@@ -14,13 +14,14 @@ class QBittorrentApp(BaseApp):
         download_path = self.inputs.string("download_path", "/downloads")
         password = self.inputs.string("initial_password", "changeme")
 
-        # Enable Alpine community repository (required for qbittorrent-nox)
-        self.run_command([
-            "sed", "-i", "s/#.*community/community/", "/etc/apk/repositories",
-        ])
-
-        # Install packages via OS-aware helper (apk on Alpine)
-        self.pkg_install("qbittorrent-nox", "python3", "p7zip")
+        if self._os == "alpine":
+            # Enable Alpine community repository (required for qbittorrent-nox)
+            self.run_command([
+                "sed", "-i", "s/#.*community/community/", "/etc/apk/repositories",
+            ])
+            self.pkg_install("qbittorrent-nox", "python3", "p7zip")
+        else:
+            self.pkg_install("qbittorrent-nox", "python3", "p7zip-full")
 
         # Create service user
         self.create_user("qbittorrent", system=True, home="/var/lib/qbittorrent")
@@ -53,7 +54,7 @@ class QBittorrentApp(BaseApp):
         # Set ownership of all qbittorrent data
         self.chown("/var/lib/qbittorrent", "qbittorrent:qbittorrent", recursive=True)
 
-        # Create and start OpenRC service
+        # Create and start service (systemd on Debian, openrc on Alpine)
         self.create_service(
             "qbittorrent-nox",
             exec_start=(

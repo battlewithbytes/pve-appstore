@@ -533,9 +533,10 @@ func (s *Server) validateMountEntry(value string) error {
 	}
 	// Validate source path
 	if filepath.IsAbs(src) {
-		// Allow known-safe GPU paths
+		// Allow known-safe device paths (GPU, TUN/TAP for VPN)
 		if strings.HasPrefix(src, "/dev/dri/") ||
 			strings.HasPrefix(src, "/dev/nvidia") ||
+			strings.HasPrefix(src, "/dev/net/") ||
 			strings.HasPrefix(src, "/usr/lib/nvidia") ||
 			strings.HasPrefix(src, "/usr/lib/x86_64-linux-gnu/nvidia") {
 			return nil

@@ -39,8 +39,7 @@ class Crawl4AIApp(BaseApp):
         self.chown(cache_dir, "crawl4ai:crawl4ai", recursive=True)
 
         # Install Playwright browsers as the crawl4ai user so they go to its home cache
-        self.run_command(["su", "-s", "/bin/bash", "crawl4ai", "-c",
-                          "/opt/crawl4ai/venv/bin/playwright install chromium"])
+        self.run_as_user("crawl4ai", "/opt/crawl4ai/venv/bin/playwright install chromium")
 
         # Create systemd service
         self.create_service("crawl4ai",

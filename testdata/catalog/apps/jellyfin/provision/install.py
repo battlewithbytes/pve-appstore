@@ -36,8 +36,8 @@ class JellyfinApp(BaseApp):
         if hw_accel == "qsv":
             self.deploy_provision_file("encoding-qsv.xml", f"{config_dir}/encoding.xml")
             self.chown(f"{config_dir}/encoding.xml", "jellyfin:jellyfin")
-            self.run_command(["usermod", "-aG", "render", "jellyfin"])
-            self.run_command(["usermod", "-aG", "video", "jellyfin"])
+            self.add_user_to_group("jellyfin", "render")
+            self.add_user_to_group("jellyfin", "video")
             self.log.info("Intel QSV hardware acceleration configured")
         elif hw_accel == "nvenc":
             self.deploy_provision_file("encoding-nvenc.xml", f"{config_dir}/encoding.xml")

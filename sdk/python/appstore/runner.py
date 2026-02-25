@@ -61,6 +61,7 @@ def main():
     try:
         spec = importlib.util.spec_from_file_location("app_module", app_module_path)
         module = importlib.util.module_from_spec(spec)
+        sys.modules["app_module"] = module
         spec.loader.exec_module(module)
     except Exception as e:
         log.error(f"Failed to load app module {app_module_path}: {e}")

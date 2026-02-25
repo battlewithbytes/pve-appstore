@@ -88,6 +88,17 @@ def create_user(app, name, system=True, home=None, shell="/bin/false"):
         )
 
 
+def add_user_to_group(app, username, group):
+    """Add a user to a group via usermod (Debian)."""
+    result = subprocess.run(
+        ["usermod", "-aG", group, username], capture_output=True
+    )
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"usermod failed: {result.stderr.decode().strip()}"
+        )
+
+
 def enable_repo(app, repo_name):
     """No-op on Debian — use add_apt_repository() instead."""
     app.log.info(f"enable_repo('{repo_name}') is a no-op on Debian; use add_apt_repository() for APT sources")

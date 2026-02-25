@@ -13,23 +13,18 @@ class ProwlarrApp(BaseApp):
         # Create service user
         self.create_user("prowlarr", system=True, home="/var/lib/prowlarr")
 
-        # Download Prowlarr from Servarr CDN
-        self.download(
+        # Download and extract Prowlarr from Servarr CDN
+        self.download_and_extract(
             "https://prowlarr.servarr.com/v1/update/master/updatefile"
             "?os=linux&runtime=netcore&arch=x64",
-            "/tmp/prowlarr.tar.gz",
+            "/opt",
         )
 
-        # Extract to /opt
-        self.create_dir("/opt/Prowlarr")
-        self.run_command(["tar", "-xzf", "/tmp/prowlarr.tar.gz", "-C", "/opt"])
-
         # Symlink system SQLite for native interop
-        self.run_command([
-            "ln", "-sf",
+        self.create_symlink(
             "/usr/lib/x86_64-linux-gnu/libsqlite3.so.0",
             "/opt/Prowlarr/libe_sqlite3.so",
-        ])
+        )
 
         # Set ownership
         self.chown("/opt/Prowlarr", "prowlarr:prowlarr", recursive=True)

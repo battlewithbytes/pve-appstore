@@ -1,7 +1,5 @@
 """Jackett — API proxy server for torrent trackers."""
 
-import json
-
 from appstore import BaseApp, run
 
 
@@ -15,30 +13,13 @@ class JackettApp(BaseApp):
         # Create service user
         self.create_user("jackett", system=True, home="/var/lib/jackett")
 
-        # Get latest release URL from GitHub API
-        self.log.info("Fetching latest Jackett release...")
-        result = self.run_command([
-            "curl", "-fsSL",
-            "https://api.github.com/repos/Jackett/Jackett/releases/latest",
-        ])
-        release = json.loads(result.stdout)
-        tag = release["tag_name"]
-        self.log.info(f"Latest Jackett version: {tag}")
+        # Download latest Jackett release from GitHub
+        self.github_download_release(
+            "Jackett", "Jackett", "LinuxAMDx64.tar.gz", "/tmp/jackett.tar.gz",
+        )
 
-        # Find the Linux AMD64 tarball asset
-        dl_url = None
-        for asset in release["assets"]:
-            if "LinuxAMDx64" in asset["name"] and asset["name"].endswith(".tar.gz"):
-                dl_url = asset["browser_download_url"]
-                break
-
-        if not dl_url:
-            raise RuntimeError("Could not find Jackett Linux AMD64 release asset")
-
-        # Download and extract
-        self.download(dl_url, "/tmp/jackett.tar.gz")
-        self.create_dir("/opt/Jackett")
-        self.run_command(["tar", "-xzf", "/tmp/jackett.tar.gz", "-C", "/opt"])
+        # Extract to /opt
+        self.extract_tar("/tmp/jackett.tar.gz", "/opt")
 
         # Set ownership
         self.chown("/opt/Jackett", "jackett:jackett", recursive=True)

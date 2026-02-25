@@ -89,8 +89,6 @@ permissions:
   paths: ["/opt/homeassistant/", "/etc/systemd/", "/etc/localtime", "/etc/timezone"]
   services: [homeassistant, mosquitto]
   users: [homeassistant]
-  commands: [ln, dpkg-reconfigure]
-
 provisioning:
   script: provision/install.py
   timeout_sec: 900

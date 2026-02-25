@@ -95,8 +95,6 @@ permissions:
   installer_scripts: ["https://repo.jellyfin.org/install-debuntu.sh"]
   paths: ["/mnt/media", "/var/cache/jellyfin", "/etc/jellyfin/", "/etc/systemd/"]
   services: [jellyfin]
-  commands: [usermod]
-
 provisioning:
   script: provision/install.py
   timeout_sec: 600

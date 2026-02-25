@@ -312,8 +312,10 @@ class BaseApp(ABC):
     def create_dir(self, path: str, owner: str = None, mode: str = "0755") -> None:
         """Create a directory with optional ownership."""
         self.permissions.check_path(path)
+        existed = os.path.isdir(path)
         os.makedirs(path, exist_ok=True)
-        os.chmod(path, int(mode, 8))
+        if not existed:
+            os.chmod(path, int(mode, 8))
         if owner:
             self._run(["chown", owner, path])
         self.log.info(f"Created directory: {path}")
@@ -334,6 +336,62 @@ class BaseApp(ABC):
         self.log.info(f"Downloading {url} -> {dest}")
         os.makedirs(os.path.dirname(dest) or ".", exist_ok=True)
         self._run(["curl", "-fsSL", "-o", dest, url])
+
+    def extract_tar(self, archive: str, dest_dir: str, strip_components: int = 0) -> None:
+        """Extract a tar archive to a directory.
+
+        Args:
+            archive: Path to the archive file (.tar.gz, .tar.xz, .tar, etc.).
+            dest_dir: Directory to extract into.
+            strip_components: Number of leading path components to strip.
+        """
+        self.permissions.check_path(dest_dir)
+        os.makedirs(dest_dir, exist_ok=True)
+        cmd = ["tar", "-xf", archive, "-C", dest_dir]
+        if strip_components:
+            cmd.append(f"--strip-components={strip_components}")
+        self._run(cmd)
+        self.log.info(f"Extracted {archive} -> {dest_dir}")
+
+    def download_and_extract(self, url: str, dest_dir: str, strip_components: int = 0) -> None:
+        """Download a tarball and extract it in one step.
+
+        Downloads to a temp file, extracts to dest_dir, then cleans up.
+
+        Args:
+            url: URL of the archive to download.
+            dest_dir: Directory to extract into.
+            strip_components: Number of leading path components to strip.
+        """
+        self.permissions.check_url(url)
+        self.permissions.check_path(dest_dir)
+        tmp_path = f"/tmp/download-{os.urandom(4).hex()}.tar.gz"
+        try:
+            self.log.info(f"Downloading {url}")
+            self._run(["curl", "-fsSL", "-o", tmp_path, url])
+            os.makedirs(dest_dir, exist_ok=True)
+            cmd = ["tar", "-xf", tmp_path, "-C", dest_dir]
+            if strip_components:
+                cmd.append(f"--strip-components={strip_components}")
+            self._run(cmd)
+            self.log.info(f"Downloaded and extracted to {dest_dir}")
+        finally:
+            if os.path.exists(tmp_path):
+                os.unlink(tmp_path)
+
+    def create_symlink(self, target: str, link: str) -> None:
+        """Create a symbolic link (overwrites existing).
+
+        Args:
+            target: The file/directory the symlink points to.
+            link: Path for the symlink itself.
+        """
+        self.permissions.check_path(link)
+        os.makedirs(os.path.dirname(link) or ".", exist_ok=True)
+        if os.path.lexists(link):
+            os.unlink(link)
+        os.symlink(target, link)
+        self.log.info(f"Symlink: {link} -> {target}")
 
     # @sdk-group: Service Management
 
@@ -408,6 +466,19 @@ class BaseApp(ABC):
         self.log.info(f"Creating user: {name}")
         self._platform.create_user(self, name, system=system, home=home, shell=shell)
 
+    def add_user_to_group(self, username: str, group: str) -> None:
+        """Add an existing user to a secondary group.
+
+        Uses usermod -aG on Debian, addgroup on Alpine.
+
+        Args:
+            username: User to add.
+            group: Group to add the user to.
+        """
+        self.permissions.check_user(username)
+        self._platform.add_user_to_group(self, username, group)
+        self.log.info(f"Added user {username} to group {group}")
+
     # @sdk-group: Commands & System
 
     def run_command(self, cmd, check: bool = True, input_text: str = None,
@@ -458,6 +529,91 @@ class BaseApp(ABC):
             self._run(["bash", tmp_path])
         finally:
             os.unlink(tmp_path)
+
+    def run_as_user(self, username: str, cmd: str, check: bool = True,
+                    cwd: str = None, env: dict = None) -> subprocess.CompletedProcess:
+        """Run a shell command as a specific user.
+
+        Args:
+            username: User to run as.
+            cmd: Shell command string.
+            check: Raise on non-zero exit (default True).
+            cwd: Working directory.
+            env: Extra environment variables.
+
+        Returns:
+            CompletedProcess with stdout.
+        """
+        self.permissions.check_user(username)
+        return self._run(
+            ["su", "-s", "/bin/bash", username, "-c", cmd],
+            check=check, cwd=cwd, env=env,
+        )
+
+    def set_timezone(self, timezone: str) -> None:
+        """Set the container timezone (OS-aware).
+
+        Args:
+            timezone: IANA timezone (e.g. "America/New_York", "Europe/London").
+        """
+        if not timezone:
+            return
+        zoneinfo = f"/usr/share/zoneinfo/{timezone}"
+        if not os.path.exists(zoneinfo):
+            self.log.warn(f"Timezone {timezone} not found at {zoneinfo}")
+            return
+        self.create_symlink(zoneinfo, "/etc/localtime")
+        self.write_config("/etc/timezone", timezone + "\n")
+        if self._os == "debian":
+            self._run(["dpkg-reconfigure", "-f", "noninteractive", "tzdata"], check=False)
+        self.log.info(f"Timezone set to {timezone}")
+
+    def github_latest_release(self, owner: str, repo: str) -> dict:
+        """Fetch the latest release info from a GitHub repository.
+
+        Args:
+            owner: Repository owner (e.g. "Jackett").
+            repo: Repository name (e.g. "Jackett").
+
+        Returns:
+            Parsed JSON dict from GitHub's releases/latest API.
+        """
+        api_url = f"https://api.github.com/repos/{owner}/{repo}/releases/latest"
+        self.permissions.check_url(api_url)
+        self.log.info(f"Fetching latest release: {owner}/{repo}")
+        result = self._run(["curl", "-fsSL", api_url], check=True)
+        import json as _json
+        return _json.loads(result.stdout)
+
+    def github_download_release(self, owner: str, repo: str,
+                                asset_pattern: str, dest: str) -> str:
+        """Download an asset from the latest GitHub release.
+
+        Args:
+            owner: Repository owner.
+            repo: Repository name.
+            asset_pattern: Substring to match in asset filename (e.g. "LinuxAMDx64").
+            dest: Destination file path.
+
+        Returns:
+            The download URL that was used.
+        """
+        release = self.github_latest_release(owner, repo)
+        assets = release.get("assets", [])
+        match = None
+        for asset in assets:
+            if asset_pattern in asset.get("name", ""):
+                match = asset
+                break
+        if not match:
+            available = [a.get("name", "") for a in assets[:10]]
+            raise RuntimeError(
+                f"No asset matching '{asset_pattern}' in {owner}/{repo} release. "
+                f"Available: {available}"
+            )
+        url = match["browser_download_url"]
+        self.download(url, dest)
+        return url
 
     def sysctl(self, settings: dict) -> None:
         """Apply sysctl settings persistently.

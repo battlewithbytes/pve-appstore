@@ -1,6 +1,6 @@
 id: qbittorrent
 name: qBittorrent
-description: Lightweight BitTorrent client with a powerful WebUI. Fast, stable, and runs natively on Alpine Linux.
+description: Lightweight BitTorrent client with a powerful WebUI. Fast, stable, and feature-rich.
 overview: |
   qBittorrent is a free, open-source BitTorrent client with a clean web interface that rivals the
   best desktop clients. It runs headless as qbittorrent-nox, making it perfect for LXC containers.
@@ -8,7 +8,7 @@ overview: |
   Features include RSS feed support, sequential downloading, bandwidth scheduling, IP filtering,
   and a full Web API for integration with tools like Sonarr, Radarr, and Prowlarr.
 
-  This container runs on Alpine Linux for minimal resource usage. After installation, access the
+  This container runs headless for minimal resource usage. After installation, access the
   WebUI to configure your download settings. The default login is admin with the password shown
   in the install outputs.
 version: "5.1.0"
@@ -26,7 +26,7 @@ maintainers:
 
 official: true
 lxc:
-  ostemplate: alpine-3.22
+  ostemplate: debian-12
   defaults:
     unprivileged: true
     cores: 2
@@ -90,12 +90,16 @@ permissions:
     - qbittorrent-nox
     - python3
     - p7zip
+    - p7zip-full
+  urls:
+    - "http://127.0.0.1:*"
   paths:
     - "/etc/init.d/"
     - "/var/lib/qbittorrent/"
     - "/downloads/"
     - "/etc/apk/"
     - "/etc/conf.d/"
+    - "/etc/systemd/system/"
   services:
     - qbittorrent-nox
   users:

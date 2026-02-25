@@ -488,3 +488,247 @@ class TestStatusServerTemplate:
         )
         # This will raise SyntaxError if the template has bad syntax
         py_compile.compile(template_path, doraise=True)
+
+
+# --- extract_tar ---
+
+class TestExtractTar:
+    @patch("appstore.base.subprocess.Popen")
+    def test_extracts_to_dest(self, mock_popen, tmp_path):
+        mock_popen.side_effect = mock_popen_factory()
+        app = make_app(paths=[str(tmp_path)])
+        dest = str(tmp_path / "output")
+        os.makedirs(dest, exist_ok=True)
+        app.extract_tar("/tmp/archive.tar.gz", dest)
+        cmds = [c[0][0] for c in mock_popen.call_args_list]
+        assert ["tar", "-xf", "/tmp/archive.tar.gz", "-C", dest] in cmds
+
+    @patch("appstore.base.subprocess.Popen")
+    def test_strip_components(self, mock_popen, tmp_path):
+        mock_popen.side_effect = mock_popen_factory()
+        app = make_app(paths=[str(tmp_path)])
+        dest = str(tmp_path / "output")
+        os.makedirs(dest, exist_ok=True)
+        app.extract_tar("/tmp/archive.tar.gz", dest, strip_components=1)
+        cmds = [c[0][0] for c in mock_popen.call_args_list]
+        assert ["tar", "-xf", "/tmp/archive.tar.gz", "-C", dest, "--strip-components=1"] in cmds
+
+    def test_rejects_disallowed_path(self):
+        app = make_app(paths=["/var/www/"])
+        with pytest.raises(PermissionDeniedError):
+            app.extract_tar("/tmp/archive.tar.gz", "/opt/secret")
+
+
+# --- download_and_extract ---
+
+class TestDownloadAndExtract:
+    @patch("appstore.base.subprocess.Popen")
+    @patch("appstore.base.os.unlink")
+    @patch("appstore.base.os.path.exists", return_value=True)
+    def test_downloads_extracts_cleans(self, mock_exists, mock_unlink, mock_popen):
+        mock_popen.side_effect = mock_popen_factory()
+        app = make_app(
+            urls=["https://example.com/*"],
+            paths=["/opt/app"],
+        )
+        app.download_and_extract("https://example.com/archive.tar.gz", "/opt/app")
+        cmds = [c[0][0] for c in mock_popen.call_args_list]
+        # Should have a curl download and tar extract
+        curl_cmds = [c for c in cmds if c[0] == "curl"]
+        tar_cmds = [c for c in cmds if c[0] == "tar"]
+        assert len(curl_cmds) == 1
+        assert len(tar_cmds) == 1
+        # Should clean up temp file
+        assert mock_unlink.called
+
+    def test_rejects_disallowed_url(self):
+        app = make_app(urls=[], paths=["/opt/app"])
+        with pytest.raises(PermissionDeniedError, match="URL"):
+            app.download_and_extract("https://evil.com/file.tar.gz", "/opt/app")
+
+
+# --- create_symlink ---
+
+class TestCreateSymlink:
+    def test_creates_symlink(self, tmp_path):
+        target = str(tmp_path / "target.txt")
+        link = str(tmp_path / "link.txt")
+        with open(target, "w") as f:
+            f.write("hello")
+        app = make_app(paths=[str(tmp_path)])
+        app.create_symlink(target, link)
+        assert os.path.islink(link)
+        assert os.readlink(link) == target
+
+    def test_overwrites_existing_symlink(self, tmp_path):
+        target1 = str(tmp_path / "target1.txt")
+        target2 = str(tmp_path / "target2.txt")
+        link = str(tmp_path / "link.txt")
+        for t in [target1, target2]:
+            with open(t, "w") as f:
+                f.write("hello")
+        os.symlink(target1, link)
+        app = make_app(paths=[str(tmp_path)])
+        app.create_symlink(target2, link)
+        assert os.readlink(link) == target2
+
+    def test_rejects_disallowed_path(self):
+        app = make_app(paths=["/var/www/"])
+        with pytest.raises(PermissionDeniedError):
+            app.create_symlink("/usr/bin/python3", "/usr/local/bin/python")
+
+
+# --- set_timezone ---
+
+class TestSetTimezone:
+    @patch("appstore.base.subprocess.Popen")
+    @patch("appstore.base.os.path.exists", return_value=True)
+    def test_sets_timezone_debian(self, mock_exists, mock_popen, tmp_path):
+        mock_popen.side_effect = mock_popen_factory()
+        app = make_app(
+            paths=["/etc/", str(tmp_path)],
+            os_type="debian",
+        )
+        with patch("appstore.base.os.makedirs"):
+            with patch("appstore.base.os.path.lexists", return_value=False):
+                with patch("appstore.base.os.symlink") as mock_symlink:
+                    with patch("builtins.open", mock_open()):
+                        app.set_timezone("America/New_York")
+        mock_symlink.assert_called_once()
+        # Should call dpkg-reconfigure on Debian
+        cmds = [c[0][0] for c in mock_popen.call_args_list]
+        dpkg_cmds = [c for c in cmds if "dpkg-reconfigure" in c]
+        assert len(dpkg_cmds) == 1
+
+    def test_skips_empty_timezone(self):
+        app = make_app()
+        app.set_timezone("")  # Should not raise
+
+    @patch("appstore.base.os.path.exists", return_value=False)
+    def test_warns_invalid_timezone(self, mock_exists):
+        app = make_app()
+        app.set_timezone("Invalid/Zone")
+        # Should warn but not raise
+
+
+# --- add_user_to_group ---
+
+class TestAddUserToGroup:
+    def test_debian_uses_usermod(self):
+        app = make_app(users=["testuser"], os_type="debian")
+        with patch("appstore.platform_debian.subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stderr=b"")
+            app.add_user_to_group("testuser", "video")
+        cmd = mock_run.call_args[0][0]
+        assert cmd == ["usermod", "-aG", "video", "testuser"]
+
+    def test_alpine_uses_addgroup(self):
+        app = make_app(users=["testuser"], os_type="alpine")
+        with patch("appstore.platform_alpine.subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stderr=b"")
+            app.add_user_to_group("testuser", "video")
+        cmd = mock_run.call_args[0][0]
+        assert cmd == ["addgroup", "testuser", "video"]
+
+    def test_rejects_disallowed_user(self):
+        app = make_app(users=["safe"], os_type="debian")
+        with pytest.raises(PermissionDeniedError, match="user"):
+            app.add_user_to_group("evil", "root")
+
+
+# --- run_as_user ---
+
+class TestRunAsUser:
+    @patch("appstore.base.subprocess.Popen")
+    def test_runs_as_user(self, mock_popen):
+        mock_popen.side_effect = mock_popen_factory()
+        app = make_app(users=["appuser"])
+        app.run_as_user("appuser", "whoami")
+        cmds = [c[0][0] for c in mock_popen.call_args_list]
+        assert ["su", "-s", "/bin/bash", "appuser", "-c", "whoami"] in cmds
+
+    def test_rejects_disallowed_user(self):
+        app = make_app(users=["safe"])
+        with pytest.raises(PermissionDeniedError, match="user"):
+            app.run_as_user("root", "rm -rf /")
+
+
+# --- github_latest_release ---
+
+class TestGithubLatestRelease:
+    @patch("appstore.base.subprocess.Popen")
+    def test_fetches_release(self, mock_popen):
+        release_json = json.dumps({
+            "tag_name": "v1.0.0",
+            "assets": [{"name": "app-linux.tar.gz", "browser_download_url": "https://example.com/app.tar.gz"}],
+        })
+        def make_popen(*args, **kwargs):
+            mock_proc = MagicMock()
+            mock_proc.stdout = iter([release_json + "\n"])
+            mock_proc.returncode = 0
+            mock_proc.wait.return_value = None
+            return mock_proc
+        mock_popen.side_effect = make_popen
+        app = make_app(urls=["https://api.github.com/*"])
+        result = app.github_latest_release("owner", "repo")
+        assert result["tag_name"] == "v1.0.0"
+        assert len(result["assets"]) == 1
+
+    def test_rejects_disallowed_url(self):
+        app = make_app(urls=[])
+        with pytest.raises(PermissionDeniedError, match="URL"):
+            app.github_latest_release("owner", "repo")
+
+
+# --- github_download_release ---
+
+class TestGithubDownloadRelease:
+    @patch("appstore.base.subprocess.Popen")
+    def test_downloads_matching_asset(self, mock_popen):
+        release_json = json.dumps({
+            "tag_name": "v1.0.0",
+            "assets": [
+                {"name": "app-Windows.zip", "browser_download_url": "https://example.com/win.zip"},
+                {"name": "app-LinuxAMDx64.tar.gz", "browser_download_url": "https://example.com/linux.tar.gz"},
+            ],
+        })
+        call_count = [0]
+        def make_popen(*args, **kwargs):
+            mock_proc = MagicMock()
+            call_count[0] += 1
+            if call_count[0] == 1:
+                # First call: github API fetch
+                mock_proc.stdout = iter([release_json + "\n"])
+            else:
+                # Second call: curl download
+                mock_proc.stdout = iter([])
+            mock_proc.returncode = 0
+            mock_proc.wait.return_value = None
+            return mock_proc
+        mock_popen.side_effect = make_popen
+        app = make_app(
+            urls=["https://api.github.com/*", "https://example.com/*"],
+            paths=["/opt/app"],
+        )
+        url = app.github_download_release("owner", "repo", "LinuxAMDx64", "/opt/app/download.tar.gz")
+        assert url == "https://example.com/linux.tar.gz"
+
+    @patch("appstore.base.subprocess.Popen")
+    def test_raises_on_no_match(self, mock_popen):
+        release_json = json.dumps({
+            "tag_name": "v1.0.0",
+            "assets": [{"name": "app-Windows.zip", "browser_download_url": "https://example.com/win.zip"}],
+        })
+        def make_popen(*args, **kwargs):
+            mock_proc = MagicMock()
+            mock_proc.stdout = iter([release_json + "\n"])
+            mock_proc.returncode = 0
+            mock_proc.wait.return_value = None
+            return mock_proc
+        mock_popen.side_effect = make_popen
+        app = make_app(
+            urls=["https://api.github.com/*", "https://example.com/*"],
+            paths=["/opt/app"],
+        )
+        with pytest.raises(RuntimeError, match="No asset matching"):
+            app.github_download_release("owner", "repo", "LinuxAMDx64", "/opt/app/download.tar.gz")

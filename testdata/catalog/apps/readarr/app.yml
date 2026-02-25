@@ -78,11 +78,6 @@ permissions:
     - readarr
   users:
     - readarr
-  commands:
-    - tar
-    - chmod
-    - ln
-
 provisioning:
   script: provision/install.py
   timeout_sec: 300

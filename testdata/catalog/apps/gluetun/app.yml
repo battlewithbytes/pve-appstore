@@ -278,7 +278,6 @@ permissions:
     - gluetun-status
   commands:
     - chmod
-    - ln
     - sysctl
     - gluetun-entrypoint
 
