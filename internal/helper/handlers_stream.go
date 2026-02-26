@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"os"
@@ -197,7 +198,9 @@ func (s *Server) handleTerminal(w http.ResponseWriter, r *http.Request) {
 			// Check for JSON resize message prefix
 			if len(data) > 0 && data[0] == '{' {
 				var resize terminalResizeMsg
-				if json.Unmarshal(data, &resize) == nil && resize.Type == "resize" {
+				if err := json.Unmarshal(data, &resize); err != nil {
+					log.Printf("[stream] warning: failed to unmarshal resize message: %v", err)
+				} else if resize.Type == "resize" {
 					pty.Setsize(ptmx, &pty.Winsize{
 						Rows: uint16(resize.Rows),
 						Cols: uint16(resize.Cols),

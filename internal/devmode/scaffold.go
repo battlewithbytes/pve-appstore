@@ -32,6 +32,7 @@ func ensurePipPrereqs(df *DockerfileInfo) {
 // ConvertDockerfileToScaffold generates an app ID, app.yml, and install.py from
 // a user-provided name and parsed DockerfileInfo (no Unraid XML required).
 func ConvertDockerfileToScaffold(name string, df *DockerfileInfo) (id, manifest, script string) {
+	_ = Init() // ensure YAML configs are loaded
 	id = toKebabCase(name)
 
 	description := "Imported from Dockerfile: " + name

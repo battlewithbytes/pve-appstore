@@ -598,7 +598,7 @@ func (s engineSvcStub) StopContainer(id string) error {
 	return nil
 }
 
-func (s engineSvcStub) RestartContainer(id string) error {
+func (s engineSvcStub) RestartContainer(ctx context.Context, id string) error {
 	if s.restartContainerFn != nil {
 		return s.restartContainerFn(id)
 	}
@@ -647,7 +647,7 @@ func (s engineSvcStub) StopStackContainer(id string) error {
 	return nil
 }
 
-func (s engineSvcStub) RestartStackContainer(id string) error {
+func (s engineSvcStub) RestartStackContainer(ctx context.Context, id string) error {
 	if s.restartStackContFn != nil {
 		return s.restartStackContFn(id)
 	}

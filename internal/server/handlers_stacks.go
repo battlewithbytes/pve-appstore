@@ -100,7 +100,7 @@ func (s *Server) handleRestartStack(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusServiceUnavailable, "engine not available")
 		return
 	}
-	if err := s.engineStackSvc.RestartStackContainer(id); err != nil {
+	if err := s.engineStackSvc.RestartStackContainer(r.Context(), id); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}

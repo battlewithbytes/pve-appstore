@@ -2,8 +2,10 @@ package devmode
 
 import (
 	_ "embed"
+	"fmt"
 	"regexp"
 	"strings"
+	"sync"
 
 	"gopkg.in/yaml.v3"
 )
@@ -63,33 +65,45 @@ var impliedServiceMap map[string]string
 var knownServices []string
 var cmdRules commandRulesConfig
 
-func init() {
-	var cfg baseImagesConfig
-	if err := yaml.Unmarshal(baseImagesYAML, &cfg); err != nil {
-		panic("devmode: failed to parse base_images.yml: " + err.Error())
-	}
-	baseImageMap = map[string]baseImageRules{
-		"debian": cfg.Debian,
-		"alpine": cfg.Alpine,
-	}
-	osProfiles = cfg.Profiles
-	if osProfiles == nil {
-		osProfiles = make(map[string]OSProfile)
-	}
-	impliedServiceMap = cfg.ImpliedServices
-	if impliedServiceMap == nil {
-		impliedServiceMap = make(map[string]string)
-	}
-	knownServices = cfg.KnownServices
+var (
+	initOnce sync.Once
+	initErr  error
+)
 
-	if err := yaml.Unmarshal(commandRulesYAML, &cmdRules); err != nil {
-		panic("devmode: failed to parse command_rules.yml: " + err.Error())
-	}
+// Init initializes embedded YAML configs. Safe to call multiple times.
+func Init() error {
+	initOnce.Do(func() {
+		var cfg baseImagesConfig
+		if err := yaml.Unmarshal(baseImagesYAML, &cfg); err != nil {
+			initErr = fmt.Errorf("devmode: failed to parse base_images.yml: %w", err)
+			return
+		}
+		baseImageMap = map[string]baseImageRules{
+			"debian": cfg.Debian,
+			"alpine": cfg.Alpine,
+		}
+		osProfiles = cfg.Profiles
+		if osProfiles == nil {
+			osProfiles = make(map[string]OSProfile)
+		}
+		impliedServiceMap = cfg.ImpliedServices
+		if impliedServiceMap == nil {
+			impliedServiceMap = make(map[string]string)
+		}
+		knownServices = cfg.KnownServices
+
+		if err := yaml.Unmarshal(commandRulesYAML, &cmdRules); err != nil {
+			initErr = fmt.Errorf("devmode: failed to parse command_rules.yml: %w", err)
+			return
+		}
+	})
+	return initErr
 }
 
 // ProfileFor returns the OS profile for a given BaseOS string.
 // Falls back to the "unknown" profile (which defaults to Debian settings).
 func ProfileFor(baseOS string) OSProfile {
+	_ = Init() // ensure YAML configs are loaded
 	if p, ok := osProfiles[baseOS]; ok {
 		return p
 	}
@@ -182,6 +196,7 @@ type AptRepo struct {
 
 // ParseDockerfile extracts structured info from Dockerfile content.
 func ParseDockerfile(content string) *DockerfileInfo {
+	_ = Init() // ensure YAML configs are loaded
 	info := &DockerfileInfo{BaseOS: "unknown"}
 
 	lines := strings.Split(content, "\n")

@@ -40,8 +40,9 @@ type Server struct {
 	refreshing        sync.Mutex
 	sdkDocsOnce  sync.Once
 	sdkDocsJSON  []byte
-	osTemplatesMu   sync.Mutex
-	osTemplatesJSON []byte
+	osTemplatesMu     sync.Mutex
+	osTemplatesJSON   []byte
+	stopAuthCleanup   func() // stops background auth cleanup goroutines
 }
 
 // Option configures the server.
@@ -91,6 +92,9 @@ func New(cfg *config.Config, cat *catalog.Catalog, eng *engine.Engine, spaFS fs.
 	// Initialize dev store and restore deployed dev apps into catalog
 	s.devStore = devmode.NewDevStore(filepath.Join(config.DefaultDataDir, "dev-apps"))
 	s.devSvc = NewDevService(s.devStore)
+	if err := devmode.Init(); err != nil {
+		log.Printf("[server] warning: devmode initialization failed: %v", err)
+	}
 	if cfg.Developer.Enabled {
 		if apps, err := s.devSvc.List(); err == nil {
 			for _, meta := range apps {
@@ -293,6 +297,8 @@ func New(cfg *config.Config, cat *catalog.Catalog, eng *engine.Engine, spaFS fs.
 		IdleTimeout:  60 * time.Second,
 	}
 
+	s.stopAuthCleanup = startAuthCleanup()
+
 	return s
 }
 
@@ -303,6 +309,9 @@ func (s *Server) ListenAndServe() error {
 
 // Shutdown gracefully stops the server.
 func (s *Server) Shutdown(ctx context.Context) error {
+	if s.stopAuthCleanup != nil {
+		s.stopAuthCleanup()
+	}
 	return s.http.Shutdown(ctx)
 }
 

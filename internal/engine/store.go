@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"log"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -295,7 +296,11 @@ func (s *Store) GetLogs(jobID string) ([]*LogEntry, error) {
 		if err := rows.Scan(&entry.JobID, &ts, &entry.Level, &entry.Message); err != nil {
 			return nil, err
 		}
-		entry.Timestamp, _ = time.Parse(time.RFC3339Nano, ts)
+		if t, err := time.Parse(time.RFC3339Nano, ts); err != nil {
+			log.Printf("[store] warning: invalid timestamp %q: %v", ts, err)
+		} else {
+			entry.Timestamp = t
+		}
 		logs = append(logs, &entry)
 	}
 	return logs, rows.Err()
@@ -318,7 +323,11 @@ func (s *Store) GetLogsSince(jobID string, afterID int) ([]*LogEntry, int, error
 		if err := rows.Scan(&id, &entry.JobID, &ts, &entry.Level, &entry.Message); err != nil {
 			return nil, lastID, err
 		}
-		entry.Timestamp, _ = time.Parse(time.RFC3339Nano, ts)
+		if t, err := time.Parse(time.RFC3339Nano, ts); err != nil {
+			log.Printf("[store] warning: invalid timestamp %q: %v", ts, err)
+		} else {
+			entry.Timestamp = t
+		}
 		logs = append(logs, &entry)
 		lastID = id
 	}
@@ -442,7 +451,11 @@ func scanInstallRow(row *sql.Row) (*Install, error) {
 	json.Unmarshal([]byte(mountsJSON), &inst.MountPoints)
 	json.Unmarshal([]byte(devicesJSON), &inst.Devices)
 	json.Unmarshal([]byte(envVarsJSON), &inst.EnvVars)
-	inst.CreatedAt, _ = time.Parse(time.RFC3339, createdAt)
+	if t, err := time.Parse(time.RFC3339, createdAt); err != nil {
+		log.Printf("[store] warning: invalid timestamp %q: %v", createdAt, err)
+	} else {
+		inst.CreatedAt = t
+	}
 	return &inst, nil
 }
 
@@ -467,7 +480,11 @@ func scanInstallRows(rows *sql.Rows) (*Install, error) {
 	json.Unmarshal([]byte(mountsJSON), &inst.MountPoints)
 	json.Unmarshal([]byte(devicesJSON), &inst.Devices)
 	json.Unmarshal([]byte(envVarsJSON), &inst.EnvVars)
-	inst.CreatedAt, _ = time.Parse(time.RFC3339, createdAt)
+	if t, err := time.Parse(time.RFC3339, createdAt); err != nil {
+		log.Printf("[store] warning: invalid timestamp %q: %v", createdAt, err)
+	} else {
+		inst.CreatedAt = t
+	}
 	return &inst, nil
 }
 
@@ -495,11 +512,22 @@ func scanJob(row *sql.Row) (*Job, error) {
 	json.Unmarshal([]byte(mountsJSON), &job.MountPoints)
 	json.Unmarshal([]byte(devicesJSON), &job.Devices)
 	json.Unmarshal([]byte(envVarsJSON), &job.EnvVars)
-	job.CreatedAt, _ = time.Parse(time.RFC3339, createdAt)
-	job.UpdatedAt, _ = time.Parse(time.RFC3339, updatedAt)
+	if t, err := time.Parse(time.RFC3339, createdAt); err != nil {
+		log.Printf("[store] warning: invalid timestamp %q: %v", createdAt, err)
+	} else {
+		job.CreatedAt = t
+	}
+	if t, err := time.Parse(time.RFC3339, updatedAt); err != nil {
+		log.Printf("[store] warning: invalid timestamp %q: %v", updatedAt, err)
+	} else {
+		job.UpdatedAt = t
+	}
 	if completedAt != "" {
-		t, _ := time.Parse(time.RFC3339, completedAt)
-		job.CompletedAt = &t
+		if t, err := time.Parse(time.RFC3339, completedAt); err != nil {
+			log.Printf("[store] warning: invalid timestamp %q: %v", completedAt, err)
+		} else {
+			job.CompletedAt = &t
+		}
 	}
 
 	return &job, nil
@@ -625,11 +653,22 @@ func scanJobRow(rows *sql.Rows) (*Job, error) {
 	json.Unmarshal([]byte(mountsJSON), &job.MountPoints)
 	json.Unmarshal([]byte(devicesJSON), &job.Devices)
 	json.Unmarshal([]byte(envVarsJSON), &job.EnvVars)
-	job.CreatedAt, _ = time.Parse(time.RFC3339, createdAt)
-	job.UpdatedAt, _ = time.Parse(time.RFC3339, updatedAt)
+	if t, err := time.Parse(time.RFC3339, createdAt); err != nil {
+		log.Printf("[store] warning: invalid timestamp %q: %v", createdAt, err)
+	} else {
+		job.CreatedAt = t
+	}
+	if t, err := time.Parse(time.RFC3339, updatedAt); err != nil {
+		log.Printf("[store] warning: invalid timestamp %q: %v", updatedAt, err)
+	} else {
+		job.UpdatedAt = t
+	}
 	if completedAt != "" {
-		t, _ := time.Parse(time.RFC3339, completedAt)
-		job.CompletedAt = &t
+		if t, err := time.Parse(time.RFC3339, completedAt); err != nil {
+			log.Printf("[store] warning: invalid timestamp %q: %v", completedAt, err)
+		} else {
+			job.CompletedAt = &t
+		}
 	}
 
 	return &job, nil
@@ -737,7 +776,11 @@ func scanStackRow(row *sql.Row) (*Stack, error) {
 	json.Unmarshal([]byte(mountsJSON), &stack.MountPoints)
 	json.Unmarshal([]byte(devicesJSON), &stack.Devices)
 	json.Unmarshal([]byte(envVarsJSON), &stack.EnvVars)
-	stack.CreatedAt, _ = time.Parse(time.RFC3339, createdAt)
+	if t, err := time.Parse(time.RFC3339, createdAt); err != nil {
+		log.Printf("[store] warning: invalid timestamp %q: %v", createdAt, err)
+	} else {
+		stack.CreatedAt = t
+	}
 	return &stack, nil
 }
 
@@ -784,6 +827,10 @@ func scanStackRows(rows *sql.Rows) (*Stack, error) {
 	json.Unmarshal([]byte(mountsJSON), &stack.MountPoints)
 	json.Unmarshal([]byte(devicesJSON), &stack.Devices)
 	json.Unmarshal([]byte(envVarsJSON), &stack.EnvVars)
-	stack.CreatedAt, _ = time.Parse(time.RFC3339, createdAt)
+	if t, err := time.Parse(time.RFC3339, createdAt); err != nil {
+		log.Printf("[store] warning: invalid timestamp %q: %v", createdAt, err)
+	} else {
+		stack.CreatedAt = t
+	}
 	return &stack, nil
 }

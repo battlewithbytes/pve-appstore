@@ -1,6 +1,10 @@
 package server
 
-import "github.com/battlewithbytes/pve-appstore/internal/engine"
+import (
+	"context"
+
+	"github.com/battlewithbytes/pve-appstore/internal/engine"
+)
 
 // EngineInstallService isolates install/job/runtime operations from HTTP handlers.
 type EngineInstallService interface {
@@ -16,7 +20,7 @@ type EngineInstallService interface {
 	ListInstallsEnriched() ([]*engine.InstallListItem, error)
 	StartContainer(id string) error
 	StopContainer(id string) error
-	RestartContainer(id string) error
+	RestartContainer(ctx context.Context, id string) error
 	GetInstallDetail(id string) (*engine.InstallDetail, error)
 	GetInstall(id string) (*engine.Install, error)
 	Uninstall(id string, keepVolumeNames []string, deleteBindPaths []string) (*engine.Job, error)
@@ -53,8 +57,8 @@ func (s *defaultEngineService) ListInstallsEnriched() ([]*engine.InstallListItem
 }
 func (s *defaultEngineService) StartContainer(id string) error { return s.eng.StartContainer(id) }
 func (s *defaultEngineService) StopContainer(id string) error  { return s.eng.StopContainer(id) }
-func (s *defaultEngineService) RestartContainer(id string) error {
-	return s.eng.RestartContainer(id)
+func (s *defaultEngineService) RestartContainer(ctx context.Context, id string) error {
+	return s.eng.RestartContainer(ctx, id)
 }
 func (s *defaultEngineService) GetInstallDetail(id string) (*engine.InstallDetail, error) {
 	return s.eng.GetInstallDetail(id)

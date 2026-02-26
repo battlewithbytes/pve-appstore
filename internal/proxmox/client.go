@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"os"
@@ -218,12 +219,16 @@ func (c *Client) doRequest(ctx context.Context, method, path string, params url.
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		apiErr := &ProxmoxError{StatusCode: resp.StatusCode}
 		var envelope apiResponse
-		if json.Unmarshal(respBody, &envelope) == nil {
+		if err := json.Unmarshal(respBody, &envelope); err != nil {
+			log.Printf("[proxmox] warning: failed to unmarshal error response: %v", err)
+		} else {
 			apiErr.Errors = envelope.Errors
 			// Try to extract a message from data
 			if len(envelope.Data) > 0 {
 				var msg string
-				if json.Unmarshal(envelope.Data, &msg) == nil {
+				if err := json.Unmarshal(envelope.Data, &msg); err != nil {
+					log.Printf("[proxmox] warning: failed to unmarshal error data: %v", err)
+				} else {
 					apiErr.Message = msg
 				}
 			}

@@ -70,26 +70,23 @@ func (l *loginRateLimiter) allow(ip string) bool {
 	return true
 }
 
-// cleanup removes stale entries periodically.
-func (l *loginRateLimiter) cleanup() {
-	for {
-		time.Sleep(5 * time.Minute)
-		l.mu.Lock()
-		cutoff := time.Now().Add(-loginWindow)
-		for ip, attempts := range l.attempts {
-			recent := attempts[:0]
-			for _, t := range attempts {
-				if t.After(cutoff) {
-					recent = append(recent, t)
-				}
-			}
-			if len(recent) == 0 {
-				delete(l.attempts, ip)
-			} else {
-				l.attempts[ip] = recent
+// cleanupExpired removes stale entries from the rate limiter (single pass).
+func (l *loginRateLimiter) cleanupExpired() {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	cutoff := time.Now().Add(-loginWindow)
+	for ip, attempts := range l.attempts {
+		recent := attempts[:0]
+		for _, t := range attempts {
+			if t.After(cutoff) {
+				recent = append(recent, t)
 			}
 		}
-		l.mu.Unlock()
+		if len(recent) == 0 {
+			delete(l.attempts, ip)
+		} else {
+			l.attempts[ip] = recent
+		}
 	}
 }
 
@@ -256,19 +253,16 @@ func (s *Server) handleAuthCheck(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// cleanupEphemeralTokens removes expired ephemeral tokens periodically.
-func cleanupEphemeralTokens() {
-	for {
-		time.Sleep(5 * time.Minute)
-		now := time.Now()
-		ephemeralTokensMu.Lock()
-		for k, exp := range ephemeralTokens {
-			if now.After(exp) {
-				delete(ephemeralTokens, k)
-			}
+// cleanupExpiredEphemeralTokens removes expired ephemeral tokens (single pass).
+func cleanupExpiredEphemeralTokens() {
+	now := time.Now()
+	ephemeralTokensMu.Lock()
+	for k, exp := range ephemeralTokens {
+		if now.After(exp) {
+			delete(ephemeralTokens, k)
 		}
-		ephemeralTokensMu.Unlock()
 	}
+	ephemeralTokensMu.Unlock()
 }
 
 // clientIP extracts the client's IP from the request (for rate limiting).
@@ -283,7 +277,36 @@ func clientIP(r *http.Request) string {
 	return host
 }
 
-func init() {
-	go cleanupEphemeralTokens()
-	go loginLimiter.cleanup()
+// startAuthCleanup starts background cleanup goroutines. Call the returned
+// function to stop them (e.g., during graceful shutdown).
+func startAuthCleanup() func() {
+	done := make(chan struct{})
+
+	go func() {
+		ticker := time.NewTicker(30 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				cleanupExpiredEphemeralTokens()
+			case <-done:
+				return
+			}
+		}
+	}()
+
+	go func() {
+		ticker := time.NewTicker(60 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				loginLimiter.cleanupExpired()
+			case <-done:
+				return
+			}
+		}
+	}()
+
+	return func() { close(done) }
 }

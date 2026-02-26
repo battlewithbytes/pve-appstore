@@ -56,6 +56,7 @@ func ParseUnraidXML(data []byte) (*UnraidContainer, error) {
 // ConvertUnraidToScaffold generates an app ID, app.yml, and install.py from an Unraid template.
 // If df is non-nil, the output uses real SDK v2 calls derived from the parsed Dockerfile.
 func ConvertUnraidToScaffold(c *UnraidContainer, df *DockerfileInfo) (id, manifest, script string) {
+	_ = Init() // ensure YAML configs are loaded
 	id = toKebabCase(c.Name)
 
 	if df != nil && len(df.Packages) > 0 {

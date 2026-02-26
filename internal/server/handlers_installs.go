@@ -223,7 +223,7 @@ func (s *Server) handleRestartContainer(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusServiceUnavailable, "engine not available")
 		return
 	}
-	if err := s.engineInstallSvc.RestartContainer(id); err != nil {
+	if err := s.engineInstallSvc.RestartContainer(r.Context(), id); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}

@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"os"
 	"strconv"
@@ -110,7 +111,10 @@ func (s *Server) handleTerminalForCTID(w http.ResponseWriter, r *http.Request, c
 			if msgType == websocket.MessageText {
 				// Check if it's a resize message
 				var resize terminalResize
-				if json.Unmarshal(data, &resize) == nil && resize.Type == "resize" {
+				if err := json.Unmarshal(data, &resize); err != nil {
+					// Not a JSON resize message — treat as terminal input
+					log.Printf("[terminal] warning: failed to unmarshal resize message: %v", err)
+				} else if resize.Type == "resize" {
 					pty.Setsize(ptmx, &pty.Winsize{
 						Rows: uint16(resize.Rows),
 						Cols: uint16(resize.Cols),
@@ -177,7 +181,9 @@ func (s *Server) handleTerminalViaHelper(conn *websocket.Conn, ctx context.Conte
 			if msgType == websocket.MessageText {
 				// Check if it's a resize message — forward as JSON to helper
 				var resize terminalResize
-				if json.Unmarshal(data, &resize) == nil && resize.Type == "resize" {
+				if err := json.Unmarshal(data, &resize); err != nil {
+					log.Printf("[terminal] warning: failed to unmarshal resize message: %v", err)
+				} else if resize.Type == "resize" {
 					// Forward resize to helper
 					termConn.Write(data)
 					continue

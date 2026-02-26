@@ -1,6 +1,10 @@
 package server
 
-import "github.com/battlewithbytes/pve-appstore/internal/engine"
+import (
+	"context"
+
+	"github.com/battlewithbytes/pve-appstore/internal/engine"
+)
 
 // EngineStackService isolates stack operations from HTTP handlers.
 type EngineStackService interface {
@@ -9,7 +13,7 @@ type EngineStackService interface {
 	GetStackDetail(id string) (*engine.StackDetail, error)
 	StartStackContainer(id string) error
 	StopStackContainer(id string) error
-	RestartStackContainer(id string) error
+	RestartStackContainer(ctx context.Context, id string) error
 	UninstallStack(id string) (*engine.Job, error)
 	EditStack(id string, req engine.EditRequest) (*engine.Job, error)
 	ValidateStack(req engine.StackCreateRequest) map[string]interface{}
@@ -31,8 +35,8 @@ func (s *defaultEngineService) StartStackContainer(id string) error {
 func (s *defaultEngineService) StopStackContainer(id string) error {
 	return s.eng.StopStackContainer(id)
 }
-func (s *defaultEngineService) RestartStackContainer(id string) error {
-	return s.eng.RestartStackContainer(id)
+func (s *defaultEngineService) RestartStackContainer(ctx context.Context, id string) error {
+	return s.eng.RestartStackContainer(ctx, id)
 }
 func (s *defaultEngineService) UninstallStack(id string) (*engine.Job, error) {
 	return s.eng.UninstallStack(id)
