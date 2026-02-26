@@ -5,6 +5,7 @@
 package helper
 
 import (
+	"bufio"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -306,6 +307,15 @@ type statusWriter struct {
 func (w *statusWriter) WriteHeader(code int) {
 	w.code = code
 	w.ResponseWriter.WriteHeader(code)
+}
+
+// Hijack delegates to the underlying ResponseWriter so that the terminal
+// handler can hijack the connection for PTY communication.
+func (w *statusWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	if hj, ok := w.ResponseWriter.(http.Hijacker); ok {
+		return hj.Hijack()
+	}
+	return nil, nil, fmt.Errorf("underlying ResponseWriter does not support hijacking")
 }
 
 // handleHealth returns a simple health check response.
