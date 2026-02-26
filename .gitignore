@@ -35,3 +35,6 @@ __pycache__/
 # OS
 .DS_Store
 Thumbs.db
+
+/pve-appstore-helper
+/pve-appstore-helper-*

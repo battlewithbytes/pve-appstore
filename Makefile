@@ -8,7 +8,7 @@ LDFLAGS   := -X $(MODULE)/internal/version.Version=$(VERSION) \
              -X $(MODULE)/internal/version.Commit=$(COMMIT) \
              -X $(MODULE)/internal/version.Date=$(DATE)
 
-.PHONY: build build-helper test test-apps vet fmt lint install deploy run-install run-serve clean deps tidy release frontend
+.PHONY: build build-helper test test-apps vet fmt lint install deploy run-install run-serve clean deps tidy release frontend coverage race
 
 build:
 	go build -ldflags "$(LDFLAGS)" -o $(BINARY) ./cmd/pve-appstore/
@@ -25,7 +25,15 @@ vet:
 fmt:
 	gofmt -w .
 
-lint: vet fmt
+lint: vet
+	gofmt -l .
+
+coverage:
+	go test -coverprofile=coverage.out ./...
+	go tool cover -html=coverage.out -o coverage.html
+
+race:
+	go test -race ./...
 
 frontend:
 	npm run build --prefix web/frontend

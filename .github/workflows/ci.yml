@@ -34,7 +34,21 @@ jobs:
         run: go vet ./...
 
       - name: Go tests
-        run: go test $(go list ./... | grep -v /test/e2e)
+        run: go test -race $(go list ./... | grep -v /test/e2e) -v
+
+      - name: Go vet
+        run: go vet ./...
+
+      - name: Check Go vulnerabilities
+        run: go install golang.org/x/vuln/cmd/govulncheck@latest && govulncheck ./...
+
+      - name: Frontend lint
+        run: npm run lint --prefix web/frontend
+
+      - name: Binary smoke test
+        run: |
+          go build -ldflags "-s -w" -o pve-appstore ./cmd/pve-appstore/
+          ./pve-appstore version
 
       - name: Python SDK tests
         run: |

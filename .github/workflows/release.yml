@@ -63,6 +63,18 @@ jobs:
           GOARCH: arm64
         run: go build -ldflags "${{ steps.version.outputs.ldflags }}" -o pve-appstore-linux-arm64 ./cmd/pve-appstore/
 
+      - name: Build helper linux/amd64
+        env:
+          GOOS: linux
+          GOARCH: amd64
+        run: go build -ldflags "${{ steps.version.outputs.ldflags }}" -o pve-appstore-helper-linux-amd64 ./cmd/pve-appstore-helper/
+
+      - name: Build helper linux/arm64
+        env:
+          GOOS: linux
+          GOARCH: arm64
+        run: go build -ldflags "${{ steps.version.outputs.ldflags }}" -o pve-appstore-helper-linux-arm64 ./cmd/pve-appstore-helper/
+
       - name: Create release
         uses: softprops/action-gh-release@v2
         with:
@@ -70,4 +82,6 @@ jobs:
           files: |
             pve-appstore-linux-amd64
             pve-appstore-linux-arm64
+            pve-appstore-helper-linux-amd64
+            pve-appstore-helper-linux-arm64
             deploy/install.sh
