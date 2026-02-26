@@ -510,4 +510,3 @@ function DevAppEditor({ id, requireAuth }: { id: string; requireAuth: (cb: () =>
 }
 
 export { DevAppEditor, DevSubmitDialog, DevValidationMsg }
-export default DevAppEditor

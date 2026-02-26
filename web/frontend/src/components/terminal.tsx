@@ -119,7 +119,7 @@ export function TerminalModal({ installId, onClose }: { installId: string; onClo
   const memPct = live && live.maxmem > 0 ? (live.mem / live.maxmem) * 100 : 0
 
   return (
-    <div className="fixed inset-0 bg-black/95 flex flex-col z-[200]">
+    <div className="fixed inset-0 bg-black/95 flex flex-col z-[200]" role="dialog" aria-modal="true" aria-label="Terminal">
       <div className="grid grid-cols-[1fr_auto_1fr] items-center px-4 py-2 bg-bg-card border-b border-border gap-4">
         <div className="flex items-center gap-3 min-w-0">
           <span className="text-primary font-mono text-sm whitespace-nowrap">&gt;_ {info?.name || 'Terminal'}</span>
@@ -240,7 +240,7 @@ export function LogViewerModal({ installId, onClose }: { installId: string; onCl
   }, [installId])
 
   return (
-    <div className="fixed inset-0 bg-black/95 flex flex-col z-[200]">
+    <div className="fixed inset-0 bg-black/95 flex flex-col z-[200]" role="dialog" aria-modal="true" aria-label="Log Viewer">
       <div className="flex items-center justify-between px-4 py-2 bg-bg-card border-b border-border">
         <span className="text-text-secondary font-mono text-sm">journalctl &mdash; {installId}</span>
         <button onClick={onClose} className="text-text-muted hover:text-text-primary bg-transparent border-none cursor-pointer text-lg font-mono">&times;</button>
@@ -309,7 +309,7 @@ export function StackTerminalModal({ stackId, onClose }: { stackId: string; onCl
   }, [stackId])
 
   return (
-    <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-[200] p-4" onClick={onClose}>
+    <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-[200] p-4" onClick={onClose} role="dialog" aria-modal="true" aria-label="Stack Shell">
       <div className="bg-bg-card border border-border rounded-lg w-full max-w-4xl h-[70vh] flex flex-col" onClick={e => e.stopPropagation()}>
         <div className="flex items-center justify-between px-4 py-2 border-b border-border">
           <span className="text-sm font-mono text-text-primary">Stack Shell</span>
@@ -370,7 +370,7 @@ export function StackLogViewerModal({ stackId, onClose }: { stackId: string; onC
   }, [stackId])
 
   return (
-    <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-[200] p-4" onClick={onClose}>
+    <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-[200] p-4" onClick={onClose} role="dialog" aria-modal="true" aria-label="Stack Logs">
       <div className="bg-bg-card border border-border rounded-lg w-full max-w-4xl h-[70vh] flex flex-col" onClick={e => e.stopPropagation()}>
         <div className="flex items-center justify-between px-4 py-2 border-b border-border">
           <span className="text-sm font-mono text-text-primary">Stack Logs (journalctl)</span>

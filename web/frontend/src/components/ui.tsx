@@ -1,7 +1,7 @@
 import React, { useState } from 'react'
 
-export function Center({ children, className }: { children: React.ReactNode; className?: string }) {
-  return <div className={`text-center py-12 text-text-muted ${className || ''}`}>{children}</div>
+export function Center({ children, className, role }: { children: React.ReactNode; className?: string; role?: string }) {
+  return <div className={`text-center py-12 text-text-muted ${className || ''}`} role={role}>{children}</div>
 }
 
 export function BackLink({ href = '#/', label = 'Back to apps' }: { href?: string; label?: string }) {

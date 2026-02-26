@@ -183,9 +183,9 @@ function DevCreateWizard({ onClose, onCreated, requireAuth }: { onClose: () => v
   }
 
   return (
-    <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50" onClick={onClose}>
+    <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50" onClick={onClose} role="dialog" aria-modal="true" aria-labelledby="modal-title-create-app">
       <div className="bg-bg-card border border-border rounded-lg p-6 w-full max-w-lg" onClick={(e) => e.stopPropagation()}>
-        <h3 className="text-lg font-bold text-text-primary font-mono mb-4">Create New App</h3>
+        <h3 id="modal-title-create-app" className="text-lg font-bold text-text-primary font-mono mb-4">Create New App</h3>
 
         <div className="mb-4">
           <label className="text-xs text-text-muted font-mono uppercase block mb-1">App ID (kebab-case)</label>
@@ -250,9 +250,9 @@ function DevUnraidImport({ onClose, onCreated, requireAuth }: { onClose: () => v
   }
 
   return (
-    <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50" onClick={onClose}>
+    <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50" onClick={onClose} role="dialog" aria-modal="true" aria-labelledby="modal-title-import">
       <div className="bg-bg-card border border-border rounded-lg p-6 w-full max-w-2xl" onClick={(e) => e.stopPropagation()}>
-        <h3 className="text-lg font-bold text-text-primary font-mono mb-4">Import Unraid XML Template</h3>
+        <h3 id="modal-title-import" className="text-lg font-bold text-text-primary font-mono mb-4">Import Unraid XML Template</h3>
         <p className="text-xs text-text-muted mb-3">Import an Unraid Docker template to create a scaffold app. Ports, volumes, and environment variables will be converted to inputs.</p>
 
         <div className="flex gap-2 mb-3">
@@ -372,9 +372,9 @@ function DevDockerfileImport({ onClose, onCreated, requireAuth }: { onClose: () 
   }
 
   return (
-    <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50" onClick={handleCancel}>
+    <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50" onClick={handleCancel} role="dialog" aria-modal="true" aria-labelledby="modal-title-dockerfile">
       <div className="bg-bg-card border border-border rounded-lg p-6 w-full max-w-2xl" onClick={(e) => e.stopPropagation()}>
-        <h3 className="text-lg font-bold text-text-primary font-mono mb-4">Import from Dockerfile</h3>
+        <h3 id="modal-title-dockerfile" className="text-lg font-bold text-text-primary font-mono mb-4">Import from Dockerfile</h3>
 
         {phase === 'input' && (
           <>
@@ -507,9 +507,9 @@ function DevCreateStackWizard({ onClose, onCreated, requireAuth }: { onClose: ()
   }
 
   return (
-    <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50" onClick={onClose}>
+    <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50" onClick={onClose} role="dialog" aria-modal="true" aria-labelledby="modal-title-new-stack">
       <div className="bg-bg-card border border-border rounded-lg p-6 w-full max-w-md" onClick={(e) => e.stopPropagation()}>
-        <h3 className="text-lg font-bold text-text-primary font-mono mb-4">New Stack</h3>
+        <h3 id="modal-title-new-stack" className="text-lg font-bold text-text-primary font-mono mb-4">New Stack</h3>
         <label className="block text-xs text-text-muted font-mono mb-1">Stack ID (kebab-case)</label>
         <input
           type="text" value={stackId} onChange={e => setStackId(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ''))}

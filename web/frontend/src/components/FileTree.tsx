@@ -134,7 +134,7 @@ export function FileTree({ files, activeFile, protectedFiles, onSelectFile, onDe
 
       {/* Move dialog */}
       {moveFile && (
-        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50" onClick={() => setMoveFile(null)}>
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50" onClick={() => setMoveFile(null)} role="dialog" aria-modal="true" aria-label="Move file">
           <div className="bg-bg-card border border-border rounded-lg p-4 w-72" onClick={e => e.stopPropagation()}>
             <div className="text-xs font-mono text-text-muted mb-1">Move file</div>
             <div className="text-sm font-mono text-text-primary mb-3 break-all">{moveFile}</div>

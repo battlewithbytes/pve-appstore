@@ -3,6 +3,7 @@ import { api } from '../api'
 import type { StackDetail, StackApp, MountPoint, EditRequest } from '../types'
 import { Center, StatusDot, ResourceCard, ActionButton } from '../components/ui'
 import { formatUptime, formatBytes, formatBytesShort } from '../lib/format'
+import { STATUS, POLL_INTERVAL } from '../lib/constants'
 import { StackTerminalModal, StackLogViewerModal } from '../components/terminal'
 import { StackEditDialog } from './stacks'
 
@@ -28,7 +29,7 @@ export function StackDetailView({ id, requireAuth }: { id: string; requireAuth: 
 
   useEffect(() => { fetchDetail() }, [fetchDetail])
   useEffect(() => {
-    const interval = setInterval(fetchDetail, 5000)
+    const interval = setInterval(fetchDetail, POLL_INTERVAL.NORMAL)
     return () => clearInterval(interval)
   }, [fetchDetail])
 
@@ -66,9 +67,9 @@ export function StackDetailView({ id, requireAuth }: { id: string; requireAuth: 
   }
 
   if (loading) return <Center>Loading...</Center>
-  if (error || !detail) return <Center className="text-status-error">{error || 'Stack not found'}</Center>
+  if (error || !detail) return <Center className="text-status-error" role="alert">{error || 'Stack not found'}</Center>
 
-  const isRunning = detail.status === 'running'
+  const isRunning = detail.status === STATUS.RUNNING
 
   return (
     <div>
@@ -87,7 +88,7 @@ export function StackDetailView({ id, requireAuth }: { id: string; requireAuth: 
           </div>
         </div>
         <div className="flex gap-2">
-          {detail.status === 'stopped' && <ActionButton label="Start" onClick={() => requireAuth(() => handleAction('start'))} />}
+          {detail.status === STATUS.STOPPED && <ActionButton label="Start" onClick={() => requireAuth(() => handleAction('start'))} />}
           {isRunning && (
             <>
               <ActionButton label="Stop" onClick={() => requireAuth(() => handleAction('stop'))} />
@@ -167,14 +168,29 @@ export function StackDetailView({ id, requireAuth }: { id: string; requireAuth: 
       {/* Mounts */}
       {detail.mount_points && detail.mount_points.length > 0 && (
         <div className="bg-bg-card border border-border rounded-lg p-5 mb-4">
-          <h3 className="text-sm font-bold text-text-primary mb-3 font-mono">Mounts</h3>
-          {detail.mount_points.map((mp: MountPoint) => (
-            <div key={mp.index} className="flex items-center gap-3 py-1 text-sm font-mono">
-              <span className="text-text-muted">mp{mp.index}</span>
-              <span className="text-primary">{mp.mount_path}</span>
-              <span className="text-text-muted text-xs">({mp.type}{mp.host_path ? `: ${mp.host_path}` : ''}{mp.volume_id ? `: ${mp.volume_id}` : ''})</span>
-            </div>
-          ))}
+          <h3 className="text-xs font-semibold text-text-muted mb-3 uppercase tracking-wider font-mono">Mounts</h3>
+          <div className="grid grid-cols-[repeat(auto-fit,minmax(200px,1fr))] gap-3">
+            {detail.mount_points.map((mp: MountPoint) => (
+              <div key={mp.index} className="bg-bg-secondary rounded-lg p-3">
+                <div className="flex items-center gap-2">
+                  <span className="text-sm font-medium text-text-primary">{mp.name || `mp${mp.index}`}</span>
+                  <span className={`text-[10px] px-1.5 py-0.5 rounded font-mono ${mp.type === 'bind' ? 'bg-status-warning/10 text-status-warning' : 'bg-primary/10 text-primary'}`}>
+                    {mp.type || 'volume'}
+                  </span>
+                </div>
+                <div className="text-xs text-text-muted font-mono mt-1">{mp.mount_path}</div>
+                {mp.type === 'bind' && mp.host_path && (
+                  <div className="text-xs text-text-secondary font-mono">host: {mp.host_path}</div>
+                )}
+                {(mp.type === 'volume' || !mp.type) && (
+                  <>
+                    {mp.size_gb ? <div className="text-xs text-text-muted font-mono">{mp.size_gb} GB</div> : null}
+                    {mp.volume_id && <div className="text-xs text-primary font-mono mt-1 truncate" title={mp.volume_id}>{mp.volume_id}</div>}
+                  </>
+                )}
+              </div>
+            ))}
+          </div>
         </div>
       )}
 

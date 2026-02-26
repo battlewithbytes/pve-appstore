@@ -357,9 +357,9 @@ export function InstallWizard({ app, onClose, replaceExisting, keepVolumes, exis
   const hasOtherInputs = Object.keys(otherInputGroups).length > 0
 
   return (
-    <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-[100]">
+    <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-[100]" role="dialog" aria-modal="true" aria-labelledby="modal-title-install-wizard">
       <div className="bg-bg-card border border-border rounded-xl p-8 w-full max-w-[700px] max-h-[90vh] overflow-auto">
-        <h2 className="text-xl font-bold text-text-primary mb-5 font-mono">Install {app.name}</h2>
+        <h2 id="modal-title-install-wizard" className="text-xl font-bold text-text-primary mb-5 font-mono">Install {app.name}</h2>
 
         <SectionTitle>Resources</SectionTitle>
         <FormRow label="CPU Cores" help={pinnedCount > 0 ? `Set by CPU pin (${pinnedCount} core${pinnedCount !== 1 ? 's' : ''})` : undefined}><FormInput value={cores} onChange={setCores} type="number" disabled={pinnedCount > 0} /></FormRow>

@@ -154,9 +154,9 @@ export function BranchDialog({ sourceId, sourceName, onClose }: { sourceId: stri
   }
 
   return (
-    <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-[200]">
+    <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-[200]" role="dialog" aria-modal="true" aria-labelledby="modal-title-branch">
       <div className="bg-bg-card border border-border rounded-xl p-8 w-full max-w-[460px]">
-        <h2 className="text-lg font-bold text-text-primary mb-2 font-mono">Branch {sourceName}</h2>
+        <h2 id="modal-title-branch" className="text-lg font-bold text-text-primary mb-2 font-mono">Branch {sourceName}</h2>
         <p className="text-sm text-text-secondary mb-4">Create a development branch for <span className="font-mono text-text-primary">{sourceName}</span>? This will copy the app into Developer Mode for editing. Your changes will be pushed to branch <span className="font-mono text-primary">app/{sourceId}</span> on your GitHub fork when you submit.</p>
         {error && (
           <div className="text-xs text-status-stopped mt-2">

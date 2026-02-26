@@ -41,9 +41,9 @@ export function StackEditDialog({ detail, isRunning, onConfirm, onCancel }: {
   }
 
   return (
-    <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-[100]" onClick={onCancel}>
+    <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-[100]" onClick={onCancel} role="dialog" aria-modal="true" aria-labelledby="modal-title-edit-stack">
       <div className="bg-bg-card border border-border rounded-xl p-8 w-full max-w-[520px] max-h-[80vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
-        <h2 className="text-lg font-bold text-text-primary mb-2 font-mono">Edit Stack: {detail.name}</h2>
+        <h2 id="modal-title-edit-stack" className="text-lg font-bold text-text-primary mb-2 font-mono">Edit Stack: {detail.name}</h2>
         <p className="text-sm text-text-secondary mb-4">
           Modify resource settings and recreate stack CT {detail.ctid}.
         </p>

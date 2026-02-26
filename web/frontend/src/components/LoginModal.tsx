@@ -24,7 +24,7 @@ export function LoginForm({ onSuccess }: { onSuccess: () => void }) {
   return (
     <form onSubmit={handleSubmit}>
       <FormInput value={password} onChange={setPassword} type="password" placeholder="Password" />
-      {error && <div className="text-status-stopped text-sm mt-2 font-mono">{error}</div>}
+      {error && <div role="alert" className="text-status-stopped text-sm mt-2 font-mono">{error}</div>}
       <button type="submit" disabled={loading || !password} className="w-full mt-4 px-5 py-2.5 text-sm font-semibold border-none rounded-lg cursor-pointer bg-primary text-bg-primary hover:shadow-[0_0_20px_rgba(0,255,157,0.3)] transition-all disabled:opacity-50 font-mono">
         {loading ? 'Logging in...' : 'Login'}
       </button>
@@ -36,10 +36,10 @@ export function LoginModal({ onSuccess, onClose }: { onSuccess: () => void; onCl
   useEscapeKey(onClose)
 
   return (
-    <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-[200]">
+    <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-[200]" role="dialog" aria-modal="true" aria-labelledby="modal-title-login">
       <div className="w-full max-w-[380px]">
         <div className="bg-bg-card border border-border rounded-xl p-8">
-          <h2 className="text-lg font-bold text-text-primary mb-2 font-mono">Login Required</h2>
+          <h2 id="modal-title-login" className="text-lg font-bold text-text-primary mb-2 font-mono">Login Required</h2>
           <p className="text-sm text-text-muted mb-5">Enter your password to perform this action.</p>
           <LoginForm onSuccess={onSuccess} />
           <div className="flex justify-end mt-3">
@@ -72,9 +72,9 @@ export function TestInstallModal({ app, ctid, onConfirm, onClose }: { app: AppDe
   }
 
   return (
-    <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-[200]" onClick={onClose}>
+    <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-[200]" onClick={onClose} role="dialog" aria-modal="true" aria-labelledby="modal-title-test-install">
       <div className="bg-bg-card border border-border rounded-xl p-8 w-full max-w-[520px]" onClick={e => e.stopPropagation()}>
-        <h2 className="text-lg font-bold text-yellow-400 mb-1 font-mono flex items-center gap-2">
+        <h2 id="modal-title-test-install" className="text-lg font-bold text-yellow-400 mb-1 font-mono flex items-center gap-2">
           <span className="text-xl">&#9888;</span> Test Install
         </h2>
         <p className="text-sm text-text-muted mb-5">

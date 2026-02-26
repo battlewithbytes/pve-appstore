@@ -76,9 +76,9 @@ export function DevSubmitDialog({ id, appName, onClose, requireAuth, isStack }: 
   }
 
   return (
-    <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50" onClick={onClose}>
+    <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50" onClick={onClose} role="dialog" aria-modal="true" aria-labelledby="modal-title-submit">
       <div className="bg-bg-card border border-border rounded-lg p-6 w-full max-w-lg" onClick={(e) => e.stopPropagation()}>
-        <h3 className="text-lg font-bold text-text-primary font-mono mb-4">Submit to Catalog</h3>
+        <h3 id="modal-title-submit" className="text-lg font-bold text-text-primary font-mono mb-4">Submit to Catalog</h3>
 
         {prUrl ? (
           <div>

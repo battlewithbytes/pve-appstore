@@ -1,8 +1,9 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { api } from '../api'
 import type { InstallDetail, AppDetail, MountPoint, EditRequest, ReconfigureRequest, ConfigDefaultsResponse, DevicePassthrough, GPUInfo, GPUDriverStatus } from '../types'
 import { Center, BackLink, Badge, StatusDot, ResourceCard, InfoCard, InfoRow, FormInput } from '../components/ui'
 import { formatUptime, formatBytes, formatBytesShort } from '../lib/format'
+import { STATUS, POLL_INTERVAL } from '../lib/constants'
 import { TerminalModal } from '../components/terminal'
 import { useEscapeKey } from '../hooks/useEscapeKey'
 
@@ -19,18 +20,21 @@ export function InstallDetailView({ id, requireAuth }: { id: string; requireAuth
   const [showConfigureDialog, setShowConfigureDialog] = useState(false)
   const [configuring, setConfiguring] = useState(false)
 
+  const appInfoRef = useRef(appInfo)
+  useEffect(() => { appInfoRef.current = appInfo }, [appInfo])
+
   const fetchDetail = useCallback(() => {
     api.installDetail(id).then(d => {
       setDetail(d)
-      if (!appInfo) api.app(d.app_id).then(setAppInfo).catch(() => {})
+      if (!appInfoRef.current) api.app(d.app_id).then(setAppInfo).catch(() => {})
     }).catch(e => setError(e.message))
-  }, [id, appInfo])
+  }, [id])
 
   useEffect(() => { fetchDetail() }, [fetchDetail])
 
   useEffect(() => {
-    if (detail?.status === 'uninstalled') return // no polling for uninstalled
-    const interval = setInterval(fetchDetail, 5000)
+    if (detail?.status === STATUS.UNINSTALLED) return // no polling for uninstalled
+    const interval = setInterval(fetchDetail, POLL_INTERVAL.NORMAL)
     return () => clearInterval(interval)
   }, [fetchDetail, detail?.status])
 
@@ -120,11 +124,11 @@ export function InstallDetailView({ id, requireAuth }: { id: string; requireAuth
     })
   }
 
-  if (error) return <div><BackLink href="#/installs" label="Back to installed" /><Center className="text-status-stopped">{error}</Center></div>
+  if (error) return <div><BackLink href="#/installs" label="Back to installed" /><Center className="text-status-stopped" role="alert">{error}</Center></div>
   if (!detail) return <Center>Loading...</Center>
 
-  const isUninstalled = detail.status === 'uninstalled'
-  const isRunning = !isUninstalled && (detail.live?.status === 'running' || detail.status === 'running')
+  const isUninstalled = detail.status === STATUS.UNINSTALLED
+  const isRunning = !isUninstalled && (detail.live?.status === STATUS.RUNNING || detail.status === STATUS.RUNNING)
   const live = detail.live
   const hasVolumes = detail.mount_points && detail.mount_points.length > 0
 
@@ -359,9 +363,9 @@ export function UninstallDialog({ appName, ctid, mountPoints, onConfirm, onCance
   }
 
   return (
-    <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-[100]">
+    <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-[100]" role="dialog" aria-modal="true" aria-labelledby="modal-title-uninstall">
       <div className="bg-bg-card border border-border rounded-xl p-8 w-full max-w-[480px] max-h-[80vh] overflow-y-auto">
-        <h2 className="text-lg font-bold text-text-primary mb-2 font-mono">Uninstall {appName}</h2>
+        <h2 id="modal-title-uninstall" className="text-lg font-bold text-text-primary mb-2 font-mono">Uninstall {appName}</h2>
         <p className="text-sm text-text-secondary mb-4">This will destroy container CT {ctid}.</p>
 
         {volumes.length > 0 && (
@@ -442,9 +446,9 @@ export function UpdateDialog({ appName, ctid, currentVersion, newVersion, isRunn
 }) {
   useEscapeKey(onCancel)
   return (
-    <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-[100]">
+    <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-[100]" role="dialog" aria-modal="true" aria-labelledby="modal-title-update">
       <div className="bg-bg-card border border-border rounded-xl p-8 w-full max-w-[480px]">
-        <h2 className="text-lg font-bold text-text-primary mb-2 font-mono">Update {appName}</h2>
+        <h2 id="modal-title-update" className="text-lg font-bold text-text-primary mb-2 font-mono">Update {appName}</h2>
         <p className="text-sm text-text-secondary mb-4">
           Update from <span className="font-mono text-text-primary">v{currentVersion}</span> to <span className="font-mono text-primary">v{newVersion}</span>
         </p>
@@ -565,9 +569,9 @@ export function ConfigureDialog({ detail, appInfo, isRunning, onConfirm, onCance
   }
 
   return (
-    <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-[100]" onClick={onCancel}>
+    <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-[100]" onClick={onCancel} role="dialog" aria-modal="true" aria-labelledby="modal-title-configure">
       <div className="bg-bg-card border border-border rounded-xl p-8 w-full max-w-[520px] max-h-[80vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
-        <h2 className="text-lg font-bold text-text-primary mb-2 font-mono">Configure {detail.app_name}</h2>
+        <h2 id="modal-title-configure" className="text-lg font-bold text-text-primary mb-2 font-mono">Configure {detail.app_name}</h2>
         <p className="text-sm text-text-secondary mb-4">
           Adjust resources, settings, and GPU passthrough for CT {detail.ctid}.
         </p>

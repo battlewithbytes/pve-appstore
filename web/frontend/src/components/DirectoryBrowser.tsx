@@ -59,9 +59,9 @@ export function DirectoryBrowser({ initialPath, onSelect, onClose }: { initialPa
   const pathSegments = path.split('/').filter(Boolean)
 
   return (
-    <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-[150]" onClick={onClose}>
+    <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-[150]" onClick={onClose} role="dialog" aria-modal="true" aria-labelledby="modal-title-browse">
       <div className="bg-bg-card border border-border rounded-xl p-6 w-full max-w-[500px] max-h-[70vh] flex flex-col" onClick={e => e.stopPropagation()}>
-        <h3 className="text-sm font-bold text-text-primary mb-3 font-mono">Browse Host Path</h3>
+        <h3 id="modal-title-browse" className="text-sm font-bold text-text-primary mb-3 font-mono">Browse Host Path</h3>
 
         {/* Redirected notice */}
         {initialRedirected && initialPath && (

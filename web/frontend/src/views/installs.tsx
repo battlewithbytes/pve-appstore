@@ -3,6 +3,7 @@ import { api } from '../api'
 import type { InstallListItem, StackListItem, StackApp } from '../types'
 import { Center, StatusDot, CtxMenuItem } from '../components/ui'
 import { formatUptime } from '../lib/format'
+import { STATUS, POLL_INTERVAL } from '../lib/constants'
 import { TerminalModal, LogViewerModal, MiniBar, StackTerminalModal, StackLogViewerModal } from '../components/terminal'
 import { StackContextMenu } from './stacks'
 import { UninstallDialog } from './install-detail'
@@ -31,7 +32,7 @@ export function InstallsList({ requireAuth }: { requireAuth: (cb: () => void) =>
 
   useEffect(() => { fetchInstalls() }, [fetchInstalls])
   useEffect(() => {
-    const interval = setInterval(fetchInstalls, 10000)
+    const interval = setInterval(fetchInstalls, POLL_INTERVAL.SLOW)
     return () => clearInterval(interval)
   }, [fetchInstalls])
 
@@ -137,8 +138,8 @@ export function InstallsList({ requireAuth }: { requireAuth: (cb: () => void) =>
           </div>
           {/* Install rows */}
           {installs.map(inst => {
-            const isRunning = inst.status === 'running'
-            const isUninstalled = inst.status === 'uninstalled'
+            const isRunning = inst.status === STATUS.RUNNING
+            const isUninstalled = inst.status === STATUS.UNINSTALLED
             const urls = getServiceUrls(inst)
             const isLoading = actionLoading === inst.id
             return (
@@ -210,7 +211,7 @@ export function InstallsList({ requireAuth }: { requireAuth: (cb: () => void) =>
           })}
           {/* Stack rows */}
           {stacks.map(stack => {
-            const isRunning = stack.status === 'running'
+            const isRunning = stack.status === STATUS.RUNNING
             const isStackLoading = actionLoading === `stack-${stack.id}`
             return (
               <div key={`stack-${stack.id}`}>
@@ -369,9 +370,9 @@ export function InstallContextMenu({ install, x, y, onClose, onAction, onShell, 
   onShell: (id: string) => void;
   onLogs: (id: string) => void;
 }) {
-  const isRunning = install.status === 'running'
-  const isStopped = install.status === 'stopped'
-  const isUninstalled = install.status === 'uninstalled'
+  const isRunning = install.status === STATUS.RUNNING
+  const isStopped = install.status === STATUS.STOPPED
+  const isUninstalled = install.status === STATUS.UNINSTALLED
 
   const menuY = Math.min(y, window.innerHeight - 320)
   const menuX = Math.min(x, window.innerWidth - 200)

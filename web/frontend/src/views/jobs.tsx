@@ -5,6 +5,7 @@ import '@xterm/xterm/css/xterm.css'
 import { api } from '../api'
 import type { Job, LogEntry } from '../types'
 import { Center, BackLink, StateBadge, InfoCard, InfoRow } from '../components/ui'
+import { JOB_STATE } from '../lib/constants'
 
 /** xterm.js-based read-only log viewer for job provision output. */
 function JobLogTerminal({ jobId, done }: { jobId: string; done: boolean }) {
@@ -134,7 +135,7 @@ export function JobView({ id }: { id: string }) {
   }, [id])
 
   useEffect(() => {
-    if (!job || job.state === 'completed' || job.state === 'failed' || job.state === 'cancelled') return
+    if (!job || job.state === JOB_STATE.COMPLETED || job.state === JOB_STATE.FAILED || job.state === JOB_STATE.CANCELLED) return
     const interval = setInterval(refreshJob, 1500)
     return () => clearInterval(interval)
   }, [id, job?.state, refreshJob])
@@ -155,7 +156,7 @@ export function JobView({ id }: { id: string }) {
 
   if (!job) return <Center>Loading...</Center>
 
-  const done = job.state === 'completed' || job.state === 'failed' || job.state === 'cancelled'
+  const done = job.state === JOB_STATE.COMPLETED || job.state === JOB_STATE.FAILED || job.state === JOB_STATE.CANCELLED
 
   return (
     <div>
@@ -170,7 +171,7 @@ export function JobView({ id }: { id: string }) {
         )}
       </div>
 
-      {cancelError && <div className="mt-3 p-3 bg-status-stopped/10 border border-status-stopped/30 rounded-lg text-status-stopped text-sm font-mono">{cancelError}</div>}
+      {cancelError && <div role="alert" className="mt-3 p-3 bg-status-stopped/10 border border-status-stopped/30 rounded-lg text-status-stopped text-sm font-mono">{cancelError}</div>}
 
       <div className="grid grid-cols-[repeat(auto-fit,minmax(200px,1fr))] gap-3 mt-4">
         <InfoCard title="Job Info">
@@ -187,7 +188,7 @@ export function JobView({ id }: { id: string }) {
         )}
       </div>
 
-      {job.error && <div className="mt-4 p-4 bg-status-stopped/10 border border-status-stopped/30 rounded-lg text-status-stopped text-sm font-mono">{job.error}</div>}
+      {job.error && <div role="alert" className="mt-4 p-4 bg-status-stopped/10 border border-status-stopped/30 rounded-lg text-status-stopped text-sm font-mono">{job.error}</div>}
 
       <JobLogTerminal jobId={id} done={done} />
     </div>
@@ -203,7 +204,7 @@ export function JobsList() {
   const load = () => api.jobs().then(d => { setJobs(d.jobs || []); setLoading(false) })
   useEffect(() => { load() }, [])
 
-  const terminalStates = ['completed', 'failed', 'cancelled']
+  const terminalStates: readonly string[] = [JOB_STATE.COMPLETED, JOB_STATE.FAILED, JOB_STATE.CANCELLED]
   const hasTerminalJobs = jobs.some(j => terminalStates.includes(j.state))
 
   const handleClear = async () => {
