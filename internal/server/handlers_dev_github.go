@@ -36,14 +36,18 @@ func (s *Server) handleDevGitHubStatus(w http.ResponseWriter, r *http.Request) {
 
 	if userJSON, _ := s.githubStore.GetGitHubState("github_user"); userJSON != "" {
 		var user gh.GitHubUser
-		if json.Unmarshal([]byte(userJSON), &user) == nil {
+		if err := json.Unmarshal([]byte(userJSON), &user); err != nil {
+			log.Printf("[github] warning: failed to unmarshal github_user: %v", err)
+		} else {
 			resp["user"] = user
 		}
 	}
 
 	if forkJSON, _ := s.githubStore.GetGitHubState("github_fork"); forkJSON != "" {
 		var fork gh.ForkResult
-		if json.Unmarshal([]byte(forkJSON), &fork) == nil {
+		if err := json.Unmarshal([]byte(forkJSON), &fork); err != nil {
+			log.Printf("[github] warning: failed to unmarshal github_fork: %v", err)
+		} else {
 			resp["fork"] = fork
 		}
 	}
@@ -242,7 +246,7 @@ func (s *Server) handleDevGitHubRepoInfo(w http.ResponseWriter, r *http.Request)
 		PRURL   string `json:"pr_url"`
 		PRState string `json:"pr_state"`
 	}
-	var branches []branchEntry
+	branches := make([]branchEntry, 0, len(allBranches))
 	for _, b := range allBranches {
 		var appID string
 		if strings.HasPrefix(b.Name, "app/") {
@@ -493,7 +497,9 @@ func (s *Server) ensureCatalogFork(token string) (*gh.ForkResult, error) {
 	if s.githubStore != nil {
 		if forkJSON, _ := s.githubStore.GetGitHubState("github_fork"); forkJSON != "" {
 			var cached gh.ForkResult
-			if json.Unmarshal([]byte(forkJSON), &cached) == nil && cached.FullName != "" {
+			if err := json.Unmarshal([]byte(forkJSON), &cached); err != nil {
+				log.Printf("[github] warning: failed to unmarshal cached fork: %v", err)
+			} else if cached.FullName != "" {
 				return &cached, nil
 			}
 		}

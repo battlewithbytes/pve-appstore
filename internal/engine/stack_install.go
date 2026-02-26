@@ -31,23 +31,8 @@ func (e *Engine) StartStack(req StackCreateRequest) (*Job, error) {
 		manifests = append(manifests, app)
 	}
 
-	// Validate request inputs
-	if err := ValidateHostname(req.Hostname); err != nil {
-		return nil, err
-	}
-	if err := ValidateBridge(req.Bridge); err != nil {
-		return nil, err
-	}
-	if err := ValidateIPAddress(req.IPAddress); err != nil {
-		return nil, err
-	}
-	if err := ValidateMACAddress(req.MACAddress); err != nil {
-		return nil, err
-	}
-	if err := ValidateEnvVars(req.EnvVars); err != nil {
-		return nil, err
-	}
-	if err := ValidateDevices(req.Devices); err != nil {
+	// Validate common request inputs (hostname, bridge, IP, MAC, env vars, devices)
+	if err := validateCommonInputs(req.Hostname, req.Bridge, req.IPAddress, req.MACAddress, req.EnvVars, req.Devices); err != nil {
 		return nil, err
 	}
 	for _, hp := range req.BindMounts {

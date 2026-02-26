@@ -186,11 +186,13 @@ func New(cfg *config.Config, cat *catalog.Catalog, dataDir string, cm ContainerM
 			for _, o := range orphans {
 				if o.CTID > 0 {
 					fmt.Printf("  engine:  destroying orphaned container %d (job %s)\n", o.CTID, o.ID)
-					ctx := context.Background()
-					_ = cm.Stop(ctx, o.CTID)
-					if err := cm.Destroy(ctx, o.CTID); err != nil {
+					// Use independent context: cleanup must complete even if parent is cancelled
+					cleanCtx, cleanCancel := context.WithTimeout(context.Background(), 30*time.Second)
+					_ = cm.Stop(cleanCtx, o.CTID)
+					if err := cm.Destroy(cleanCtx, o.CTID); err != nil {
 						fmt.Printf("  engine:  warning: failed to destroy container %d: %v\n", o.CTID, err)
 					}
+					cleanCancel()
 				}
 			}
 		}
@@ -214,8 +216,10 @@ func (e *Engine) CancelJob(jobID string) error {
 	job, err := e.store.GetJob(jobID)
 	if err == nil && job.CTID > 0 {
 		go func() {
-			ctx := context.Background()
-			_ = e.cm.Stop(ctx, job.CTID)
+			// Use independent context: cancellation cleanup must complete even if caller disconnects
+			cleanCtx, cleanCancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cleanCancel()
+			_ = e.cm.Stop(cleanCtx, job.CTID)
 		}()
 	}
 
@@ -247,7 +251,7 @@ func (e *Engine) StopContainer(installID string) error {
 }
 
 // RestartContainer stops then starts a container for an existing install.
-func (e *Engine) RestartContainer(installID string) error {
+func (e *Engine) RestartContainer(ctx context.Context, installID string) error {
 	inst, err := e.store.GetInstall(installID)
 	if err != nil {
 		return fmt.Errorf("install %q not found", installID)
@@ -255,7 +259,6 @@ func (e *Engine) RestartContainer(installID string) error {
 	if inst.Status == "uninstalled" || inst.CTID == 0 {
 		return fmt.Errorf("install %q has no active container", installID)
 	}
-	ctx := context.Background()
 	if err := e.cm.Shutdown(ctx, inst.CTID, 30); err != nil {
 		// Fallback to force stop
 		_ = e.cm.Stop(ctx, inst.CTID)
@@ -340,26 +343,14 @@ func (e *Engine) StartInstall(req InstallRequest) (*Job, error) {
 		}
 	}
 
-	// Validate request inputs
-	if err := ValidateHostname(req.Hostname); err != nil {
-		return nil, err
-	}
-	if err := ValidateBridge(req.Bridge); err != nil {
-		return nil, err
-	}
-	if err := ValidateIPAddress(req.IPAddress); err != nil {
+	// Validate common request inputs (hostname, bridge, IP, MAC, env vars, devices)
+	if err := validateCommonInputs(req.Hostname, req.Bridge, req.IPAddress, req.MACAddress, req.EnvVars, req.Devices); err != nil {
 		return nil, err
 	}
 	if app.LXC.Defaults.RequireStaticIP && req.IPAddress == "" {
 		return nil, fmt.Errorf("app %q requires a static IP address", req.AppID)
 	}
-	if err := ValidateMACAddress(req.MACAddress); err != nil {
-		return nil, err
-	}
 	if err := ValidateTags(req.ExtraTags); err != nil {
-		return nil, err
-	}
-	if err := ValidateEnvVars(req.EnvVars); err != nil {
 		return nil, err
 	}
 	// Validate bind mount paths
@@ -1893,7 +1884,7 @@ func (e *Engine) StopStackContainer(stackID string) error {
 }
 
 // RestartStackContainer stops then starts a stack container.
-func (e *Engine) RestartStackContainer(stackID string) error {
+func (e *Engine) RestartStackContainer(ctx context.Context, stackID string) error {
 	stack, err := e.store.GetStack(stackID)
 	if err != nil {
 		return fmt.Errorf("stack %q not found", stackID)
@@ -1901,7 +1892,6 @@ func (e *Engine) RestartStackContainer(stackID string) error {
 	if stack.Status == "uninstalled" || stack.CTID == 0 {
 		return fmt.Errorf("stack %q has no active container", stackID)
 	}
-	ctx := context.Background()
 	if err := e.cm.Shutdown(ctx, stack.CTID, 30); err != nil {
 		_ = e.cm.Stop(ctx, stack.CTID)
 	}
