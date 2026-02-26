@@ -1,0 +1,147 @@
+id: makermatrix
+name: MakerMatrix
+description: Electronic parts and tools inventory manager for makers with supplier integration, label printing, and AI-powered search.
+overview: |
+  MakerMatrix is an electronic parts and tools inventory management system designed for
+  makers, hobbyists, and small labs. Built with FastAPI and React, it provides a modern
+  web interface for tracking components, tools, and supplies.
+
+  Features include barcode/QR code generation, supplier integration (Mouser, DigiKey),
+  Brother label printer support, location tracking with hierarchical storage, CSV/Excel
+  import and export, datasheet management, and AI-powered natural language search.
+
+  The system uses SQLite by default and creates a default admin account on first startup.
+  After installation, log in with the default credentials and change the admin password.
+version: "1.0.0"
+categories:
+  - tools
+  - productivity
+tags:
+  - inventory
+  - electronics
+  - maker
+  - parts
+  - label-printing
+homepage: https://github.com/ril3y/MakerMatrix
+license: MIT
+maintainers:
+  - PVE App Store
+
+official: false
+lxc:
+  ostemplate: debian-12
+  defaults:
+    unprivileged: true
+    cores: 2
+    memory_mb: 2048
+    disk_gb: 8
+    features:
+      - nesting
+    onboot: true
+
+volumes:
+  - name: data
+    type: volume
+    mount_path: /data
+    size_gb: 5
+    label: Application Data
+    required: true
+    description: Database, backups, datasheets, and uploaded images
+
+inputs:
+  - key: web_port
+    label: Web Port
+    type: number
+    default: 8080
+    required: false
+    group: Network
+    description: Port for the MakerMatrix web interface.
+    help: Default 8080; must be between 1024-65535
+    validation:
+      min: 1024
+      max: 65535
+  - key: jwt_secret
+    label: JWT Secret
+    type: secret
+    default: ""
+    required: false
+    group: Security
+    description: Secret key for JWT token signing. Auto-generated if left empty.
+
+permissions:
+  packages:
+    - python3
+    - python3-venv
+    - python3-pip
+    - python3-dev
+    - nodejs
+    - npm
+    - gcc
+    - g++
+    - zlib1g-dev
+    - fonts-dejavu-core
+    - git
+    - curl
+  pip:
+    - fastapi
+    - uvicorn
+    - sqlalchemy
+    - sqlmodel
+    - pydantic
+    - pillow
+    - qrcode
+    - passlib
+    - python-jose
+    - cryptography
+    - APScheduler
+    - slowapi
+    - pyminizip
+    - emoji
+    - python-multipart
+    - starlette
+    - brother_ql-inventree
+    - aiohttp
+    - python-dotenv
+    - rich
+  urls:
+    - "https://github.com/ril3y/MakerMatrix/*"
+    - "https://pypi.org/*"
+    - "https://files.pythonhosted.org/*"
+    - "https://registry.npmjs.org/*"
+    - "http://127.0.0.1:*"
+  paths:
+    - "/opt/makermatrix/"
+    - "/data/"
+    - "/etc/systemd/system/"
+    - "/tmp/"
+  services:
+    - makermatrix
+  users:
+    - makermatrix
+  commands:
+    - git
+    - npm
+    - npx
+    - tsc
+
+provisioning:
+  script: provision/install.py
+  timeout_sec: 600
+
+outputs:
+  - key: webui_url
+    label: WebUI
+    value: "http://{{ip}}:{{web_port}}"
+  - key: default_user
+    label: Username
+    value: admin
+  - key: default_password
+    label: Default Password
+    value: "Admin123!"
+  - key: setup
+    label: Setup
+    value: "Change admin password after first login"
+
+gpu:
+  supported: []
+  required: false
