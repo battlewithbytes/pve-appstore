@@ -120,6 +120,7 @@ type VolumeSpec struct {
 	DefaultHostPath string `yaml:"default_host_path,omitempty" json:"default_host_path,omitempty"` // suggested default for bind
 	Required        bool   `yaml:"required" json:"required"`
 	ReadOnly        bool   `yaml:"read_only,omitempty" json:"read_only,omitempty"`
+	SharedHostPath  bool   `yaml:"shared_host_path,omitempty" json:"shared_host_path,omitempty"` // skip chown to container UID — preserves host fs ownership for shared dev sources
 	Description     string `yaml:"description,omitempty" json:"description,omitempty"`
 }
 

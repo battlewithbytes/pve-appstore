@@ -117,6 +117,7 @@ type MountPointOption struct {
 	VolumeID  string // non-empty when reattaching existing volume
 	HostPath  string // host path — bind only
 	ReadOnly  bool
+	SharedHostPath bool // bind only — skip chown to container UID
 }
 
 // CreateOptions defines the parameters for creating a new container.
@@ -529,12 +530,13 @@ func buildMountPoints(app *catalog.AppManifest, req InstallRequest, preserved []
 			volType = "volume"
 		}
 		mp := MountPoint{
-			Index:     mpIndex,
-			Name:      vol.Name,
-			Type:      volType,
-			MountPath: vol.MountPath,
-			SizeGB:    vol.SizeGB,
-			ReadOnly:  vol.ReadOnly,
+			Index:          mpIndex,
+			Name:           vol.Name,
+			Type:           volType,
+			MountPath:      vol.MountPath,
+			SizeGB:         vol.SizeGB,
+			ReadOnly:       vol.ReadOnly,
+			SharedHostPath: vol.SharedHostPath,
 		}
 		if volType == "volume" {
 			if hp, ok := req.BindMounts[vol.Name]; ok && hp != "" {

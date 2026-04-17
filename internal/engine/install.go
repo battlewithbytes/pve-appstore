@@ -503,14 +503,15 @@ func stepCreateContainer(ctx *installContext) error {
 			mpStorage = ctx.job.Storage
 		}
 		opt := MountPointOption{
-			Index:     mp.Index,
-			Type:      mp.Type,
-			MountPath: mp.MountPath,
-			Storage:   mpStorage,
-			SizeGB:    mp.SizeGB,
-			VolumeID:  mp.VolumeID,
-			HostPath:  mp.HostPath,
-			ReadOnly:  mp.ReadOnly,
+			Index:          mp.Index,
+			Type:           mp.Type,
+			MountPath:      mp.MountPath,
+			Storage:        mpStorage,
+			SizeGB:         mp.SizeGB,
+			VolumeID:       mp.VolumeID,
+			HostPath:       mp.HostPath,
+			ReadOnly:       mp.ReadOnly,
+			SharedHostPath: mp.SharedHostPath,
 		}
 		if mp.Type == "bind" {
 			bindMounts = append(bindMounts, opt)
@@ -559,6 +560,10 @@ func stepCreateContainer(ctx *installContext) error {
 // 100000:100000 (the standard unprivileged container root mapping).
 func chownBindMountsForUnprivileged(mounts []MountPointOption, info func(string, ...interface{}), warn func(string, ...interface{})) error {
 	for _, bm := range mounts {
+		if bm.SharedHostPath {
+			info("Skipping chown on %s (shared_host_path: preserving host ownership)", bm.HostPath)
+			continue
+		}
 		info("Setting ownership on %s for unprivileged container", bm.HostPath)
 		if err := pct.Chown(bm.HostPath, 100000, 100000, true); err != nil {
 			warn("chown %s: %v", bm.HostPath, err)

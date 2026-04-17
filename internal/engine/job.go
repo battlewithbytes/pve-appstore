@@ -53,6 +53,7 @@ type MountPoint struct {
 	HostPath  string `json:"host_path,omitempty"`       // host path (type=bind only)
 	Storage   string `json:"storage,omitempty"`          // Proxmox storage for this volume
 	ReadOnly  bool   `json:"read_only,omitempty"`
+	SharedHostPath bool `json:"shared_host_path,omitempty"` // bind only — skip chown to container UID
 }
 
 // Job represents an install/uninstall job tracked by the engine.
