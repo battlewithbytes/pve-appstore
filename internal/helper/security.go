@@ -1,11 +1,13 @@
 package helper
 
 import (
+	"bufio"
 	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 )
 
 // --- S1: CTID Ownership Verification ---
@@ -261,8 +263,10 @@ func (s *Server) validateStoragePath(path string) error {
 	// Add browsable storages from config (the main service resolves these
 	// via the Proxmox API; here we use a static list from config)
 	_ = cfg // storages are string IDs, not paths — we need runtime resolution
-	// For now, allow paths under common storage mount patterns.
-	// The actual storage path validation happens via the isUnderRoot check below.
+
+	// Discover the actual storage paths from /etc/pve/storage.cfg so admins
+	// don't have to symlink ZFS pools into /mnt/ to use them as bind targets.
+	allowedRoots = append(allowedRoots, pveStorageRoots()...)
 
 	// Also allow /usr/lib/nvidia paths (for GPU library bind mounts)
 	if strings.HasPrefix(path, "/usr/lib/nvidia") ||
@@ -628,4 +632,55 @@ func validatePerms(perms string) error {
 		return fmt.Errorf("invalid permissions %q (must be octal like 0755)", perms)
 	}
 	return nil
+}
+
+// pveStorageRoots reads /etc/pve/storage.cfg once and returns the filesystem
+// roots declared by `path` (dir storage) and `mountpoint` (zfspool storage)
+// directives, each suffixed with "/" so they prefix-match cleanly.
+//
+// Cached for the lifetime of the helper process — storage.cfg changes are
+// rare and a restart picks them up.
+var (
+	pveStorageRootsCache []string
+	pveStorageRootsOnce  sync.Once
+)
+
+func pveStorageRoots() []string {
+	pveStorageRootsOnce.Do(func() {
+		f, err := os.Open("/etc/pve/storage.cfg")
+		if err != nil {
+			return
+		}
+		defer f.Close()
+		seen := make(map[string]bool)
+		scanner := bufio.NewScanner(f)
+		for scanner.Scan() {
+			line := strings.TrimSpace(scanner.Text())
+			if line == "" || strings.HasPrefix(line, "#") {
+				continue
+			}
+			var key, val string
+			switch {
+			case strings.HasPrefix(line, "path "):
+				key, val = "path", strings.TrimSpace(strings.TrimPrefix(line, "path "))
+			case strings.HasPrefix(line, "mountpoint "):
+				key, val = "mountpoint", strings.TrimSpace(strings.TrimPrefix(line, "mountpoint "))
+			default:
+				continue
+			}
+			_ = key
+			if val == "" || val == "/" {
+				continue
+			}
+			val = filepath.Clean(val)
+			if !strings.HasSuffix(val, "/") {
+				val += "/"
+			}
+			if !seen[val] {
+				seen[val] = true
+				pveStorageRootsCache = append(pveStorageRootsCache, val)
+			}
+		}
+	})
+	return pveStorageRootsCache
 }
