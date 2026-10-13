@@ -476,6 +476,7 @@ func (e *Engine) StartInstall(req InstallRequest) (*Job, error) {
 	e.cancels[job.ID] = cancel
 	e.mu.Unlock()
 
+	snap := job.snapshot() // taken before the goroutine starts mutating job
 	go func() {
 		defer func() {
 			e.mu.Lock()
@@ -486,7 +487,7 @@ func (e *Engine) StartInstall(req InstallRequest) (*Job, error) {
 		e.runInstall(ctx, job)
 	}()
 
-	return job, nil
+	return snap, nil
 }
 
 // resolveGPUDevices determines GPU devices from the request profile or manifest profiles.
@@ -738,9 +739,10 @@ func (e *Engine) Uninstall(installID string, keepVolumeNames []string, deleteBin
 		return nil, fmt.Errorf("creating uninstall job: %w", err)
 	}
 
+	snap := job.snapshot() // taken before the goroutine starts mutating job
 	go e.runUninstall(job, inst, keepVolumeNames, deleteBindPaths)
 
-	return job, nil
+	return snap, nil
 }
 
 func (e *Engine) runUninstall(job *Job, inst *Install, keepVolumeNames []string, deleteBindPaths []string) {
@@ -1147,9 +1149,10 @@ func (e *Engine) Reinstall(installID string, req ReinstallRequest) (*Job, error)
 	}
 
 	// Run install pipeline — on success, update the existing install record
+	snap := job.snapshot() // taken before the goroutine starts mutating job
 	go e.runReinstall(job, inst)
 
-	return job, nil
+	return snap, nil
 }
 
 func (e *Engine) runReinstall(job *Job, inst *Install) {
@@ -1288,9 +1291,10 @@ func (e *Engine) Update(installID string, req ReinstallRequest) (*Job, error) {
 		return nil, fmt.Errorf("creating update job: %w", err)
 	}
 
+	snap := job.snapshot() // taken before the goroutine starts mutating job
 	go e.runUpdate(job, inst)
 
-	return job, nil
+	return snap, nil
 }
 
 func (e *Engine) runUpdate(job *Job, inst *Install) {
@@ -1523,9 +1527,10 @@ func (e *Engine) EditInstall(installID string, req EditRequest) (*Job, error) {
 		return nil, fmt.Errorf("creating edit job: %w", err)
 	}
 
+	snap := job.snapshot() // taken before the goroutine starts mutating job
 	go e.runEdit(job, inst)
 
-	return job, nil
+	return snap, nil
 }
 
 func (e *Engine) runEdit(job *Job, inst *Install) {
@@ -1927,9 +1932,10 @@ func (e *Engine) UninstallStack(stackID string) (*Job, error) {
 		return nil, fmt.Errorf("creating uninstall job: %w", err)
 	}
 
+	snap := job.snapshot() // taken before the goroutine starts mutating job
 	go e.runStackUninstall(job, stack)
 
-	return job, nil
+	return snap, nil
 }
 
 func (e *Engine) runStackUninstall(job *Job, stack *Stack) {
@@ -2074,9 +2080,10 @@ func (e *Engine) EditStack(stackID string, req EditRequest) (*Job, error) {
 		return nil, fmt.Errorf("creating stack edit job: %w", err)
 	}
 
+	snap := job.snapshot() // taken before the goroutine starts mutating job
 	go e.runStackEdit(job, stack)
 
-	return job, nil
+	return snap, nil
 }
 
 func (e *Engine) runStackEdit(job *Job, stack *Stack) {

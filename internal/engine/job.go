@@ -275,3 +275,31 @@ type StackListItem struct {
 	Uptime int64                  `json:"uptime"`
 	Live   *ContainerStatusDetail `json:"live,omitempty"`
 }
+
+// snapshot returns a copy of the job that shares no mutable state with the
+// original. Async operations return a snapshot to the caller so the caller can
+// serialize it while the background goroutine keeps updating the live job.
+func (j *Job) snapshot() *Job {
+	c := *j
+	c.Inputs = cloneStringMap(j.Inputs)
+	c.Outputs = cloneStringMap(j.Outputs)
+	c.EnvVars = cloneStringMap(j.EnvVars)
+	if j.MountPoints != nil {
+		c.MountPoints = append([]MountPoint(nil), j.MountPoints...)
+	}
+	if j.Devices != nil {
+		c.Devices = append([]DevicePassthrough(nil), j.Devices...)
+	}
+	return &c
+}
+
+func cloneStringMap(m map[string]string) map[string]string {
+	if m == nil {
+		return nil
+	}
+	c := make(map[string]string, len(m))
+	for k, v := range m {
+		c[k] = v
+	}
+	return c
+}
