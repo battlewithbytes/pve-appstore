@@ -659,3 +659,90 @@ func TestCreateContainerNoDeviceParams(t *testing.T) {
 		t.Errorf("API create body should NOT contain dev* params (applied via pct set instead): %s", gotBody)
 	}
 }
+
+// nodeStoragesHandler serves GET /nodes/pve/storage with the given storage→content map.
+func nodeStoragesHandler(storages map[string]string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var data []map[string]interface{}
+		for id, content := range storages {
+			data = append(data, map[string]interface{}{"storage": id, "content": content, "active": 1, "enabled": 1})
+		}
+		json.NewEncoder(w).Encode(map[string]interface{}{"data": data})
+	}
+}
+
+func TestResolveTemplateFindsDedicatedTemplateStorage(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api2/json/nodes/pve/storage", nodeStoragesHandler(map[string]string{
+		"local":       "backup,iso",
+		"fast-pool":   "rootdir,images,vztmpl",
+		"iso-storage": "iso,vztmpl",
+	}))
+	mux.HandleFunc("/api2/json/nodes/pve/storage/fast-pool/content", func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]interface{}{"data": []interface{}{}})
+	})
+	mux.HandleFunc("/api2/json/nodes/pve/storage/iso-storage/content", func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"data": []map[string]interface{}{
+				{"volid": "iso-storage:vztmpl/ubuntu-24.04-standard_24.04-2_amd64.tar.zst", "size": 1},
+			},
+		})
+	})
+	mux.HandleFunc("/api2/json/nodes/pve/aplinfo", func(w http.ResponseWriter, r *http.Request) {
+		t.Error("should not consult the appliance list when the template exists")
+	})
+
+	_, client := newTestServer(t, mux)
+	tmpl := client.ResolveTemplate(context.Background(), "ubuntu-24.04", "fast-pool")
+	if tmpl != "iso-storage:vztmpl/ubuntu-24.04-standard_24.04-2_amd64.tar.zst" {
+		t.Errorf("resolved = %q", tmpl)
+	}
+}
+
+func TestResolveTemplateDownloadsToFirstWritableTemplateStorage(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api2/json/nodes/pve/storage", nodeStoragesHandler(map[string]string{
+		"local":       "backup,iso",
+		"fast-pool":   "rootdir,images,vztmpl",
+		"iso-storage": "iso,vztmpl",
+	}))
+	empty := func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]interface{}{"data": []interface{}{}})
+	}
+	mux.HandleFunc("/api2/json/nodes/pve/storage/fast-pool/content", empty)
+	mux.HandleFunc("/api2/json/nodes/pve/storage/iso-storage/content", empty)
+
+	var downloadedTo []string
+	mux.HandleFunc("/api2/json/nodes/pve/aplinfo", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "GET" {
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"data": []map[string]interface{}{
+					{"template": "ubuntu-26.04-standard_26.04-1_amd64.tar.zst", "section": "system"},
+				},
+			})
+			return
+		}
+		r.ParseForm()
+		st := r.FormValue("storage")
+		downloadedTo = append(downloadedTo, st)
+		if st == "fast-pool" {
+			w.WriteHeader(http.StatusForbidden)
+			json.NewEncoder(w).Encode(map[string]interface{}{"data": nil, "message": "Permission check failed"})
+			return
+		}
+		json.NewEncoder(w).Encode(map[string]interface{}{"data": "UPID:pve:00000001:00000001:00000001:download::root@pam:"})
+	})
+	mux.HandleFunc("/api2/json/nodes/pve/tasks/", func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]interface{}{"data": map[string]interface{}{"status": "stopped", "exitstatus": "OK"}})
+	})
+
+	_, client := newTestServer(t, mux)
+	tmpl := client.ResolveTemplate(context.Background(), "ubuntu-26.04", "fast-pool")
+	if tmpl != "iso-storage:vztmpl/ubuntu-26.04-standard_26.04-1_amd64.tar.zst" {
+		t.Errorf("resolved = %q", tmpl)
+	}
+	// "local" lacks vztmpl so it must never be tried; fast-pool is tried first and refused.
+	if want := []string{"fast-pool", "iso-storage"}; strings.Join(downloadedTo, ",") != strings.Join(want, ",") {
+		t.Errorf("download attempts = %v, want %v", downloadedTo, want)
+	}
+}

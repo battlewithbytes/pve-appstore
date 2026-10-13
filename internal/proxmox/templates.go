@@ -129,24 +129,17 @@ func (c *Client) ResolveTemplate(ctx context.Context, name, storage string) stri
 	}
 
 	// Short name path (e.g., "debian-12")
-	// 1. Check if template already exists on the target storage
-	templates, err := c.ListTemplates(ctx, storage)
-	if err == nil {
+	candidates := c.templateStorages(ctx, storage)
+
+	// 1. Check if the template already exists on any template-capable storage
+	for _, st := range candidates {
+		templates, err := c.ListTemplates(ctx, st)
+		if err != nil {
+			continue
+		}
 		for _, t := range templates {
 			if matchesTemplate(t.Volid, name) {
 				return t.Volid
-			}
-		}
-	}
-
-	// Also check local storage (templates are often stored there)
-	if storage != "local" {
-		templates, err = c.ListTemplates(ctx, "local")
-		if err == nil {
-			for _, t := range templates {
-				if matchesTemplate(t.Volid, name) {
-					return t.Volid
-				}
 			}
 		}
 	}
@@ -159,8 +152,7 @@ func (c *Client) ResolveTemplate(ctx context.Context, name, storage string) stri
 		log.Printf("[template] searching %d available templates for %q", len(available), name)
 		for _, a := range available {
 			if matchesTemplate(a.Template, name) {
-				// Try downloading to "local" storage first (default), fall back to target storage
-				for _, dlStorage := range []string{"local", storage} {
+				for _, dlStorage := range candidates {
 					log.Printf("[template] found match: %s — downloading to %s", a.Template, dlStorage)
 					if dlErr := c.DownloadTemplate(ctx, dlStorage, a.Template); dlErr != nil {
 						log.Printf("[template] download to %s failed: %v", dlStorage, dlErr)
@@ -168,6 +160,8 @@ func (c *Client) ResolveTemplate(ctx context.Context, name, storage string) stri
 					}
 					return dlStorage + ":vztmpl/" + a.Template
 				}
+				log.Printf("[template] could not download %s to any of %v — pre-download it with `pveam download <storage> %s`",
+					a.Template, candidates, a.Template)
 				break
 			}
 		}
@@ -211,4 +205,63 @@ func extractShortName(filename string) string {
 		}
 	}
 	return ""
+}
+
+// templateStorages returns the storages to search for (and download) templates,
+// in priority order: the install's target storage, "local", then every other
+// active storage on the node whose content types include "vztmpl". Templates
+// often live on a dedicated ISO/template storage that is neither of the first two.
+// Storages known not to hold templates are dropped; if discovery fails, the
+// target storage and "local" are returned so behavior degrades to the old default.
+func (c *Client) templateStorages(ctx context.Context, target string) []string {
+	preferred := []string{target, "local"}
+
+	nodeStorages, err := c.ListNodeStorages(ctx)
+	if err != nil {
+		log.Printf("[template] failed to list node storages: %v", err)
+		return dedupe(preferred)
+	}
+
+	capable := make(map[string]bool)
+	var others []string
+	for _, s := range nodeStorages {
+		if s.Active != 1 || !hasContent(s.Content, "vztmpl") {
+			continue
+		}
+		capable[s.ID] = true
+		if s.ID != target && s.ID != "local" {
+			others = append(others, s.ID)
+		}
+	}
+
+	var result []string
+	for _, s := range preferred {
+		if capable[s] {
+			result = append(result, s)
+		}
+	}
+	return dedupe(append(result, others...))
+}
+
+// hasContent reports whether a comma-separated Proxmox content list includes kind.
+func hasContent(content, kind string) bool {
+	for _, c := range strings.Split(content, ",") {
+		if strings.TrimSpace(c) == kind {
+			return true
+		}
+	}
+	return false
+}
+
+func dedupe(items []string) []string {
+	seen := make(map[string]bool, len(items))
+	out := make([]string, 0, len(items))
+	for _, it := range items {
+		if it == "" || seen[it] {
+			continue
+		}
+		seen[it] = true
+		out = append(out, it)
+	}
+	return out
 }
