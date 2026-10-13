@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { api } from '../api'
 import type { Settings, SettingsUpdate, DiscoverResponse, GitHubStatus, GitHubRepoInfo, UpdateStatus, GPUsResponse } from '../types'
 import { Center, InfoCard } from '../components/ui'
@@ -152,7 +152,8 @@ function SettingsView({ requireAuth, onDevModeChange, onUpdateApplied, onAuthCha
   const [authMsg, setAuthMsg] = useState('')
   const [authSaving, setAuthSaving] = useState(false)
   const [updateStatus, setUpdateStatus] = useState<UpdateStatus | null>(null)
-  const [updateChecking, setUpdateChecking] = useState(false)
+  // Starts true when the page opens directly on the Service tab (checked on mount below).
+  const [updateChecking, setUpdateChecking] = useState(activeTab === 'service')
   const [updateApplying, setUpdateApplying] = useState(false)
   const [updateMsg, setUpdateMsg] = useState('')
   const [gpuData, setGpuData] = useState<GPUsResponse | null>(null)
@@ -166,15 +167,26 @@ function SettingsView({ requireAuth, onDevModeChange, onUpdateApplied, onAuthCha
     }
   }, [activeTab])
 
-  // Fetch update status when on service tab
+  // Check for updates whenever the Service tab is opened: on tab switch (selectTab)
+  // or on mount when the page opens on it.
+  const checkForUpdate = useCallback(() =>
+    api.checkUpdate()
+      .then(setUpdateStatus)
+      .catch(() => {})
+      .finally(() => setUpdateChecking(false)), [])
+
+  const [initialTab] = useState(activeTab)
   useEffect(() => {
-    if (activeTab === 'service') {
+    if (initialTab === 'service') checkForUpdate()
+  }, [initialTab, checkForUpdate])
+
+  const selectTab = (tab: string) => {
+    if (tab === 'service' && activeTab !== 'service') {
       setUpdateChecking(true)
-      api.checkUpdate()
-        .then(s => { setUpdateStatus(s); setUpdateChecking(false) })
-        .catch(() => setUpdateChecking(false))
+      checkForUpdate()
     }
-  }, [activeTab])
+    setActiveTab(tab)
+  }
 
   // Fetch GPU data when on GPU tab
   useEffect(() => {
@@ -265,7 +277,7 @@ function SettingsView({ requireAuth, onDevModeChange, onUpdateApplied, onAuthCha
             {tabs.map(tab => (
               <button
                 key={tab.id}
-                onClick={() => setActiveTab(tab.id)}
+                onClick={() => selectTab(tab.id)}
                 className={`w-full text-left px-4 py-2.5 text-sm font-mono cursor-pointer transition-colors border-b border-border last:border-b-0 ${activeTab === tab.id ? 'bg-primary/10 text-primary border-l-2 border-l-primary' : 'text-text-secondary hover:text-text-primary hover:bg-white/5'}`}
               >
                 {tab.label}

@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect } from 'react'
 import Markdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { api } from '../api'
@@ -9,44 +9,60 @@ import { InstallWizard } from './install-wizard'
 import { groupInputs } from '../lib/format'
 import { useEscapeKey } from '../hooks/useEscapeKey'
 
+interface CatalogResult {
+  query: string // the search/category/reload combination these results belong to
+  apps: AppSummary[]
+  catalogError: string | null
+}
+
+async function loadCatalog(search: string, category: string): Promise<Omit<CatalogResult, 'query'>> {
+  try {
+    const params: { q?: string; category?: string } = {}
+    if (search) params.q = search
+    if (category) params.category = category
+    const data = await api.apps(params)
+    // Check for catalog error when no apps loaded
+    if (!data.apps || data.apps.length === 0) {
+      const health = await api.health()
+      return { apps: [], catalogError: health.catalog_error || null }
+    }
+    return { apps: data.apps, catalogError: null }
+  } catch {
+    return { apps: [], catalogError: null }
+  }
+}
+
 export function AppList() {
-  const [apps, setApps] = useState<AppSummary[]>([])
   const [categories, setCategories] = useState<string[]>([])
   const [search, setSearch] = useState('')
   const [category, setCategory] = useState('')
-  const [loading, setLoading] = useState(true)
-  const [catalogError, setCatalogError] = useState<string | null>(null)
+  const [reload, setReload] = useState(0)
+  const [result, setResult] = useState<CatalogResult | null>(null)
   const [refreshing, setRefreshing] = useState(false)
 
-  const fetchApps = useCallback(async () => {
-    setLoading(true)
-    try {
-      const params: { q?: string; category?: string } = {}
-      if (search) params.q = search
-      if (category) params.category = category
-      const data = await api.apps(params)
-      setApps(data.apps || [])
-      // Check for catalog error when no apps loaded
-      if (!data.apps || data.apps.length === 0) {
-        const health = await api.health()
-        setCatalogError(health.catalog_error || null)
-      } else {
-        setCatalogError(null)
-      }
-    } catch { setApps([]) }
-    setLoading(false)
-  }, [search, category])
+  // Results are tagged with the query they answer: loading is derived, and a
+  // slow response for an older search can't overwrite a newer one.
+  const query = JSON.stringify([search, category, reload])
+  const loading = result?.query !== query
+  const apps = result?.apps ?? []
+  const catalogError = result?.catalogError ?? null
 
   const handleRefresh = async () => {
     setRefreshing(true)
     try {
       await api.catalogRefresh()
-      await fetchApps()
-    } catch { /* fetchApps will pick up the error */ }
+    } catch { /* the reload below will pick up the error */ }
+    setReload(r => r + 1)
     setRefreshing(false)
   }
 
-  useEffect(() => { fetchApps() }, [fetchApps])
+  useEffect(() => {
+    let cancelled = false
+    loadCatalog(search, category).then(r => {
+      if (!cancelled) setResult({ query: JSON.stringify([search, category, reload]), ...r })
+    })
+    return () => { cancelled = true }
+  }, [search, category, reload])
   useEffect(() => { api.categories().then(d => setCategories(d.categories || [])) }, [])
 
   return (
@@ -181,7 +197,11 @@ export function AppDetailView({ id: rawId, requireAuth, devMode }: { id: string;
   const qIdx = rawId.indexOf('?')
   const id = qIdx >= 0 ? rawId.substring(0, qIdx) : rawId
   const autoTestInstall = qIdx >= 0 && rawId.substring(qIdx).includes('testInstall=1')
+  // Keyed by app id so navigating to another app starts with fresh state.
+  return <AppDetailContent key={id} id={id} autoTestInstall={autoTestInstall} requireAuth={requireAuth} devMode={devMode} />
+}
 
+function AppDetailContent({ id, autoTestInstall, requireAuth, devMode }: { id: string; autoTestInstall: boolean; requireAuth: (cb: () => void) => void; devMode: boolean }) {
   const [app, setApp] = useState<AppDetail | null>(null)
   const [readme, setReadme] = useState('')
   const [error, setError] = useState('')
@@ -192,39 +212,35 @@ export function AppDetailView({ id: rawId, requireAuth, devMode }: { id: string;
   const [showTestConfirm, setShowTestConfirm] = useState(false)
   const [existingInstall, setExistingInstall] = useState<Install | null>(null)
   const [keepVolumes, setKeepVolumes] = useState<string[]>([])
-  const [autoTriggered, setAutoTriggered] = useState(false)
+  // Only the URL this view was opened with requests the auto test install;
+  // the query is stripped from the hash once it has been handled.
+  const [autoOpen] = useState(autoTestInstall)
   const [ghStatus, setGhStatus] = useState<GitHubStatus | null>(null)
 
   useEffect(() => {
-    setApp(null); setError(''); setAppStatus(null); setExistingInstall(null); setAutoTriggered(false)
-    api.app(id).then(setApp).catch(e => setError(e.message))
     api.appReadme(id).then(setReadme)
-    api.appStatus(id).then(s => {
-      setAppStatus(s)
-      // Fetch existing install details for pre-filling test install wizard
-      if (s.installed && s.install_id) {
-        api.installDetail(s.install_id).then(setExistingInstall).catch(() => {})
-      }
-    }).catch(() => {})
-  }, [id])
+    Promise.all([api.app(id), api.appStatus(id).catch(() => null)])
+      .then(([a, s]) => {
+        setApp(a)
+        setAppStatus(s)
+        // Fetch existing install details for pre-filling test install wizard
+        if (s?.installed && s.install_id) {
+          api.installDetail(s.install_id).then(setExistingInstall).catch(() => {})
+        }
+        if (autoOpen && s) {
+          if (s.installed) setShowTestConfirm(true)
+          else setShowInstall(true)
+          window.location.hash = `#/app/${id}`
+        }
+      })
+      .catch(e => setError(e.message))
+  }, [id, autoOpen])
 
   useEffect(() => {
     if (devMode) {
       api.devGitHubStatus().then(setGhStatus).catch(() => {})
     }
   }, [devMode])
-
-  useEffect(() => {
-    if (autoTestInstall && !autoTriggered && app && appStatus) {
-      setAutoTriggered(true)
-      if (appStatus.installed) {
-        setShowTestConfirm(true)
-      } else {
-        setShowInstall(true)
-      }
-      window.location.hash = `#/app/${id}`
-    }
-  }, [autoTestInstall, autoTriggered, app, appStatus, id])
 
   if (error) return <div><BackLink /><Center className="text-status-stopped">{error}</Center></div>
   if (!app) return <Center>Loading...</Center>

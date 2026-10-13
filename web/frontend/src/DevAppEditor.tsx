@@ -3,7 +3,8 @@ import { api } from './api'
 import { CodeEditor } from './CodeEditor'
 import type { DevApp, ValidationResult } from './types'
 import { DevStatusBadge, Center, BackLink } from './components/ui'
-import { parseStructure, StructurePanel } from './components/StructurePanel'
+import { StructurePanel } from './components/StructurePanel'
+import { parseStructure } from './components/structure'
 import { SdkReferencePanel } from './components/SdkReferencePanel'
 import { YamlReferencePanel } from './components/YamlReferencePanel'
 import { DevSubmitDialog } from './components/DevSubmitDialog'
@@ -54,15 +55,15 @@ function DevAppEditor({ id, requireAuth }: { id: string; requireAuth: (cb: () =>
     setGotoLine(line + Math.random() * 0.001)
   }, [])
 
-  const fetchApp = useCallback(async () => {
-    try {
-      const data = await api.devGetApp(id)
-      setApp(data)
-      setManifest(data.manifest)
-      setScript(data.script)
-      setReadme(data.readme)
-    } catch { /* ignore */ }
-  }, [id])
+  const fetchApp = useCallback(() =>
+    api.devGetApp(id)
+      .then(data => {
+        setApp(data)
+        setManifest(data.manifest)
+        setScript(data.script)
+        setReadme(data.readme)
+      })
+      .catch(() => { /* ignore */ }), [id])
 
   useEffect(() => { fetchApp() }, [fetchApp])
 
@@ -72,8 +73,9 @@ function DevAppEditor({ id, requireAuth }: { id: string; requireAuth: (cb: () =>
     script !== app.script ||
     readme !== app.readme
   )
+  // Mirrors isDirty for the navigation handlers below, which are registered once.
   const dirtyRef = useRef(false)
-  dirtyRef.current = isDirty
+  useEffect(() => { dirtyRef.current = isDirty }, [isDirty])
 
   useEffect(() => {
     const handler = (e: BeforeUnloadEvent) => {

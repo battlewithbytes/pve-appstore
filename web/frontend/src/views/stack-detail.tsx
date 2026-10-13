@@ -16,16 +16,14 @@ export function StackDetailView({ id, requireAuth }: { id: string; requireAuth: 
   const [showEditDialog, setShowEditDialog] = useState(false)
   const [editing, setEditing] = useState(false)
 
-  const fetchDetail = useCallback(async () => {
-    try {
-      const d = await api.stackDetail(id)
-      setDetail(d)
-      setError(null)
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to load')
-    }
-    setLoading(false)
-  }, [id])
+  const fetchDetail = useCallback(() =>
+    api.stackDetail(id)
+      .then(d => {
+        setDetail(d)
+        setError(null)
+      })
+      .catch(e => setError(e instanceof Error ? e.message : 'Failed to load'))
+      .finally(() => setLoading(false)), [id])
 
   useEffect(() => { fetchDetail() }, [fetchDetail])
   useEffect(() => {

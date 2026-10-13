@@ -99,7 +99,7 @@ function App() {
     }).catch(() => {})
   }} />
   else if (catalogStackMatch) content = <CatalogStackDetailView id={catalogStackMatch[1]} requireAuth={requireAuth} />
-  else if (isCatalogStacks) content = <CatalogStacksList requireAuth={requireAuth} />
+  else if (isCatalogStacks) content = <CatalogStacksList />
   else if (devStackMatch) content = <DevStackEditor id={devStackMatch[1]} requireAuth={requireAuth} />
   else if (devAppMatch) content = <DevAppEditor id={devAppMatch[1]} requireAuth={requireAuth} />
   else if (isDeveloper) content = <DeveloperDashboard requireAuth={requireAuth} />
