@@ -19,7 +19,7 @@ const bracketFold = foldService.of((state, lineStart) => {
   // Find last unmatched opening bracket on this line
   const openers = '([{'
   const closers = ')]}'
-  let stack: { char: string; pos: number }[] = []
+  const stack: { char: string; pos: number }[] = []
   for (let i = 0; i < text.length; i++) {
     const ch = text[i]
     const oi = openers.indexOf(ch)

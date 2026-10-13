@@ -6,15 +6,20 @@ import { useEscapeKey } from '../hooks/useEscapeKey'
 export function DirectoryBrowser({ initialPath, onSelect, onClose }: { initialPath: string; onSelect: (path: string) => void; onClose: () => void }) {
   useEscapeKey(onClose)
   const [path, setPath] = useState(initialPath || '')
-  const [entries, setEntries] = useState<BrowseEntry[]>([])
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState('')
+  // Listing results (and mkdir errors) are tagged with the path/refresh they
+  // belong to, so loading is derived and a stale response is never shown.
+  const [listing, setListing] = useState<{ key: string; entries: BrowseEntry[]; error: string } | null>(null)
+  const [mkdirError, setMkdirError] = useState<{ key: string; error: string } | null>(null)
   const [manualPath, setManualPath] = useState(initialPath || '')
   const [mounts, setMounts] = useState<MountInfo[]>([])
   const [newFolderName, setNewFolderName] = useState('')
   const [showNewFolder, setShowNewFolder] = useState(false)
   const [refreshKey, setRefreshKey] = useState(0)
   const [initialRedirected, setInitialRedirected] = useState(false)
+  const listingKey = JSON.stringify([path, refreshKey])
+  const loading = listing?.key !== listingKey
+  const entries = loading ? [] : listing.entries
+  const error = (mkdirError?.key === listingKey && mkdirError.error) || (loading ? '' : listing.error)
 
   useEffect(() => {
     api.browseMounts().then(d => {
@@ -31,17 +36,16 @@ export function DirectoryBrowser({ initialPath, onSelect, onClose }: { initialPa
 
   useEffect(() => {
     if (!path) return // wait for mounts to resolve the initial path
-    setLoading(true)
-    setError('')
+    let cancelled = false
+    const key = JSON.stringify([path, refreshKey])
     api.browsePaths(path).then(d => {
-      setEntries(d.entries)
+      if (cancelled) return
+      setListing({ key, entries: d.entries, error: '' })
       setManualPath(d.path)
-      setLoading(false)
     }).catch(e => {
-      setError(e instanceof Error ? e.message : 'Failed to browse')
-      setEntries([])
-      setLoading(false)
+      if (!cancelled) setListing({ key, entries: [], error: e instanceof Error ? e.message : 'Failed to browse' })
     })
+    return () => { cancelled = true }
   }, [path, refreshKey])
 
   const handleCreateFolder = async () => {
@@ -52,7 +56,7 @@ export function DirectoryBrowser({ initialPath, onSelect, onClose }: { initialPa
       setShowNewFolder(false)
       setRefreshKey(k => k + 1)
     } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : 'Failed to create folder')
+      setMkdirError({ key: listingKey, error: e instanceof Error ? e.message : 'Failed to create folder' })
     }
   }
 

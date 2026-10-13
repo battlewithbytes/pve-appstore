@@ -15,13 +15,13 @@ function DevStackEditor({ id, requireAuth }: { id: string; requireAuth: (cb: () 
   const [error, setError] = useState('')
   const [showSubmit, setShowSubmit] = useState(false)
 
-  const fetchStack = useCallback(async () => {
-    try {
-      const data = await api.devGetStack(id)
-      setStack(data)
-      setManifest(data.manifest || '')
-    } catch (e: unknown) { setError(e instanceof Error ? e.message : 'Not found') }
-  }, [id])
+  const fetchStack = useCallback(() =>
+    api.devGetStack(id)
+      .then(data => {
+        setStack(data)
+        setManifest(data.manifest || '')
+      })
+      .catch((e: unknown) => setError(e instanceof Error ? e.message : 'Not found')), [id])
 
   useEffect(() => { fetchStack() }, [fetchStack])
 

@@ -134,11 +134,13 @@ export function JobView({ id }: { id: string }) {
     api.job(id).then(setJob).catch(() => {})
   }, [id])
 
+  // Poll while the job is still running.
+  const jobState = job?.state
   useEffect(() => {
-    if (!job || job.state === JOB_STATE.COMPLETED || job.state === JOB_STATE.FAILED || job.state === JOB_STATE.CANCELLED) return
+    if (!jobState || jobState === JOB_STATE.COMPLETED || jobState === JOB_STATE.FAILED || jobState === JOB_STATE.CANCELLED) return
     const interval = setInterval(refreshJob, 1500)
     return () => clearInterval(interval)
-  }, [id, job?.state, refreshJob])
+  }, [jobState, refreshJob])
 
   const handleCancel = async () => {
     setCancelling(true)

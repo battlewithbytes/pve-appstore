@@ -229,6 +229,7 @@ func (e *Engine) StartStack(req StackCreateRequest) (*Job, error) {
 	e.cancels[job.ID] = cancel
 	e.mu.Unlock()
 
+	snap := job.snapshot() // taken before the goroutine starts mutating job
 	go func() {
 		defer func() {
 			e.mu.Lock()
@@ -239,7 +240,7 @@ func (e *Engine) StartStack(req StackCreateRequest) (*Job, error) {
 		e.runStackInstall(ctx, job, stackID, osTemplate, stackApps, manifests)
 	}()
 
-	return job, nil
+	return snap, nil
 }
 
 // ValidateStack checks OS template compatibility and resource recommendations.

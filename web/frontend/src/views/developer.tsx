@@ -12,14 +12,14 @@ function DeveloperDashboard({ requireAuth }: { requireAuth: (cb: () => void) => 
   const [showUnraid, setShowUnraid] = useState(false)
   const [showDockerfile, setShowDockerfile] = useState(false)
 
-  const fetchAll = useCallback(async () => {
-    try {
-      const [appData, stackData] = await Promise.all([api.devApps(), api.devStacks()])
-      setApps(appData.apps || [])
-      setDevStacks(stackData.stacks || [])
-    } catch { setApps([]); setDevStacks([]) }
-    setLoading(false)
-  }, [])
+  const fetchAll = useCallback(() =>
+    Promise.all([api.devApps(), api.devStacks()])
+      .then(([appData, stackData]) => {
+        setApps(appData.apps || [])
+        setDevStacks(stackData.stacks || [])
+      })
+      .catch(() => { setApps([]); setDevStacks([]) })
+      .finally(() => setLoading(false)), [])
 
   useEffect(() => { fetchAll() }, [fetchAll])
 

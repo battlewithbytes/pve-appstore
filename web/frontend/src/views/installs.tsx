@@ -21,14 +21,14 @@ export function InstallsList({ requireAuth }: { requireAuth: (cb: () => void) =>
   const [actionLoading, setActionLoading] = useState<string | null>(null)
   const [uninstallTarget, setUninstallTarget] = useState<InstallListItem | null>(null)
 
-  const fetchInstalls = useCallback(async () => {
-    try {
-      const [instData, stackData] = await Promise.all([api.installs(), api.stacks()])
-      setInstalls(instData.installs || [])
-      setStacks(stackData.stacks || [])
-    } catch { /* ignore */ }
-    setLoading(false)
-  }, [])
+  const fetchInstalls = useCallback(() =>
+    Promise.all([api.installs(), api.stacks()])
+      .then(([instData, stackData]) => {
+        setInstalls(instData.installs || [])
+        setStacks(stackData.stacks || [])
+      })
+      .catch(() => { /* ignore */ })
+      .finally(() => setLoading(false)), [])
 
   useEffect(() => { fetchInstalls() }, [fetchInstalls])
   useEffect(() => {

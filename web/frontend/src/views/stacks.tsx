@@ -102,13 +102,11 @@ export function StacksList({ requireAuth }: { requireAuth: (cb: () => void) => v
   const [showLogs, setShowLogs] = useState<string | null>(null)
   const [actionLoading, setActionLoading] = useState<string | null>(null)
 
-  const fetchStacks = useCallback(async () => {
-    try {
-      const d = await api.stacks()
-      setStacks(d.stacks || [])
-    } catch { /* ignore */ }
-    setLoading(false)
-  }, [])
+  const fetchStacks = useCallback(() =>
+    api.stacks()
+      .then(d => setStacks(d.stacks || []))
+      .catch(() => { /* ignore */ })
+      .finally(() => setLoading(false)), [])
 
   useEffect(() => { fetchStacks() }, [fetchStacks])
   useEffect(() => {

@@ -5,7 +5,7 @@ import { api } from '../api'
 import type { CatalogStack } from '../types'
 import { Center } from '../components/ui'
 
-export function CatalogStacksList(_props: { requireAuth: (cb: () => void) => void }) {
+export function CatalogStacksList() {
   const [stacks, setStacks] = useState<CatalogStack[]>([])
   const [loading, setLoading] = useState(true)
 
