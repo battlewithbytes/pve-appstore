@@ -914,6 +914,23 @@ func parseProvisionLine(ctx *installContext, line string) {
 	}
 }
 
+// collectConfigureOutput records a structured output entry emitted by an app's
+// configure() run during reconfigure into the install's outputs. Other lines are ignored.
+func collectConfigureOutput(inst *Install, line string) {
+	line = strings.TrimSpace(line)
+	if !strings.HasPrefix(line, "@@APPLOG@@") {
+		return
+	}
+	entry, ok := parseAppLog(strings.TrimPrefix(line, "@@APPLOG@@"))
+	if !ok || entry.Level != "output" || entry.Key == "" {
+		return
+	}
+	if inst.Outputs == nil {
+		inst.Outputs = make(map[string]string)
+	}
+	inst.Outputs[entry.Key] = entry.Value
+}
+
 // parseProvisionOutput extracts structured @@APPLOG@@ lines from script output
 // and logs them. Non-structured lines are logged as plain info.
 func parseProvisionOutput(ctx *installContext, output string) {

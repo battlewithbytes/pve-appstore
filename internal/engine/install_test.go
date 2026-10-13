@@ -264,3 +264,28 @@ func TestBuildTagsEmptyBase(t *testing.T) {
 		t.Errorf("buildTags = %q, want %q", got, ";extra")
 	}
 }
+
+func TestCollectConfigureOutput(t *testing.T) {
+	inst := &Install{Outputs: map[string]string{"admin_password": "old", "url": "http://x/"}}
+
+	collectConfigureOutput(inst, `@@APPLOG@@{"level":"output","key":"admin_password","value":"new"}`)
+	collectConfigureOutput(inst, `@@APPLOG@@{"level":"info","msg":"Setting cmkadmin password..."}`)
+	collectConfigureOutput(inst, "plain text line")
+	collectConfigureOutput(inst, `@@APPLOG@@{not json`)
+
+	if inst.Outputs["admin_password"] != "new" {
+		t.Errorf("admin_password = %q, want new", inst.Outputs["admin_password"])
+	}
+	if inst.Outputs["url"] != "http://x/" {
+		t.Errorf("unrelated output changed: %q", inst.Outputs["url"])
+	}
+	if len(inst.Outputs) != 2 {
+		t.Errorf("outputs = %v, want 2 keys", inst.Outputs)
+	}
+
+	empty := &Install{}
+	collectConfigureOutput(empty, `  @@APPLOG@@{"level":"output","key":"token","value":"t"}  `)
+	if empty.Outputs["token"] != "t" {
+		t.Errorf("nil outputs map not initialized: %v", empty.Outputs)
+	}
+}

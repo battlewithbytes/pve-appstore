@@ -1772,7 +1772,9 @@ func (e *Engine) ReconfigureInstall(installID string, req ReconfigureRequest) (*
 			envVars := mergeEnvVars(app.Provisioning.Env, inst.EnvVars)
 			cmd := buildProvisionCommand(app.Provisioning.Script, "configure", envVars)
 			result, err := e.cm.ExecStream(inst.CTID, cmd, func(line string) {
-				// Log configure output but don't track as job logs (synchronous op)
+				// Not tracked as job logs (synchronous op), but outputs emitted by
+				// configure() (e.g. a changed password) must update the install.
+				collectConfigureOutput(inst, line)
 			})
 			if err != nil {
 				return nil, fmt.Errorf("running configure: %w", err)
