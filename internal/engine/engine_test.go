@@ -98,12 +98,19 @@ func TestValidateCPUPinSingle(t *testing.T) {
 }
 
 func TestValidateCPUPinList(t *testing.T) {
-	if err := ValidateCPUPin("0,2,4"); err != nil {
-		t.Errorf("ValidateCPUPin(\"0,2,4\") = %v, want nil", err)
+	// CPU IDs must exist on the host running the test.
+	if runtime.NumCPU() < 3 {
+		t.Skipf("needs at least 3 CPUs, host has %d", runtime.NumCPU())
+	}
+	if err := ValidateCPUPin("0,2"); err != nil {
+		t.Errorf("ValidateCPUPin(\"0,2\") = %v, want nil", err)
 	}
 }
 
 func TestValidateCPUPinRange(t *testing.T) {
+	if runtime.NumCPU() < 4 {
+		t.Skipf("needs at least 4 CPUs, host has %d", runtime.NumCPU())
+	}
 	if err := ValidateCPUPin("0-3"); err != nil {
 		t.Errorf("ValidateCPUPin(\"0-3\") = %v, want nil", err)
 	}
