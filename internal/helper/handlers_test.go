@@ -666,3 +666,20 @@ func TestResolveNearestAncestor_ExistingPath(t *testing.T) {
 		t.Fatal("resolved to empty string")
 	}
 }
+
+func TestPctExecCommandRunsInTransientUnit(t *testing.T) {
+	cmd := pctExecCommand(105, false, "echo", "hi")
+	if cmd.Path != systemdRunBin {
+		t.Fatalf("path = %q, want %q", cmd.Path, systemdRunBin)
+	}
+	got := strings.Join(cmd.Args[1:], " ")
+	want := "--quiet --pipe --wait --collect --service-type=exec --description=PVE App Store exec in CT 105 -- /usr/sbin/pct exec 105 -- echo hi"
+	if got != want {
+		t.Errorf("args = %q\nwant  %q", got, want)
+	}
+
+	tty := pctExecCommand(105, true, "/bin/bash", "-l")
+	if !strings.Contains(strings.Join(tty.Args, " "), " --pty ") {
+		t.Errorf("tty command should use --pty: %v", tty.Args)
+	}
+}

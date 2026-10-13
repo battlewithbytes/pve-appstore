@@ -8,7 +8,6 @@ import (
 	"log"
 	"net"
 	"net/http"
-	"os"
 	"os/exec"
 	"strconv"
 	"sync"
@@ -44,8 +43,7 @@ func (s *Server) handlePctExecStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	args := append([]string{"exec", strconv.Itoa(req.CTID), "--"}, req.Command...)
-	cmd := exec.Command(pctBin, args...)
+	cmd := pctExecCommand(req.CTID, false, req.Command...)
 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
@@ -150,8 +148,8 @@ func (s *Server) handleTerminal(w http.ResponseWriter, r *http.Request) {
 	bufrw.Flush()
 
 	// Start PTY
-	cmd := exec.Command(pctBin, "exec", strconv.Itoa(ctid), "--", shell, "-l")
-	cmd.Env = append(os.Environ(), "TERM=xterm-256color")
+	cmd := pctExecCommand(ctid, true, shell, "-l")
+	cmd.Env = append(cmd.Env, "TERM=xterm-256color")
 
 	ptmx, err := pty.Start(cmd)
 	if err != nil {

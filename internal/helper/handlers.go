@@ -11,7 +11,39 @@ import (
 	"syscall"
 )
 
-const pctBin = "/usr/sbin/pct"
+const (
+	pctBin        = "/usr/sbin/pct"
+	systemdRunBin = "/usr/bin/systemd-run"
+)
+
+// pctExecCommand builds a `pct exec` for the given container that runs in a
+// fresh transient systemd unit rather than as a direct child of the helper.
+//
+// The helper's own unit is hardened (NoNewPrivileges, SystemCallFilter), and
+// both are inherited across exec — including through lxc-attach into the
+// container. Running pct exec as a child would leave every process inside the
+// container unable to use setuid/setgid binaries (sudo, crontab, passwd, ping)
+// and bound by the helper's seccomp filter. Launching via systemd-run gives the
+// command the normal PID 1 execution context; --wait propagates the exit code.
+//
+// Non-interactive commands use --pipe to forward stdio. Interactive terminals
+// (tty=true) use --pty instead: --pipe drops output when stdio is a terminal,
+// while --pty proxies it and forwards window-size changes.
+func pctExecCommand(ctid int, tty bool, command ...string) *exec.Cmd {
+	stdio := "--pipe"
+	if tty {
+		stdio = "--pty"
+	}
+	args := []string{
+		"--quiet", stdio, "--wait", "--collect", "--service-type=exec",
+		"--description=PVE App Store exec in CT " + strconv.Itoa(ctid),
+		"--", pctBin, "exec", strconv.Itoa(ctid), "--",
+	}
+	cmd := exec.Command(systemdRunBin, append(args, command...)...)
+	// Keep systemd-run from injecting terminal-title and color escape codes.
+	cmd.Env = append(os.Environ(), "SYSTEMD_ADJUST_TERMINAL_TITLE=0", "SYSTEMD_COLORS=0")
+	return cmd
+}
 
 // --- POST /v1/pct/exec ---
 
@@ -49,8 +81,7 @@ func (s *Server) handlePctExec(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	args := append([]string{"exec", strconv.Itoa(req.CTID), "--"}, req.Command...)
-	cmd := exec.Command(pctBin, args...)
+	cmd := pctExecCommand(req.CTID, false, req.Command...)
 	out, err := cmd.CombinedOutput()
 
 	resp := pctExecResponse{
