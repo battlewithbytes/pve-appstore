@@ -673,7 +673,7 @@ func TestPctExecCommandRunsInTransientUnit(t *testing.T) {
 		t.Fatalf("path = %q, want %q", cmd.Path, systemdRunBin)
 	}
 	got := strings.Join(cmd.Args[1:], " ")
-	want := "--quiet --pipe --wait --collect --service-type=exec --description=PVE App Store exec in CT 105 -- /usr/sbin/pct exec 105 -- echo hi"
+	want := "--quiet --pipe --wait --collect --service-type=exec --description=PVE App Store exec in CT 105 --property=LogLevelMax=err -- /usr/sbin/pct exec 105 -- echo hi"
 	if got != want {
 		t.Errorf("args = %q\nwant  %q", got, want)
 	}

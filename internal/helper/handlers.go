@@ -37,6 +37,10 @@ func pctExecCommand(ctid int, tty bool, command ...string) *exec.Cmd {
 	args := []string{
 		"--quiet", stdio, "--wait", "--collect", "--service-type=exec",
 		"--description=PVE App Store exec in CT " + strconv.Itoa(ctid),
+		// Output and exit code go back to the caller via stdio, so the journal
+		// only gets PID 1's start/stop/exit bookkeeping for each unit. Status
+		// polling runs several execs per container per minute; keep it quiet.
+		"--property=LogLevelMax=err",
 		"--", pctBin, "exec", strconv.Itoa(ctid), "--",
 	}
 	cmd := exec.Command(systemdRunBin, append(args, command...)...)
