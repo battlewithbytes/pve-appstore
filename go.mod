@@ -1,6 +1,6 @@
 module github.com/battlewithbytes/pve-appstore
 
-go 1.24.4
+go 1.26.9
 
 require (
 	github.com/charmbracelet/huh v0.8.0
