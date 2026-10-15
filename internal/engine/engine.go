@@ -1220,7 +1220,7 @@ func (e *Engine) Update(installID string, req ReinstallRequest) (*Job, error) {
 	if err != nil {
 		return nil, fmt.Errorf("install %q not found", installID)
 	}
-	if inst.Status != "uninstalled" {
+	if inst.Status == "uninstalled" {
 		return nil, fmt.Errorf("install %q is uninstalled — use reinstall instead", installID)
 	}
 
@@ -1233,6 +1233,22 @@ func (e *Engine) Update(installID string, req ReinstallRequest) (*Job, error) {
 		return nil, fmt.Errorf("no update available: catalog version %s is not newer than installed %s", app.Version, inst.AppVersion)
 	}
 
+	job := e.newUpdateJob(inst, app, req)
+	if err := e.store.CreateJob(job); err != nil {
+		return nil, fmt.Errorf("creating update job: %w", err)
+	}
+
+	snap := job.snapshot() // taken before the goroutine starts mutating job
+	go e.runUpdate(job, inst)
+
+	return snap, nil
+}
+
+// newUpdateJob builds the update job for an active install. Everything that
+// defines the container's identity (hostname, network, MAC, devices, env vars,
+// inputs) is carried forward so the replacement container is a drop-in for the
+// old one; req only overrides sizing, storage, bridge and individual inputs.
+func (e *Engine) newUpdateJob(inst *Install, app *catalog.AppManifest, req ReinstallRequest) *Job {
 	// Use existing values with optional overrides
 	storage := inst.Storage
 	if req.Storage != "" {
@@ -1255,46 +1271,50 @@ func (e *Engine) Update(installID string, req ReinstallRequest) (*Job, error) {
 		diskGB = req.DiskGB
 	}
 
-	now := time.Now()
-	job := &Job{
-		ID:          generateID(),
-		Type:        JobTypeUpdate,
-		State:       StateQueued,
-		AppID:       inst.AppID,
-		AppName:     inst.AppName,
-		AppSource:   app.Source,
-		Node:        e.cfg.NodeName,
-		Pool:        inst.Pool,
-		Storage:     storage,
-		Bridge:      bridge,
-		Cores:       cores,
-		MemoryMB:    memoryMB,
-		DiskGB:      diskGB,
-		Inputs:      req.Inputs,
-		Outputs:     make(map[string]string),
-		MountPoints: inst.MountPoints, // Carry mount points forward
-		CPUPin:      inst.CPUPin,      // Carry CPU pinning forward
-		CreatedAt:   now,
-		UpdatedAt:   now,
+	// Inputs: the install's saved values, then request overrides, then catalog
+	// defaults for any inputs added since the original install.
+	inputs := make(map[string]string, len(inst.Inputs)+len(req.Inputs))
+	for k, v := range inst.Inputs {
+		inputs[k] = v
 	}
-
-	if job.Inputs == nil {
-		job.Inputs = make(map[string]string)
+	for k, v := range req.Inputs {
+		inputs[k] = v
 	}
 	for _, input := range app.Inputs {
-		if _, exists := job.Inputs[input.Key]; !exists && input.Default != nil {
-			job.Inputs[input.Key] = fmt.Sprintf("%v", input.Default)
+		if _, exists := inputs[input.Key]; !exists && input.Default != nil {
+			inputs[input.Key] = fmt.Sprintf("%v", input.Default)
 		}
 	}
 
-	if err := e.store.CreateJob(job); err != nil {
-		return nil, fmt.Errorf("creating update job: %w", err)
+	now := time.Now()
+	return &Job{
+		ID:           generateID(),
+		Type:         JobTypeUpdate,
+		State:        StateQueued,
+		AppID:        inst.AppID,
+		AppName:      inst.AppName,
+		AppSource:    app.Source,
+		Node:         e.cfg.NodeName,
+		Pool:         inst.Pool,
+		Storage:      storage,
+		Bridge:       bridge,
+		Cores:        cores,
+		MemoryMB:     memoryMB,
+		DiskGB:       diskGB,
+		Hostname:     inst.Hostname,
+		IPAddress:    inst.IPAddress,
+		MACAddress:   inst.MACAddress,
+		OnBoot:       inst.OnBoot,
+		Unprivileged: inst.Unprivileged,
+		Inputs:       inputs,
+		Outputs:      make(map[string]string),
+		MountPoints:  inst.MountPoints, // Carry mount points forward
+		Devices:      inst.Devices,
+		EnvVars:      inst.EnvVars,
+		CPUPin:       inst.CPUPin, // Carry CPU pinning forward
+		CreatedAt:    now,
+		UpdatedAt:    now,
 	}
-
-	snap := job.snapshot() // taken before the goroutine starts mutating job
-	go e.runUpdate(job, inst)
-
-	return snap, nil
 }
 
 func (e *Engine) runUpdate(job *Job, inst *Install) {
@@ -1317,45 +1337,71 @@ func (e *Engine) runUpdate(job *Job, inst *Install) {
 
 	ctx.info("Starting update of %s from v%s to v%s", app.Name, inst.AppVersion, app.Version)
 
+	failUpdate := func(format string, args ...any) {
+		ctx.log("error", format, args...)
+		job.State = StateFailed
+		job.Error = fmt.Sprintf(format, args...)
+		now := time.Now()
+		job.UpdatedAt = now
+		job.CompletedAt = &now
+		e.store.UpdateJob(job)
+	}
+
+	// Prefer user-set MAC from install record; otherwise keep the old container's
+	// MAC so DHCP hands the replacement the same IP.
+	if inst.MACAddress != "" {
+		ctx.hwAddr = inst.MACAddress
+		ctx.info("Using stored MAC address: %s", ctx.hwAddr)
+	}
+
 	// Destroy old container first
 	if inst.CTID > 0 {
 		bgCtx := context.Background()
 
-		// Detach managed volumes before destroy if present
+		config, configErr := e.cm.GetConfig(bgCtx, inst.CTID)
+		if configErr != nil {
+			ctx.warn("Could not read container config: %v", configErr)
+		}
+		if ctx.hwAddr == "" && configErr == nil {
+			if net0, ok := config["net0"].(string); ok {
+				ctx.hwAddr = extractHWAddr(net0)
+				if ctx.hwAddr != "" {
+					ctx.info("Preserved MAC address from container: %s", ctx.hwAddr)
+				}
+			}
+		}
+
+		// Detach managed volumes before destroy if present. If that fails, stop
+		// here: destroying the container would destroy the volumes with it.
 		hasDetachedVolumes := false
-		if len(inst.MountPoints) > 0 {
-			var managedIndexes []int
-			for _, mp := range inst.MountPoints {
-				if mp.Type == "volume" {
-					managedIndexes = append(managedIndexes, mp.Index)
+		var managedIndexes []int
+		for _, mp := range inst.MountPoints {
+			if mp.Type == "volume" {
+				managedIndexes = append(managedIndexes, mp.Index)
+			}
+		}
+		if len(managedIndexes) > 0 {
+			if configErr != nil {
+				failUpdate("cannot resolve volumes of CT %d before destroy: %v — container left intact", inst.CTID, configErr)
+				return
+			}
+			ctx.info("Detaching %d volume(s) before destroy...", len(managedIndexes))
+			for i := range inst.MountPoints {
+				if inst.MountPoints[i].Type != "volume" {
+					continue
+				}
+				key := fmt.Sprintf("mp%d", inst.MountPoints[i].Index)
+				if valStr, ok := config[key].(string); ok {
+					inst.MountPoints[i].VolumeID = strings.SplitN(valStr, ",", 2)[0]
 				}
 			}
-			if len(managedIndexes) > 0 {
-				ctx.info("Detaching %d volume(s) before destroy...", len(managedIndexes))
-				if config, err := e.cm.GetConfig(bgCtx, inst.CTID); err == nil {
-					for i := range inst.MountPoints {
-						if inst.MountPoints[i].Type != "volume" {
-							continue
-						}
-						key := fmt.Sprintf("mp%d", inst.MountPoints[i].Index)
-						if val, ok := config[key]; ok {
-							if valStr, ok := val.(string); ok {
-								parts := strings.SplitN(valStr, ",", 2)
-								if len(parts) > 0 {
-									inst.MountPoints[i].VolumeID = parts[0]
-								}
-							}
-						}
-					}
-				}
-				if err := e.cm.DetachMountPoints(bgCtx, inst.CTID, managedIndexes); err != nil {
-					ctx.warn("Failed to detach mount points: %v — volumes may be destroyed", err)
-				} else {
-					hasDetachedVolumes = true
-				}
-				// Update job's mount points with fresh volume IDs
-				job.MountPoints = inst.MountPoints
+			if err := e.cm.DetachMountPoints(bgCtx, inst.CTID, managedIndexes); err != nil {
+				failUpdate("failed to detach volumes from CT %d: %v — container left intact", inst.CTID, err)
+				return
 			}
+			hasDetachedVolumes = true
+			// Update job's mount points with fresh volume IDs
+			job.MountPoints = inst.MountPoints
 		}
 
 		ctx.info("Stopping and destroying old container CT %d...", inst.CTID)
